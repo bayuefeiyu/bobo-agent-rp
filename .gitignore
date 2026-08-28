@@ -1,0 +1,14 @@
+# This repository intentionally publishes only the reusable conversion skill.
+/*
+!/.agents/
+!/.gitattributes
+!/.gitignore
+!/README.md
+
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/st-card-to-pi-rp/
+
+**/__pycache__/
+**/*.py[cod]

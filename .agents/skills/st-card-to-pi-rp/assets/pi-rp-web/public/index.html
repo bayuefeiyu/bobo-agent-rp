@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Pi RP</title>
+    <link rel="stylesheet" href="/styles.css?v=17" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="sidebar" aria-label="页面导航">
+        <div class="sidebar-brand">
+          <span class="brand-mark" aria-hidden="true">π</span>
+          <span>PI RP</span>
+        </div>
+        <nav class="tab-list" role="tablist" aria-label="功能页面">
+          <button id="tab-story" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="panel-story" data-panel="story">
+            <span class="tab-icon" aria-hidden="true">文</span><span>正文</span>
+          </button>
+          <button id="tab-cards" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-cards" data-panel="cards">
+            <span class="tab-icon" aria-hidden="true">卡</span><span>角色卡</span>
+          </button>
+          <button id="tab-user" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-user" data-panel="user">
+            <span class="tab-icon" aria-hidden="true">人</span><span>用户设置</span>
+          </button>
+          <button id="tab-system" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-system" data-panel="system">
+            <span class="tab-icon" aria-hidden="true">设</span><span>系统设置</span>
+          </button>
+        </nav>
+      </aside>
+
+      <div class="workspace">
+      <main class="shell">
+        <header class="topbar">
+        <div>
+          <p class="eyebrow">PI ROLEPLAY</p>
+          <h1 id="card-title">载入角色卡中</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="choose-chat-button" type="button" hidden>聊天记录选择</button>
+          <p id="connection-status" class="connection-status">连接当前 Pi 会话中</p>
+        </div>
+        </header>
+
+        <section id="panel-story" class="panel story-panel" role="tabpanel" aria-labelledby="tab-story">
+          <section id="opening-view" class="opening-view" aria-labelledby="opening-heading">
+            <div class="section-heading">
+              <p class="step">开始故事</p>
+              <h2 id="opening-heading">开始或继续故事</h2>
+              <p>选择已有聊天记录继续，或从一个开场白开始新的故事。</p>
+            </div>
+            <div id="history-group" class="start-choice-group" hidden>
+              <div class="choice-heading">
+                <h3>继续已有聊天</h3>
+                <p>读取这张卡已经保存的聊天记录。</p>
+              </div>
+              <div id="history-list" class="history-list" aria-live="polite"></div>
+            </div>
+            <div class="start-choice-group">
+              <div class="choice-heading">
+                <h3>从开场白开始</h3>
+                <p>创建一段新的独立故事。</p>
+              </div>
+              <div id="opening-list" class="opening-list" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section id="chat-view" class="chat-view" hidden aria-label="角色扮演对话">
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <form id="composer" class="composer">
+              <label class="sr-only" for="message-input">输入你的行动或对话</label>
+              <textarea id="message-input" name="message" rows="3" maxlength="100000" placeholder="输入你的行动或对话……" required></textarea>
+              <div class="composer-footer">
+                <p>Enter 发送 · Shift + Enter 换行</p>
+                <button id="send-button" type="submit">发送</button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <section id="panel-cards" class="panel card-library-page" role="tabpanel" aria-labelledby="tab-cards" hidden>
+          <div class="settings-heading card-library-heading">
+            <p class="step">CHARACTER CARDS</p>
+            <h2>角色卡</h2>
+            <p>选择项目中的角色卡。切换角色卡会创建独立的 Pi 会话，避免不同卡的设定混入同一段故事。</p>
+          </div>
+          <label class="card-search">
+            <span class="sr-only">搜索角色卡</span>
+            <input id="card-search" type="search" placeholder="搜索角色卡名称……" autocomplete="off" />
+          </label>
+          <div id="card-grid" class="card-grid" aria-live="polite"></div>
+        </section>
+
+        <section id="panel-user" class="panel settings-page" role="tabpanel" aria-labelledby="tab-user" hidden>
+          <div class="settings-heading">
+            <p class="step">USER SETTINGS</p>
+            <h2>用户设置</h2>
+            <p>管理玩家在当前角色扮演会话中的身份信息。</p>
+          </div>
+          <div class="settings-grid">
+            <form id="user-settings-form" class="settings-card">
+              <div class="setting-copy">
+                <h3>用户昵称</h3>
+                <p>用于正文中的玩家标识，并传递给当前 Pi RP 会话。</p>
+              </div>
+              <div class="setting-control setting-control-text">
+                <label for="saved-profile">已保存的名字</label>
+                <select id="saved-profile" class="setting-select"></select>
+                <label for="player-name">当前名字</label>
+                <input id="player-name" class="setting-input" name="playerName" type="text" maxlength="200" autocomplete="nickname" required />
+                <label for="player-avatar">头像</label>
+                <div class="avatar-upload">
+                  <div id="player-avatar-preview" class="avatar-preview" aria-hidden="true">
+                    <img id="player-avatar-image" alt="" hidden />
+                    <span id="player-avatar-fallback">玩</span>
+                  </div>
+                  <div class="avatar-upload-control">
+                    <input id="player-avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp" />
+                    <p>PNG、JPEG 或 WebP，最大 5 MB。头像按昵称分别保存。</p>
+                  </div>
+                </div>
+                <label for="player-description">角色描述</label>
+                <textarea id="player-description" class="setting-textarea" name="description" rows="6" maxlength="20000" placeholder="输入玩家角色的身份、外貌、经历、性格或其他稳定设定……"></textarea>
+                <div class="setting-actions"><button type="submit">保存角色设定</button></div>
+                <p id="user-settings-status" class="setting-status" role="status" aria-live="polite"></p>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="panel-system" class="panel settings-page" role="tabpanel" aria-labelledby="tab-system" hidden>
+          <div class="settings-heading">
+            <p class="step">SYSTEM SETTINGS</p>
+            <h2>系统设置</h2>
+            <p>调整阅读体验，以及当前角色卡的功能区显示。</p>
+          </div>
+          <div class="settings-grid">
+            <section class="settings-card" aria-labelledby="font-size-heading">
+              <div class="setting-copy">
+                <h3 id="font-size-heading">正文字号</h3>
+                <p>只影响聊天正文的显示，不会修改聊天记录内容。</p>
+              </div>
+              <div class="setting-control setting-control-range">
+                <label for="font-size">字号</label>
+                <div class="range-control">
+                  <input id="font-size" type="range" min="14" max="24" step="1" value="16" />
+                  <output id="font-size-value" for="font-size">16 px</output>
+                </div>
+                <p id="system-settings-status" class="setting-status" role="status" aria-live="polite"></p>
+              </div>
+            </section>
+            <form id="module-display-settings-form" class="settings-card" aria-labelledby="module-display-heading">
+              <div class="setting-copy">
+                <h3 id="module-display-heading">功能区模块</h3>
+                <p>选择右侧功能区显示哪些模块，并调整它们的显示顺序。这里只改变前端，不会修改 Agent 的提示词、模块数据或上下文顺序。</p>
+              </div>
+              <div class="setting-control module-settings-control">
+                <div id="module-settings-list" class="module-settings-list" aria-live="polite"></div>
+                <div class="module-settings-actions">
+                  <button id="reset-module-settings" class="secondary-button" type="button">恢复默认</button>
+                  <button id="save-module-settings" type="submit">保存模块显示</button>
+                </div>
+                <p id="module-settings-status" class="setting-status" role="status" aria-live="polite"></p>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <div id="error-banner" class="error-banner" role="alert" hidden></div>
+      </main>
+      <aside class="module-rail" aria-label="角色卡功能区">
+        <div class="module-rail-heading">
+          <p class="eyebrow">CARD MODULES</p>
+          <h2>角色卡功能</h2>
+          <p>此处显示当前角色卡提供的扩展模块。</p>
+        </div>
+        <div id="card-module-list" class="module-list" aria-live="polite"></div>
+      </aside>
+      </div>
+    </div>
+    <section id="handoff-overlay" class="handoff-overlay" role="status" aria-live="assertive" tabindex="-1" hidden>
+      <div class="handoff-card">
+        <p class="step">PI SESSION HANDOFF</p>
+        <h2 id="handoff-title">新的页面正在打开</h2>
+        <p id="handoff-description">此页面对应的 Pi 会话已经结束。请使用最新打开的 Web RP 页面。</p>
+      </div>
+    </section>
+    <script type="module" src="/app.js?v=17"></script>
+  </body>
+</html>

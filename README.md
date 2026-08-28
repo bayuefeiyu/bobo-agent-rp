@@ -1,0 +1,80 @@
+# SillyTavern Card to Pi RP
+
+一套面向 Pi Agent 的 SillyTavern 角色卡转换 skill。它将角色卡中的设定、世界书、开场白、规则、变量与可转换的 EJS 行为整理为可运行的 Pi RP 卡包，同时尽量通过拆分、归类和重组保留原作者的文字与风格。
+
+本仓库只发布可复用的转换工具，不包含任何角色卡原文件、卡图、转换产物、聊天记录或个人设置。
+
+## 仓库内容
+
+```text
+.agents/skills/st-card-to-pi-rp/
+├── SKILL.md                         # 转换工作流与确认流程
+├── references/                      # 卡结构、模块、变量、EJS、Web 等规范
+├── scripts/                         # 卡片提取和卡包校验脚本
+└── assets/
+    ├── pi-rp-runtime/               # 转换后项目使用的 Pi 运行时模板
+    └── pi-rp-web/                   # 每张卡独立复制的 Web UI 模板
+```
+
+Pi 会自动发现项目中的 `.agents/skills/`。因此 clone 后不需要手动安装此 skill。
+
+## 使用
+
+要求：
+
+- Pi Coding Agent
+- Node.js 20 或更高版本（使用 Web UI 时）
+- Python 3（提取或校验卡包时）
+
+克隆仓库后，在仓库根目录启动 Pi：
+
+```bash
+pi --approve
+```
+
+然后向 Pi 提出转换请求，例如：
+
+```text
+使用 st-card-to-pi-rp 分析并转换这张 SillyTavern 角色卡：<角色卡路径>
+```
+
+转换 skill 会先分析角色卡，给出固定上下文、按需资料、变量/功能模块、EJS 处理和开场白等简要方案，并等待确认；只有确认后才会正式生成卡包。
+
+建议将本地输入卡放在仓库外，或自行创建已被 Git 忽略的 `my card/`。转换结果默认可放在同样被忽略的 `cards/`，避免误提交他人的作品。
+
+如果项目根目录存在 `global-modules/<module-id>/module.json`，转换时会主动列出可用的全局模块并询问本次需要引入哪些。
+
+## 转换原则
+
+- 尽量保留角色卡原文和作者风格，优先拆分、梳理、移动和重组，不随意改写或扩写。
+- 不复刻 SillyTavern 的激活颜色、插入深度、递归、黏性、冷却等提示词组装机制。
+- 变量转换为 Pi RP 原生完整快照模块，不保留旧 MVU 输出协议。
+- 不执行来源 EJS；分析其读取、分支、输出和副作用后，转换为原生上下文处理器、模块 hook、更新流程、Agent 检索规则或 Web 显示。
+- 所有按需内容必须从固定知识地图中可发现，并保留完整来源映射和转换报告。
+
+## SillyTavern 开发参考
+
+本项目开发过程中参考了 [StageDog/tavern_helper_template](https://github.com/StageDog/tavern_helper_template)，但不会将该项目复制或打包进本仓库。
+
+如果转换涉及 SillyTavern 的 MVU 变量、EJS、酒馆助手脚本、世界书结构或前端界面，可以查阅该项目及其文档。它是独立项目，其内容和许可证以原仓库为准。
+
+## 验证
+
+运行 Pi RP 运行时单元测试：
+
+```bash
+node --test .agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/*.test.mjs
+```
+
+运行 Web 模板测试：
+
+```bash
+npm test --prefix .agents/skills/st-card-to-pi-rp/assets/pi-rp-web
+```
+
+校验一个转换后的卡包：
+
+```bash
+python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py cards/<card-id>
+```
+

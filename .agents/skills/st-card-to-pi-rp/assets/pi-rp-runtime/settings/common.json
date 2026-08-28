@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "user": {
+    "playerName": "玩家",
+    "description": "",
+    "savedProfiles": [
+      {
+        "name": "玩家",
+        "description": ""
+      }
+    ]
+  },
+  "system": {
+    "fontSize": 16
+  }
+}
