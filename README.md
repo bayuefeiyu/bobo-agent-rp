@@ -2,7 +2,7 @@
 
 一套面向 Pi Agent 的 SillyTavern 角色卡转换 skill。它将角色卡中的设定、世界书、开场白、规则、变量与可转换的 EJS 行为整理为可运行的 Pi RP 卡包，同时尽量通过拆分、归类和重组保留原作者的文字与风格。
 
-本仓库只发布可复用的转换工具，不包含任何角色卡原文件、卡图、转换产物、聊天记录或个人设置。
+本仓库只发布可复用的转换工具，不提交任何角色卡原文件、卡图、转换产物、聊天记录或个人设置。上述本地运行数据统一放在被 Git 忽略的 `play/` 中。
 
 ## 仓库内容
 
@@ -17,6 +17,22 @@
 ```
 
 Pi 会自动发现项目中的 `.agents/skills/`。因此 clone 后不需要手动安装此 skill。
+
+本地工作区采用转换与游玩分层：
+
+```text
+bobo-agent-rp/
+├── .agents/                         # 转换 skill 与模板；仅在转换时使用
+├── global-modules/                  # 可选的项目级模块源
+├── my-cards/                        # 本地待转换素材（Git 忽略）
+├── play/                            # 独立游玩根目录（Git 忽略）
+│   ├── .pi/                         # RP 运行时、扩展与游玩 skills
+│   ├── cards/<card-id>/             # 转换后的卡包
+│   ├── sessions/<card-id>/          # 聊天与模块状态
+│   ├── settings/                    # 用户资料、头像与共享设置
+│   └── runtime.json                 # 本地运行时布局标记
+└── PI-PLAY-CONTEXT-ISOLATION.md     # 玩家需要手动完成的隔离步骤
+```
 
 ## 使用
 
@@ -40,9 +56,11 @@ pi --approve
 
 转换 skill 会先分析角色卡，给出固定上下文、按需资料、变量/功能模块、EJS 处理和开场白等简要方案，并等待确认；只有确认后才会正式生成卡包。
 
-建议将本地输入卡放在仓库外，或自行创建已被 Git 忽略的 `my card/`。转换结果默认可放在同样被忽略的 `cards/`，避免误提交他人的作品。
+建议将本地输入卡放在仓库外，或放入已被 Git 忽略的 `my-cards/`。转换结果固定放在同样被忽略的 `play/cards/`，避免误提交他人的作品。
 
 如果项目根目录存在 `global-modules/<module-id>/module.json`，转换时会主动列出可用的全局模块并询问本次需要引入哪些。
+
+转换完成后不要直接在仓库根目录游玩。先按 [PI-PLAY-CONTEXT-ISOLATION.md](PI-PLAY-CONTEXT-ISOLATION.md) 完成一次项目级隔离，再从 `play/` 启动新的 Pi 会话。
 
 ## 转换原则
 
@@ -50,6 +68,7 @@ pi --approve
 - 不复刻 SillyTavern 的激活颜色、插入深度、递归、黏性、冷却等提示词组装机制。
 - 变量转换为 Pi RP 原生完整快照模块，不保留旧 MVU 输出协议。
 - 不执行来源 EJS；分析其读取、分支、输出和副作用后，转换为原生上下文处理器、模块 hook、更新流程、Agent 检索规则或 Web 显示。
+- 原卡卡图会保留为 Web 角色封面和聊天中的角色头像；原卡要求在正文之外生成的“与此同时”、状态栏、心理、评论等内容会转换为独立功能区模块，而不是继续混入正文。
 - 所有按需内容必须从固定知识地图中可发现，并保留完整来源映射和转换报告。
 
 ## SillyTavern 开发参考
@@ -75,6 +94,5 @@ npm test --prefix .agents/skills/st-card-to-pi-rp/assets/pi-rp-web
 校验一个转换后的卡包：
 
 ```bash
-python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py cards/<card-id>
+python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
 ```
-

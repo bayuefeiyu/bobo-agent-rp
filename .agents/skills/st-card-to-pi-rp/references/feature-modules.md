@@ -1,6 +1,6 @@
 # Card Feature Modules v3 / storage v2
 
-Use a module for persistent structured per-chat state or a card-specific function. Ordinary lore and prose rules remain normal card documents.
+Use a module for persistent structured per-chat state, a card-specific function, or a source-authored output outside the main narrative. Ordinary lore and rules that only govern the main prose remain normal card documents.
 
 ## Ownership and structure
 
@@ -42,11 +42,23 @@ Use exactly these fields. Frontend modules appear in Web; background modules hav
 
 `storage.json` version 2 selects `record-log`, `snapshot`, or `hybrid`, names the enabled initial/live/schema files, catalog, retrieval policy, and which stream supplies context, and declares `engine`. Ordinary modules use `engine: null`; native variable modules use `{ "kind": "variables", "configFile": "variable-runtime.json" }`. Live copies belong under `sessions/<card>/<chat>/modules/<module>/`.
 
-All message and module data uses a version 1 envelope containing ID, source, sequence, revision, timestamps, `binding.messageId`, `binding.turn`, metadata, and a module-defined `data` object. Define `data` in JSON Schema. Preserve envelope identity on revision. Bind a newly established module fact to the user message that caused the delivered event so suffix deletion can cascade precisely.
+All message and module data uses a version 1 envelope containing ID, source, sequence, revision, timestamps, `binding.messageId`, `binding.turn`, metadata, and a module-defined `data` object. Define `data` in JSON Schema. Preserve envelope identity on revision. Bind ordinary facts to the delivered message that established them. Bind a post-narrative auxiliary output to the saved assistant message beside which it is displayed, so suffix deletion can cascade precisely.
 
 Initial record logs are normally `[]`; do not invent state absent from the source card. A snapshot initial file contains one valid envelope.
 
 For source variables, read [variables.md](variables.md). Use hybrid storage with a complete-state record log and current snapshot. Narrative turns receive only authored fixed bindings and exact on-demand path projections. The post-narrative update task receives every effective variable and commits one full snapshot after concentrated validation.
+
+## Auxiliary output engine
+
+A source-authored status panel, “meanwhile” scene, thought channel, commentary, choice list, summary, or similar output outside the main narrative uses record-log storage and:
+
+```json
+"engine": { "kind": "post-narrative-output" }
+```
+
+Its record schema defines exactly one required string field, `content`, and disallows additional properties. Preserve a source's internal structure as authored Markdown inside that field. The module skill owns activation, non-activation, cadence, information boundaries, and original formatting instructions. After the main prose is saved, one hidden runtime task resolves every post-narrative output module, validates each emitted record, and binds it to that assistant message. The task records `not_triggered` explicitly without inventing empty content. The auxiliary output must not also appear in the main chat body.
+
+Use `record-log` so outputs survive resume and follow suffix deletion. Choose retrieval based on authored continuity: latest one is the baseline, while a continuing off-screen storyline may require a recent range or Agent selection. The declarative Web view may show the latest output or a short authored history.
 
 ## Retrieval policy
 

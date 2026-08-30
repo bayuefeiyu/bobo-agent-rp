@@ -4,10 +4,10 @@ The Web mode is a presentation surface for the current Pi session, not an altern
 
 ## Ownership and layout
 
-Copy `assets/pi-rp-web/` into every converted card as `cards/<card-id>/web/`:
+From the conversion repository root, copy `assets/pi-rp-web/` into every converted card as `play/cards/<card-id>/web/`. At runtime, start Pi with `play/` as its working directory, so all paths below remain runtime-relative:
 
 ```text
-project/
+play/
 ├── settings/
 │   └── common.json
 ├── .pi/
@@ -63,10 +63,12 @@ Editing any saved message revises only that message text. It deliberately leaves
 3. Read bridge state and render its ordered messages. Submit player text to the bridge; the bridge injects it into the current Pi session.
 4. In the character-card panel, list every valid card under `cards/`, with search, display name, and a cover resolved from `manifest.cover`, a root `cover.*`, or the original source image. Switching cards must create a fresh Pi session before opening the selected card so contexts never mix.
 5. In start choices, let the player delete inactive saved chats only after explicit confirmation. Resolve the exact session under `sessions/<card-id>/`, refuse the active record, and delete no broader path.
-6. In user settings, select saved player profiles by name and edit the active name and description. Allow one PNG, JPEG, or WebP avatar of at most 5 MB per saved nickname. Store image bytes under `settings/avatars/` and only the safe relative avatar reference in that profile's `settings/common.json` entry. Validate both declared MIME type and file signature. Use the current card cover as the assistant avatar and the nickname-specific image as the player avatar, with initial-letter fallbacks. Persist the active profile in current session metadata. Inject the active profile as fixed RP context before the card's primary-character profile; avatars are presentation-only and a description must never override player agency.
+6. In user settings, select, edit, and delete saved player profiles by name. Keep at least one saved profile. Deleting the active profile selects the first remaining profile, updates current-session metadata and fixed player context immediately, and removes its avatar file when no remaining profile references it. Allow one PNG, JPEG, or WebP avatar of at most 5 MB per saved nickname. Store image bytes under `settings/avatars/` and only the safe relative avatar reference in that profile's `settings/common.json` entry. Validate both declared MIME type and file signature. Use the current card cover as the assistant avatar and the nickname-specific image as the player avatar, with initial-letter fallbacks. Persist the active profile in current session metadata. Inject the active profile as fixed RP context before the card's primary-character profile; avatars are presentation-only and a description must never override player agency.
 7. In system settings, adjust the story font size and persist it in `settings/common.json`. Also list every frontend feature module with a visibility checkbox and accessible up/down controls. Persist module visual order and hidden IDs in `cards/<card-id>/settings.json` under `settings.featureModules`; apply them only to the Web rail. Background modules never appear in this list. Presentation preferences do not enter Pi context, alter transcripts, rewrite module definitions, or change author-controlled `contextOrder`.
 8. Poll or subscribe to bridge state and display the completed Pi response.
 9. Render frontend card feature modules from `GET /api/modules` inside `#card-module-list`. Use card-local `settings.featureModules` when present; otherwise use authored `displayOrder`. Each module is an independent titled disclosure section, collapsed by default. Keep its expanded state only in current page memory so it survives polling updates but resets on F5; do not persist disclosure state in common settings. Read each module's declarative `view.json` to map regions to its current chat's data. Render `json` regions as recursive key/value fields—nested groups and numbered array items—not as raw JSON source, braces, quoted keys, or monospace code. The endpoint must omit background modules, and visible selection or sorting remains frontend-only. Do not hard-code a placeholder module in the generic frontend.
+
+After saving the player-visible assistant prose, run one hidden post-narrative task for every module whose storage engine is `post-narrative-output`. It must resolve each module as emitted or `not_triggered`, validate all emitted data before committing, bind records to the saved assistant message, and never add auxiliary content to the main transcript. Only after that task succeeds may the variable post-narrative task run. Interrupted post-narrative drafts remain pending and block a new player turn until resumed or completed.
 
 After the bridge accepts a chat reselection or card-switch handoff, permanently make the initiating browser page inert and show that a new page is opening. Never restore its controls with a timeout: the old page belongs to the retired Pi session, so any later request from it is invalid. If an already-stale page receives the bridge's closed-session response, replace its controls with the same inert handoff notice. The player should only continue in the newest Web RP page.
 
@@ -87,6 +89,7 @@ Render authored and generated message content with the card-local safe Markdown 
 - `POST /api/resume`: attach a saved card transcript to the current Pi session and continue it.
 - `POST /api/input`: transfer player text to the current Pi session.
 - `POST /api/user-settings`: update the player display name in the current Pi session.
+- `DELETE /api/user-profile?playerName=<name>`: delete one saved profile, retaining at least one and switching the current profile when necessary.
 - `POST /api/module-display-settings`: save card-local frontend module order and hidden IDs without changing Agent context.
 - `POST /api/user-avatar?playerName=<name>`: upload one validated nickname-specific avatar as raw image bytes.
 - `POST /api/system-settings`: update shared presentation settings.
@@ -131,3 +134,5 @@ For each source, the runtime executes its default/custom code selector. Agent-en
 ## Starting Web mode
 
 Use the `play-pi-rp-web` skill. It follows `play-pi-rp` and additionally calls the extension tool `start_rp_web` with the selected card. The extension selects an available local port and opens the card page automatically. No API setup is requested in the page.
+
+Do not start play mode from the conversion repository root. Pi discovers `.agents/skills` in ancestor directories, so the player must also apply the project-local skill override documented in the repository-root isolation guide before starting a fresh Pi play session from `play/`.

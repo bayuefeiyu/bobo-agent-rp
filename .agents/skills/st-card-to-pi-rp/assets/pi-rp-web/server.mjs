@@ -226,6 +226,10 @@ export function createApplication({ cardStore, bridge }) {
         const description = cleanOptionalText(body.description, "description");
         return sendJson(response, 200, await bridge.updateUserSettings({ playerName, description }));
       }
+      if (request.method === "DELETE" && url.pathname === "/api/user-profile") {
+        const playerName = cleanText(url.searchParams.get("playerName"), "playerName", 200);
+        return sendJson(response, 200, await bridge.deleteUserProfile(playerName));
+      }
       if (request.method === "POST" && url.pathname === "/api/card-switch") {
         const body = await readJson(request);
         return sendJson(response, 202, await bridge.switchCard(cleanSessionId(body.cardId), body.forceNew === true));

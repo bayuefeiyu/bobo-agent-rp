@@ -32,6 +32,9 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /expandedFeatureModules: new Set\(\)/);
   assert.match(app, /function beginMessageEdit/);
   assert.match(app, /function deleteSavedMessage/);
+  assert.match(app, /function deleteSavedProfile/);
+  assert.match(app, /\/api\/user-profile\?playerName=/);
+  assert.match(page, /id="delete-saved-profile"/);
   assert.match(app, /method: "PUT"/);
   assert.match(app, /同时删除其后的/);
   assert.match(styles, /calc\(60vw \+ 384px\)/);

@@ -4,6 +4,7 @@
 !/.gitattributes
 !/.gitignore
 !/README.md
+!/PI-PLAY-CONTEXT-ISOLATION.md
 
 /.agents/*
 !/.agents/skills/

@@ -29,9 +29,9 @@ In `append` mode, tool records supplement the code baseline. In `override` mode 
 
 When a source enables Agent catalog enrichment, follow its module skill and call `rp_catalog_update` only after reading the exact record. Generated title/tags/summary are navigation aids; deterministic identity, revision, hash, and fallback fields remain code-owned.
 
-Use the card knowledge map for setting/rule documents and follow module skills for module records. Compose the exact RP response and let the Web bridge save it. Ordinary module records persist only state established by delivered prose. A native variable module instead runs its own post-narrative task after the AI message is saved: the task receives every effective variable, may call `rp_variable_update` repeatedly, and finishes with `rp_variable_finalize`; one complete snapshot is then bound to the AI message and affects the next creative turn.
+Use the card knowledge map for setting/rule documents and follow module skills for module records. Compose only the exact main RP prose and let the Web bridge save it. Do not append content owned by an auxiliary-output module to the chat body. After the prose is saved, the runtime resolves all `post-narrative-output` modules in one hidden task through `rp_output_update` and `rp_output_finalize`; emitted records bind to that AI message. A native variable module then runs its own post-narrative task: it receives every effective variable, may call `rp_variable_update` repeatedly, and finishes with `rp_variable_finalize`; one complete snapshot is bound to the same AI message and affects the next creative turn.
 
-The per-chat `draft/` directory is shared temporary workspace for all tasks and is cleared before each new player turn. It is not story state. An interrupted variable draft may remain pending for `/rp-vars-resume`, but it does not become effective until finalization succeeds.
+The per-chat `draft/` directory is shared temporary workspace for all tasks and is cleared before each new player turn. It is not story state. Interrupted auxiliary-output and variable drafts may remain pending for `/rp-outputs-resume` or `/rp-vars-resume`; neither becomes effective until finalization succeeds.
 
 ## Record truth and storage
 

@@ -38,6 +38,7 @@ test("card-local server only transports view state and player input", async () =
   let switched = null;
   let switchForceNew = false;
   let playerDescription = "";
+  let savedProfiles = [{ name: "玩家", description: "" }, { name: "旧用户", description: "旧设定" }];
   let fontSize = 16;
   let moduleDisplaySettings = { order: ["character-memory"], hidden: [] };
   let avatarBody = null;
@@ -45,7 +46,7 @@ test("card-local server only transports view state and player input", async () =
   const bridge = {
     getState: async () => ({ openingId, playerName, messages, busy: false }),
     getSettings: async () => ({
-      common: { schemaVersion: 1, user: { playerName, description: playerDescription, savedProfiles: [{ name: playerName, description: playerDescription }] }, system: { fontSize } },
+      common: { schemaVersion: 1, user: { playerName, description: playerDescription, savedProfiles }, system: { fontSize } },
       card: { schemaVersion: 1, cardId: "test-card", settings: { featureModules: moduleDisplaySettings } },
     }),
     listFeatureModules: async () => ({
@@ -74,7 +75,17 @@ test("card-local server only transports view state and player input", async () =
     updateUserSettings: async settings => {
       playerName = settings.playerName;
       playerDescription = settings.description;
+      const existing = savedProfiles.find(profile => profile.name === playerName);
+      if (existing) existing.description = playerDescription;
+      else savedProfiles.push({ name: playerName, description: playerDescription });
       return { openingId, playerName, messages, busy: false, settings: (await bridge.getSettings()).common };
+    },
+    deleteUserProfile: async name => {
+      if (savedProfiles.length <= 1) throw Object.assign(new Error("At least one saved player profile must remain."), { status: 409 });
+      const index = savedProfiles.findIndex(profile => profile.name === name);
+      if (index === -1) throw Object.assign(new Error("Saved player profile was not found."), { status: 404 });
+      savedProfiles.splice(index, 1);
+      return { openingId, playerName, messages, busy: false, settings: (await bridge.getSettings()).common, deletedPlayerName: name };
     },
     updateSystemSettings: async settings => {
       fontSize = settings.fontSize;
@@ -172,6 +183,12 @@ test("card-local server only transports view state and player input", async () =
     const settings = await settingsResponse.json();
     assert.equal(settings.playerName, "远行者");
     assert.equal(playerDescription, "来自北境的旅人。");
+
+    const deleteProfileResponse = await fetch(`${base}/api/user-profile?playerName=${encodeURIComponent("旧用户")}`, { method: "DELETE" });
+    assert.equal(deleteProfileResponse.status, 200);
+    const deletedProfile = await deleteProfileResponse.json();
+    assert.equal(deletedProfile.deletedPlayerName, "旧用户");
+    assert.equal(deletedProfile.settings.user.savedProfiles.some(profile => profile.name === "旧用户"), false);
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const avatarUploadResponse = await fetch(`${base}/api/user-avatar?playerName=${encodeURIComponent("远行者")}`, {

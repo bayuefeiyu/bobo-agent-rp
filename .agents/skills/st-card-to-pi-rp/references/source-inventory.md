@@ -26,7 +26,8 @@ Record all non-empty content before conversion:
 - Dialogue examples.
 - Embedded or bound character lorebook entries available in the supplied source.
 - Plain-text status panels, persistent state definitions, field meanings, and update rules, even when their original display mechanism is unsupported.
-- Assets and unknown extension fields.
+- Assets and unknown extension fields. Identify the authored character cover separately from decorative, background, sprite, emotion, or UI assets.
+- Every source-required output outside the main narrative: status panels, side stories or “meanwhile” scenes, thoughts, commentary channels, choices, summaries, news feeds, and similar separately formatted content. Inventory its activation, cadence, format, information boundary, and whether prior outputs affect later ones.
 - References to worldbooks, presets, scripts, URLs, or plugins that are not included in the supplied source.
 
 Creator notes are metadata unless their text clearly contains instructions or canon intended for play. Do not silently inject ordinary installation instructions, acknowledgements, changelogs, or author commentary into RP context.
@@ -65,6 +66,13 @@ Flag rather than execute or emulate:
 - Slash commands and plugin-specific executable directives.
 
 Preserve the raw field or file under `source/unsupported/` when possible. A card with unsupported material may still be converted partially, but the report must state which behaviors will not survive.
+
+## Cover asset disposition
+
+- A PNG or APNG packaged card is itself the authored cover. Preserve its bytes as a card-local source asset even when JSON extraction is performed separately.
+- For CHARX, inspect declared assets and safely extract the supplied character icon. Do not choose an unrelated background merely because it is the largest image.
+- For Tavern Sync or JSON sources, use only a supplied local image or a resolvable local path explicitly associated with the character. Do not fetch remote URLs during conversion and do not generate a replacement.
+- Record `available`, `selected`, `missing`, or `ambiguous` disposition. When an authored cover is available, the target manifest must reference it.
 
 When unsupported code is accompanied by separable authored variable semantics, inventory those semantics independently. Preserve the raw code as unsupported, but translate the supported structure, defaults, constraints, relationships, update meanings, and references into the native variable module without executing or emulating the original implementation or its output syntax.
 

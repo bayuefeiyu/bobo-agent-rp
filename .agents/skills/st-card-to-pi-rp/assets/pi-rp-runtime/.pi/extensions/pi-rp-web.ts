@@ -34,6 +34,12 @@ import {
   runContextProcessor,
   validateContextProcessorDefinition,
 } from "../lib/rp-context-processors.mjs";
+import {
+  createOutputDraft,
+  unresolvedOutputModuleIds,
+  updateOutputDraft,
+} from "../lib/rp-outputs.mjs";
+import { removeSavedUserProfile } from "../lib/rp-user-profiles.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -73,7 +79,7 @@ type ModuleStorage = {
   snapshot: null | { file: string; initialFile: string; schemaFile: string };
   catalogFile: string;
   retrievalPolicyFile: string;
-  engine: null | { kind: "variables"; configFile: string };
+  engine: null | { kind: "variables"; configFile: string } | { kind: "post-narrative-output" };
 };
 
 type VariableRuntime = {
@@ -127,9 +133,12 @@ type RpRun = {
   catalogUpdates: Array<Record<string, unknown>>;
   agentSources: string[];
   processorSelections: Array<{ id: string; include: string[]; error?: string }>;
+  outputUpdates: Array<Record<string, unknown>>;
   contextContent: string | null;
-  phase: "narrative" | "variable-update" | "done";
+  phase: "narrative" | "output-update" | "variable-update" | "done";
   assistantMessageId: string | null;
+  outputModuleIds: string[];
+  outputFinalized: boolean;
   variableModuleId: string | null;
   variableFinalized: boolean;
 };
@@ -150,6 +159,7 @@ type FeatureModule = {
   skillDescription: string;
   initialRecords: RecordEnvelope[];
   initialSnapshot: RecordEnvelope | null;
+  postNarrativeOutput: boolean;
   variable: VariableRuntime | null;
 };
 
@@ -299,6 +309,10 @@ function playerProfileContext(playerName: string, description: string) {
 
 function activeVariableModule(active: ActiveBridge) {
   return active.featureModules.find(module => module.variable) || null;
+}
+
+function postNarrativeOutputModules(active: ActiveBridge) {
+  return active.featureModules.filter(module => module.postNarrativeOutput);
 }
 
 async function currentVariableRecord(active: ActiveBridge, module: FeatureModule) {
@@ -528,11 +542,16 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     if (!storage || Object.keys(storage).length !== storageFields.length || storageFields.some(field => !(field in storage)) || storage.schemaVersion !== 2 || !["record-log", "snapshot", "hybrid"].includes(storage.kind) || !["records", "snapshot"].includes(storage.contextSource)) {
       throw new Error(`Feature module ${record.id} has an invalid storage specification.`);
     }
-    if (storage.engine !== null && (!storage.engine || Object.keys(storage.engine).sort().join(",") !== "configFile,kind" || storage.engine.kind !== "variables")) {
+    const variableEngine = storage.engine && Object.keys(storage.engine).sort().join(",") === "configFile,kind" && storage.engine.kind === "variables";
+    const outputEngine = storage.engine && Object.keys(storage.engine).join(",") === "kind" && storage.engine.kind === "post-narrative-output";
+    if (storage.engine !== null && !variableEngine && !outputEngine) {
       throw new Error(`Feature module ${record.id} has an invalid storage engine.`);
     }
     if (storage.engine?.kind === "variables" && (storage.kind !== "hybrid" || storage.contextSource !== "snapshot")) {
       throw new Error(`Variable module ${record.id} must use hybrid storage with snapshot context.`);
+    }
+    if (storage.engine?.kind === "post-narrative-output" && (storage.kind !== "record-log" || storage.contextSource !== "records" || record.surface !== "frontend")) {
+      throw new Error(`Post-narrative output module ${record.id} must use frontend record-log storage with records context.`);
     }
     if ((storage.kind === "record-log" || storage.kind === "hybrid") && !storage.records) throw new Error(`Feature module ${record.id} requires records storage.`);
     if ((storage.kind === "snapshot" || storage.kind === "hybrid") && !storage.snapshot) throw new Error(`Feature module ${record.id} requires snapshot storage.`);
@@ -581,6 +600,7 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
       skillDescription: parseSkillDescription(skillText, `${record.id}.skillFile`),
       initialRecords,
       initialSnapshot,
+      postNarrativeOutput: storage.engine?.kind === "post-narrative-output",
       variable,
     });
   }
@@ -690,21 +710,26 @@ function resolveCardChild(cardDirectory: string, path: string) {
   return target;
 }
 
+function imageMimeFromBytes(body: Buffer) {
+  if (body.length >= 8 && body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (body.length >= 3 && body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff) return "image/jpeg";
+  if (body.length >= 12 && body.subarray(0, 4).toString("ascii") === "RIFF" && body.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
 async function locateCardCover(cardDirectory: string, manifest: any) {
   const candidates = [
     typeof manifest.cover === "string" ? manifest.cover : "",
-    "cover.png", "cover.webp", "cover.jpg", "cover.jpeg",
-    "source/original.png", "source/original.webp", "source/original.jpg", "source/original.jpeg",
+    "cover.png", "cover.apng", "cover.webp", "cover.jpg", "cover.jpeg",
+    "source/original.png", "source/original.apng", "source/original.webp", "source/original.jpg", "source/original.jpeg",
   ].filter(Boolean);
   for (const candidate of candidates) {
     const path = resolveCardChild(cardDirectory, candidate);
     if (!path) continue;
     try {
       const body = await readFile(path);
-      const extension = extname(path).toLowerCase();
-      const mimeType = extension === ".png" ? "image/png"
-        : extension === ".webp" ? "image/webp"
-          : "image/jpeg";
+      const mimeType = imageMimeFromBytes(body);
+      if (!mimeType) continue;
       return { body, mimeType };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -746,14 +771,20 @@ export default function (pi: ExtensionAPI) {
     return resolve(publicDraftDirectory(target), "variables.json");
   }
 
+  function outputDraftPath(target: ActiveBridge) {
+    return resolve(publicDraftDirectory(target), "outputs.json");
+  }
+
   async function resetPublicDraftDirectory(target: ActiveBridge) {
     const directory = publicDraftDirectory(target);
-    const pending = await readFile(resolve(directory, "variables.json"), "utf8").then(JSON.parse).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    });
-    if (pending?.status === "pending") {
-      throw httpError(409, "The previous variable update draft is unfinished. Run /rp-vars-resume in Pi and finish it before starting another RP turn.");
+    for (const [fileName, command] of [["outputs.json", "/rp-outputs-resume"], ["variables.json", "/rp-vars-resume"]]) {
+      const pending = await readFile(resolve(directory, fileName), "utf8").then(JSON.parse).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      });
+      if (pending?.status === "pending") {
+        throw httpError(409, `The previous post-narrative draft is unfinished. Run ${command} in Pi and finish it before starting another RP turn.`);
+      }
     }
     await rm(directory, { recursive: true, force: true });
     await mkdir(directory, { recursive: true });
@@ -836,6 +867,57 @@ export default function (pi: ExtensionAPI) {
       details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleId: module.id },
     }, { deliverAs: "followUp", triggerTurn: true });
     return true;
+  }
+
+  async function beginOutputUpdate(target: ActiveBridge, run: RpRun, assistantRecord: RecordEnvelope) {
+    const modules = postNarrativeOutputModules(target);
+    if (!modules.length || !target.sessionDirectory) return false;
+    const draft = createOutputDraft({
+      id: `output-draft-${randomUUID()}`,
+      turn: target.turn,
+      assistantMessageId: assistantRecord.id,
+      userMessage: run.submittedText,
+      assistantMessage: run.assistantContent,
+      moduleIds: modules.map(module => module.id),
+    });
+    await mkdir(publicDraftDirectory(target), { recursive: true });
+    await writeFile(outputDraftPath(target), `${JSON.stringify(draft, null, 2)}\n`, "utf8");
+    run.phase = "output-update";
+    run.assistantMessageId = assistantRecord.id;
+    run.outputModuleIds = [...draft.moduleIds];
+    run.outputFinalized = false;
+    pi.sendMessage({
+      customType: "pi-rp-output-update-task",
+      content: `The player-visible RP prose for turn ${target.turn} has been saved. Resolve every auxiliary output module with rp_output_update, then call rp_output_finalize. Do not write another RP response.`,
+      display: false,
+      details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleIds: draft.moduleIds },
+    }, { deliverAs: "followUp", triggerTurn: true });
+    return true;
+  }
+
+  async function outputUpdateContext(target: ActiveBridge, run: RpRun) {
+    const draft = JSON.parse(await readFile(outputDraftPath(target), "utf8"));
+    const modules = target.featureModules.filter(module => run.outputModuleIds.includes(module.id) && module.postNarrativeOutput);
+    const moduleSections = await Promise.all(modules.map(async module => {
+      const records = await readModuleContextRecords(target, module);
+      const selected = selectRecords(records, module.retrievalPolicy.code.selector).records as RecordEnvelope[];
+      return [
+        `## ${module.title} (${module.id})`,
+        `Module skill: ${relative(target.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
+        module.skillDescription,
+        selected.length ? `Prior selected module records:\n${formatRecords(selected)}` : "No prior selected module records.",
+      ].join("\n");
+    }));
+    return [
+      "# Authoritative post-narrative auxiliary-output task",
+      "The main RP prose is already final and player-visible. Do not continue, repeat, or rewrite it. Resolve each listed module according to its own skill. Emit only content that belongs outside the main narrative; use not_triggered when its authored condition does not apply.",
+      await fixedRpContext(target),
+      run.contextContent ? `## Authoritative context used for the saved prose\n${run.contextContent}` : "",
+      `## Current user message\n${draft.userMessage}`,
+      `## Saved AI prose\n${draft.assistantMessage}`,
+      ...moduleSections,
+      `## Existing decisions\n${JSON.stringify(draft.decisions || {}, null, 2)}`,
+    ].join("\n\n");
   }
 
   async function variableUpdateContext(target: ActiveBridge, run: RpRun) {
@@ -1039,6 +1121,7 @@ export default function (pi: ExtensionAPI) {
       agentQueries: run.agentQueries,
       catalogUpdates: run.catalogUpdates,
       processors: run.processorSelections,
+      outputUpdates: run.outputUpdates,
       unresolvedAgentSources: run.agentSources.filter(source => !run.agentQueries.some(query => query.source === source)),
       updatedAt: new Date().toISOString(),
     };
@@ -1472,12 +1555,14 @@ export default function (pi: ExtensionAPI) {
             active.turn = active.messages.reduce((maximum, message) => Math.max(maximum, message.binding.turn), 0);
             const deletedMessageIds = new Set(deleted.map(message => message.id));
             await pruneModuleRecords(active, deletedMessageIds);
-            const pendingDraft = await readFile(variableDraftPath(active), "utf8").then(JSON.parse).catch(error => {
-              if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-              throw error;
-            });
-            if (pendingDraft?.assistantMessageId && deletedMessageIds.has(pendingDraft.assistantMessageId)) {
-              await rm(variableDraftPath(active), { force: true });
+            for (const draftPath of [outputDraftPath(active), variableDraftPath(active)]) {
+              const pendingDraft = await readFile(draftPath, "utf8").then(JSON.parse).catch(error => {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                throw error;
+              });
+              if (pendingDraft?.assistantMessageId && deletedMessageIds.has(pendingDraft.assistantMessageId)) {
+                await rm(draftPath, { force: true });
+              }
             }
             const becameEmpty = active.messages.length === 0;
             const deletedDirectory = active.sessionDirectory;
@@ -1599,9 +1684,12 @@ export default function (pi: ExtensionAPI) {
             catalogUpdates: [],
             agentSources: [],
             processorSelections: [],
+            outputUpdates: [],
             contextContent: null,
             phase: "narrative",
             assistantMessageId: null,
+            outputModuleIds: [],
+            outputFinalized: false,
             variableModuleId: null,
             variableFinalized: false,
           };
@@ -1631,6 +1719,31 @@ export default function (pi: ExtensionAPI) {
               messages: recordsToWebMessages(active.messages),
               busy: active.pending || !active.context.isIdle(),
               settings: active.commonSettings,
+            };
+          },
+          deleteUserProfile: async (playerName: string) => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
+            const { settings, removed, activeChanged } = removeSavedUserProfile(active.commonSettings, playerName);
+            active.commonSettings = settings;
+            if (activeChanged) {
+              active.playerName = settings.user.playerName;
+              active.playerDescription = settings.user.description;
+            }
+            await writeFile(commonSettingsPath, `${JSON.stringify(active.commonSettings, null, 2)}\n`, "utf8");
+            if (removed.avatar && !settings.user.savedProfiles.some(profile => profile.avatar === removed.avatar)) {
+              await rm(resolveAvatarFile(commonSettingsDirectory, removed.avatar), { force: true }).catch(error => {
+                console.warn(`Could not remove deleted player avatar ${removed.avatar}:`, (error as Error).message);
+              });
+            }
+            await updateMetadata();
+            return {
+              sessionId: active.recordId,
+              openingId: active.openingId,
+              playerName: active.playerName,
+              messages: recordsToWebMessages(active.messages),
+              busy: active.pending || !active.context.isIdle(),
+              settings: active.commonSettings,
+              deletedPlayerName: removed.name,
             };
           },
           updateSystemSettings: async ({ fontSize }: { fontSize: number }) => {
@@ -1777,6 +1890,106 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text: [`RP context query: ${status}`, error ? `Reason: ${error}` : "", formatted].filter(Boolean).join("\n\n") }],
         details: queryReceipt,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_output_update",
+    label: "Resolve RP auxiliary outputs",
+    description: "Set or replace emitted/not-triggered decisions for card-authored output modules in the current hidden post-narrative task. Nothing is committed until rp_output_finalize succeeds.",
+    parameters: Type.Object({
+      updates: Type.Array(Type.Object({
+        moduleId: Type.String(),
+        decision: Type.Union([Type.Literal("emit"), Type.Literal("not_triggered")]),
+        content: Type.Optional(Type.String()),
+      }), { minItems: 1, maxItems: 50 }),
+    }),
+    async execute(_toolCallId, parameters) {
+      if (!active?.pending || !rpRun || rpRun.phase !== "output-update" || active.recordId !== rpRun.recordId) {
+        throw new Error("rp_output_update is only available during an active post-narrative output task.");
+      }
+      const path = outputDraftPath(active);
+      const draft = JSON.parse(await readFile(path, "utf8"));
+      const next = updateOutputDraft(draft, parameters.updates);
+      await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      return {
+        content: [{ type: "text", text: `Resolved ${Object.keys(next.decisions).length}/${rpRun.outputModuleIds.length} auxiliary output module(s). Resolve every module, then call rp_output_finalize.` }],
+        details: { resolvedModuleIds: Object.keys(next.decisions), pendingModuleIds: unresolvedOutputModuleIds(next) },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_output_finalize",
+    label: "Validate and commit RP auxiliary outputs",
+    description: "Validate every auxiliary-output decision and atomically replace each affected module record log before variable maintenance begins.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!active?.pending || !rpRun || rpRun.phase !== "output-update" || active.recordId !== rpRun.recordId || !active.sessionDirectory) {
+        throw new Error("rp_output_finalize is only available during an active post-narrative output task.");
+      }
+      const path = outputDraftPath(active);
+      const draft = JSON.parse(await readFile(path, "utf8"));
+      const missing = unresolvedOutputModuleIds(draft);
+      if (missing.length) {
+        return { content: [{ type: "text", text: `Auxiliary outputs still need decisions: ${missing.join(", ")}` }], details: { status: "needs_revision", missingModuleIds: missing } };
+      }
+      const prepared: Array<{ module: FeatureModule; records: RecordEnvelope[]; record: RecordEnvelope }> = [];
+      const validationErrors: Array<{ moduleId: string; errors: unknown[] }> = [];
+      for (const moduleId of rpRun.outputModuleIds) {
+        const decision = draft.decisions[moduleId];
+        if (decision.decision === "not_triggered") continue;
+        const module = active.featureModules.find(item => item.id === moduleId && item.postNarrativeOutput);
+        if (!module?.storage.records) throw new Error(`Active output module is unavailable: ${moduleId}`);
+        const data = { content: decision.content };
+        const schemaPath = resolveFeatureModuleChild(module.moduleDirectory, module.storage.records.schemaFile, `${module.id}.records.schemaFile`);
+        const schema = JSON.parse(await readFile(schemaPath, "utf8"));
+        const errors = [...Value.Errors(schema as any, data)].map((error: any) => ({ path: error.instancePath || "", message: error.message }));
+        if (errors.length) {
+          validationErrors.push({ moduleId, errors });
+          continue;
+        }
+        const recordsPath = resolve(active.sessionDirectory, "modules", module.id, module.storage.records.file);
+        const records = parseRecordLines(await readFile(recordsPath, "utf8")) as RecordEnvelope[];
+        const record = createRecordEnvelope({
+          id: `output-${module.id}-${randomUUID()}`,
+          source: `module:${module.id}`,
+          sequence: records.length ? Math.max(...records.map(item => item.sequence)) + 1 : 0,
+          binding: { messageId: draft.assistantMessageId, turn: active.turn },
+          metadata: { recordType: "auxiliary-output", entityIds: [], tags: ["post-narrative"] },
+          data,
+        }) as RecordEnvelope;
+        prepared.push({ module, records, record });
+      }
+      if (validationErrors.length) {
+        return {
+          content: [{ type: "text", text: `Auxiliary output validation needs revision:\n${JSON.stringify(validationErrors, null, 2)}` }],
+          details: { status: "needs_revision", errors: validationErrors },
+        };
+      }
+      for (const item of prepared) {
+        const recordsPath = resolve(active.sessionDirectory, "modules", item.module.id, item.module.storage.records!.file);
+        const temporaryPath = resolve(recordsPath, `..`, `.output-records-${Date.now()}-${process.pid}-${randomUUID()}.tmp`);
+        const nextRecords = [...item.records, item.record];
+        await writeFile(temporaryPath, toRecordLines(nextRecords), "utf8");
+        await rename(temporaryPath, recordsPath);
+        await refreshSourceCatalog(active, `module:${item.module.id}`, nextRecords);
+      }
+      await rm(path, { force: true });
+      rpRun.outputFinalized = true;
+      rpRun.outputUpdates = rpRun.outputModuleIds.map(moduleId => {
+        const committed = prepared.find(item => item.module.id === moduleId);
+        return {
+          moduleId,
+          decision: draft.decisions[moduleId].decision,
+          recordId: committed?.record.id || null,
+          assistantMessageId: draft.assistantMessageId,
+        };
+      });
+      return {
+        content: [{ type: "text", text: `Auxiliary outputs finalized: ${prepared.length} emitted, ${rpRun.outputModuleIds.length - prepared.length} not triggered.` }],
+        details: { status: "committed", recordIds: prepared.map(item => item.record.id) },
       };
     },
   });
@@ -2000,9 +2213,12 @@ export default function (pi: ExtensionAPI) {
         catalogUpdates: [],
         agentSources: [],
         processorSelections: [],
+        outputUpdates: [],
         contextContent: null,
         phase: "variable-update",
         assistantMessageId: draft.assistantMessageId,
+        outputModuleIds: [],
+        outputFinalized: true,
         variableModuleId: draft.moduleId,
         variableFinalized: false,
       };
@@ -2016,9 +2232,68 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("rp-outputs-resume", {
+    description: "Resume the active Web RP chat's interrupted auxiliary-output draft",
+    handler: async (_argumentsText, context) => {
+      if (!active?.recordId || !active.sessionDirectory) {
+        context.ui.notify("No active saved Web RP chat is available.", "warning");
+        return;
+      }
+      await context.waitForIdle();
+      const draft = await readFile(outputDraftPath(active), "utf8").then(JSON.parse).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      });
+      if (!draft || draft.status !== "pending") {
+        context.ui.notify("This chat has no pending auxiliary-output draft.", "info");
+        return;
+      }
+      const assistantIndex = active.messages.findIndex(message => message.id === draft.assistantMessageId);
+      if (assistantIndex === -1) throw new Error("The pending output draft's AI message no longer exists.");
+      const userRecord = [...active.messages.slice(0, assistantIndex)].reverse().find(message => message.data.role === "user");
+      active.pending = true;
+      rpRun = {
+        cardId: active.cardId,
+        recordId: active.recordId,
+        submittedText: draft.userMessage,
+        submittedSequence: userRecord?.sequence ?? Math.max(0, assistantIndex - 1),
+        assistantContent: draft.assistantMessage,
+        automaticSelections: {},
+        agentQueries: [],
+        catalogUpdates: [],
+        agentSources: [],
+        processorSelections: [],
+        outputUpdates: [],
+        contextContent: null,
+        phase: "output-update",
+        assistantMessageId: draft.assistantMessageId,
+        outputModuleIds: [...draft.moduleIds],
+        outputFinalized: false,
+        variableModuleId: null,
+        variableFinalized: false,
+      };
+      pi.sendMessage({
+        customType: "pi-rp-output-update-task",
+        content: "Resume the interrupted post-narrative auxiliary-output task. Resolve every listed module with rp_output_update, then finish with rp_output_finalize. Do not write story prose.",
+        display: false,
+        details: { resumed: true, draftId: draft.id, moduleIds: draft.moduleIds },
+      }, { deliverAs: "followUp", triggerTurn: true });
+      context.ui.notify("Resuming the pending auxiliary-output update.", "info");
+    },
+  });
+
   pi.on("before_agent_start", async event => {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
+    if (rpRun.phase === "output-update") {
+      return {
+        systemPrompt: [
+          event.systemPrompt,
+          "# Active Web RP post-narrative auxiliary-output task",
+          "The player-visible response is already saved. Read every listed card-local output-module skill, resolve each with rp_output_update, and finish with rp_output_finalize. Never create additional story prose in this phase.",
+        ].join("\n\n"),
+      };
+    }
     if (rpRun.phase === "variable-update") {
       return {
         systemPrompt: [
@@ -2032,8 +2307,8 @@ export default function (pi: ExtensionAPI) {
     return {
       systemPrompt: [
         event.systemPrompt,
-        "# Active Web RP fixed context",
-        "For this run, the fixed card and player context below is authoritative. The context event supplies deterministic dynamic fragments and only the records selected by the card's retrieval policies. Earlier Pi-session messages, summaries, tool results, and RP context are not authoritative for story continuity. For every agent-selectable source listed there, call rp_context_query exactly once before producing the final RP response.",
+          "# Active Web RP fixed context",
+          "For this run, the fixed card and player context below is authoritative. The context event supplies deterministic dynamic fragments and only the records selected by the card's retrieval policies. Earlier Pi-session messages, summaries, tool results, and RP context are not authoritative for story continuity. For every agent-selectable source listed there, call rp_context_query exactly once before producing the final RP response. Produce only the main narrative prose: content owned by a post-narrative output module is generated later by its hidden task and must not be duplicated in the chat body.",
         await fixedRpContext(active),
         messageRetrievalFixedContext(active),
         featureModuleFixedContext(active),
@@ -2046,6 +2321,18 @@ export default function (pi: ExtensionAPI) {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
 
+    if (rpRun.phase === "output-update") {
+      const boundary = event.messages.findIndex((message: any) => message.customType === "pi-rp-output-update-task");
+      const authoritativeContext = {
+        role: "custom" as const,
+        customType: "pi-rp-output-update-context",
+        content: await outputUpdateContext(active, rpRun),
+        display: false,
+        details: { cardId: active.cardId, sessionId: active.recordId, turn: active.turn, moduleIds: rpRun.outputModuleIds },
+        timestamp: Date.now(),
+      };
+      return { messages: [authoritativeContext, ...(boundary === -1 ? [] : event.messages.slice(boundary))] };
+    }
     if (rpRun.phase === "variable-update") {
       const boundary = event.messages.findIndex((message: any) => message.customType === "pi-rp-variable-update-task");
       const authoritativeContext = {
@@ -2107,6 +2394,13 @@ export default function (pi: ExtensionAPI) {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
     if ((event as any).willRetry) return;
+    if (rpRun.phase === "output-update") {
+      if (!rpRun.outputFinalized) return;
+      const assistantRecord = active.messages.find(message => message.id === rpRun!.assistantMessageId);
+      if (!assistantRecord) throw new Error("The saved AI message for the output task no longer exists.");
+      if (!await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
+      return;
+    }
     if (rpRun.phase === "variable-update") {
       if (rpRun.variableFinalized) rpRun.phase = "done";
       return;
@@ -2127,7 +2421,7 @@ export default function (pi: ExtensionAPI) {
     if (!assistantRecord) return;
     rpRun.assistantMessageId = assistantRecord.id;
     await updateMetadata();
-    if (!await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
+    if (!await beginOutputUpdate(active, rpRun, assistantRecord) && !await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
   });
 
   pi.on("agent_settled", async () => {

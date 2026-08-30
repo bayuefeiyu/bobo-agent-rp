@@ -70,6 +70,14 @@ All paths stay inside the module. `contextOrder` and `displayOrder` are independ
 
 `kind` is `record-log`, `snapshot`, or `hybrid`. A snapshot stream uses the same three file fields and contains one common envelope. `contextSource` identifies which stream participates in retrieval; Web may show both. Ordinary modules use `engine: null`.
 
+An authored output outside the main narrative uses frontend record-log storage and:
+
+```json
+"engine": { "kind": "post-narrative-output" }
+```
+
+Its data schema normally contains one required string field, `content`, with no additional properties. The runtime saves the main prose first, then runs one hidden task for all such modules. The task records an emitted value or `not_triggered` decision for every module, validates every emitted value before committing, binds it to the saved assistant message, and then proceeds to variable maintenance. Auxiliary output must never be duplicated in the chat body.
+
 ## Native variable engine
 
 A variable module uses hybrid storage, snapshot context, and:

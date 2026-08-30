@@ -10,6 +10,12 @@ Run:
 python scripts/validate_card_pack.py <path-to-card-pack>
 ```
 
+From this conversion repository root, the concrete form is:
+
+```bash
+python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
+```
+
 The script checks the manifest, message retrieval policy, deterministic context-processor definitions/dependencies/fragments, module v3 definitions, storage v2 contracts and engines, initial common record envelopes, native variable configs/bindings/hooks, schemas, module-skill frontmatter, required files, opening IDs, path safety, provenance statuses, transform labels, and target-file existence.
 
 ## Coverage audit
@@ -52,6 +58,7 @@ Check that:
 - Opening-specific state has not leaked into other openings or global canon.
 - Examples have not been treated as historical events without evidence.
 - Feature modules exist only for genuine persistent structured state or card-specific functions; every module-specific prompt is owned by its module skill and not duplicated in shared fixed context.
+- Every source `output-module` has a frontend feature module using the post-narrative output engine. Its content is absent from the main chat-body contract, its activation and formatting prompts live in the module skill, and emitted records bind to the corresponding assistant message.
 - Every module declares the strict version 3 field set, storage version 2 kind/engine, common record/data schema, retrieval policy, view, and skill. `contextOrder` is chosen by the converter or card author and is never derived from browser preferences; `displayOrder` affects only visible frontend modules.
 - A native variable module preserves authored structure, defaults, opening overlays, constraints, relationships, update meanings, and prompt references without retaining legacy MVU output syntax. Narrative context contains only authored fixed references and exact on-demand projections; the post-narrative update task receives every effective variable.
 - Code retrieval defaults are all messages and latest one module record. Custom selectors are deterministic and valid. Agent append/override is used only when semantic selection is actually needed, and each module skill explains `select`, `success_empty`, and `not_triggered` behavior.
@@ -81,6 +88,7 @@ Simulate at least:
 - A turn that could tempt the Agent to use a narrator-only secret as character knowledge.
 - A turn that could tempt the Agent to decide the player's action or feelings.
 - For every declared feature module, one turn that should read or update it and one ordinary turn that should leave it untouched. Also verify that frontend modules default to `displayOrder`, system settings can hide and rearrange them without changing Agent context, background modules never appear in the Web endpoint or module-settings list, and Agent routing follows frontend-then-background `contextOrder` regardless of frontend state.
+- For every post-narrative output module, test one emitted turn, one `not_triggered` turn, resume after interruption, absence from the main prose, Web rendering, and suffix deletion of its assistant-bound record. When variable and output modules coexist, verify output finalization occurs first and both use the same saved assistant binding.
 - One code-only turn, one successful `rp_context_query` turn for every Agent-enabled mode, one failed selector that uses code fallback, and one message-suffix deletion that removes every module record bound to the deleted IDs. Inspect the generated context receipt.
 - For a native variable module: fixed and exact-path references, default plus opening initialization, repeated draft calls, idempotent operation IDs, a locally invalid operation followed by Agent correction, hook/schema validation, one full snapshot bound to the AI message, interruption/resume, suffix deletion restoring the latest surviving snapshot, and historical text editing that deliberately leaves later records unchanged.
 - For every context processor: each branch boundary, empty selection where allowed, required and optional failure behavior, selected-fragment order, declared input isolation, and one context receipt containing the selected IDs.
@@ -90,6 +98,7 @@ Judge preservation of facts, voice, motivation, information boundaries, and outp
 ## Failure severity
 
 - `error`: lost source content, invented canon, unsafe path, missing target, invalid opening, inaccessible on-demand file, or an unsupported executable behavior presented as successfully converted.
+- Treat an available source card image without a valid manifest cover, or an auxiliary output left only in ordinary Markdown/main prose, as an `error`.
 - `warning`: ambiguity, preserved contradiction, unknown macro, external dependency, unusually large fixed context, or generated anchor needing review.
 - `note`: intentional metadata exclusion, exact duplicate, or optional refinement.
 

@@ -5,7 +5,7 @@ Generate one data card pack per converted card. Do not generate one discoverable
 ## Directory layout
 
 ```text
-cards/<card-id>/
+play/cards/<card-id>/
 ├── manifest.json
 ├── settings.json
 ├── source/
@@ -61,7 +61,7 @@ Copy the standard Web view into `web/`; it belongs to this card and may later be
 }
 ```
 
-The standalone project runtime also owns `settings/common.json` for settings shared by every card, such as player name and story font size. Card-specific controls and values belong only in the card's `settings.json`. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context.
+The standalone runtime root is `play/`. It owns `play/settings/common.json` for settings shared by every card, such as player name and story font size. Card-specific controls and values belong only in the card's `settings.json`. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context.
 
 ## Manifest
 
@@ -108,7 +108,7 @@ Use UTF-8 JSON so the validation script can parse it without additional dependen
 
 Remove nonexistent optional fixed-context paths from the actual manifest. A world card may use an empty `primary_characters` array.
 Use a filesystem-safe `id` containing only letters, digits, dots, underscores, and hyphens; it is also the card's grouping directory under `sessions/`.
-When an image is available, set optional `cover` to a card-relative image path. Preserve and reuse the original card image rather than generating a replacement.
+When an authored image is available, `cover` is required and points to its card-relative preserved copy. A PNG/APNG packaged card always has an available cover because the input image is the cover. Preserve and reuse the original bytes rather than generating a replacement. Omit `cover` only when the supplied JSON, CHARX, or Tavern Sync source genuinely contains no usable local character image; record that disposition in the conversion report.
 
 The baseline `context/retrieval-policy.json` is:
 
@@ -131,7 +131,7 @@ The baseline `context/retrieval-policy.json` is:
 
 When the message policy enables Agent retrieval or Agent catalog enrichment, add `"context_skill": "context/skill/SKILL.md"` to the manifest. That skill owns the author's activation, selection, non-activation, and catalog-enrichment guidance for message records. A code-only card does not need it.
 
-`feature_modules` is required and contains card-relative `module.json` paths. Keep it empty when the source has no persistent structured feature or side panel. Module definitions use strict version 3 with storage version 2; read [feature-modules.md](feature-modules.md) before creating one. Each module owns its prompts in a card-local skill, record/data schemas, and retrieval policy. Native variable modules additionally follow [variables.md](variables.md). Its `contextOrder` is authored Agent behavior, while `displayOrder` affects only the frontend. Background modules remain in Agent context and per-chat storage but never appear in the Web UI.
+`feature_modules` is required and contains card-relative `module.json` paths. Keep it empty only when the source has no persistent structured feature, side panel, or auxiliary output. Every source-required output outside the main narrative is a frontend module using the post-narrative output engine. Module definitions use strict version 3 with storage version 2; read [feature-modules.md](feature-modules.md) before creating one. Each module owns its prompts in a card-local skill, record/data schemas, and retrieval policy. Native variable modules additionally follow [variables.md](variables.md). Its `contextOrder` is authored Agent behavior, while `displayOrder` affects only the frontend. Background modules remain in Agent context and per-chat storage but never appear in the Web UI.
 
 `context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved history/module records. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 1 contract.
 
@@ -155,7 +155,7 @@ Contain only card-specific rules that apply to nearly every response. Do not dup
 
 ### `core/knowledge-map.md`
 
-Route the Agent to domain modules, important entity dossiers, category indexes, conditional scene rules, and output modules. State when to read each target. Do not duplicate full details.
+Route the Agent to domain documents, important entity dossiers, category indexes, and conditional scene rules. Feature-module routing is supplied by the runtime and each module skill; do not duplicate module prompts here.
 
 ## On-demand module frontmatter
 

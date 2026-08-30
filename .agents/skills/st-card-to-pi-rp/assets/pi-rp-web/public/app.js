@@ -43,6 +43,7 @@ const elements = {
   playerAvatarImage: document.querySelector("#player-avatar-image"),
   playerAvatarFallback: document.querySelector("#player-avatar-fallback"),
   savedProfile: document.querySelector("#saved-profile"),
+  deleteSavedProfile: document.querySelector("#delete-saved-profile"),
   userSettingsStatus: document.querySelector("#user-settings-status"),
   fontSize: document.querySelector("#font-size"),
   fontSizeValue: document.querySelector("#font-size-value"),
@@ -796,6 +797,35 @@ function renderSavedProfiles() {
   }
   elements.savedProfile.replaceChildren(fragment);
   elements.savedProfile.value = state.settings?.common?.user?.playerName || profiles[0]?.name || "";
+  if (!elements.savedProfile.value && profiles[0]) elements.savedProfile.value = profiles[0].name;
+  elements.deleteSavedProfile.disabled = profiles.length <= 1 || !elements.savedProfile.value;
+}
+
+async function deleteSavedProfile() {
+  const playerName = elements.savedProfile.value;
+  const profiles = state.settings?.common?.user?.savedProfiles || [];
+  if (!playerName || profiles.length <= 1) return;
+  if (!window.confirm(`确定删除已保存用户“${playerName}”吗？关联头像也会删除，此操作无法恢复。`)) return;
+  elements.deleteSavedProfile.disabled = true;
+  elements.userSettingsStatus.textContent = "删除中……";
+  try {
+    const result = await request(`/api/user-profile?playerName=${encodeURIComponent(playerName)}`, { method: "DELETE" });
+    applySnapshot(result);
+    state.settings.common = result.settings;
+    elements.playerName.value = result.settings.user.playerName;
+    elements.playerDescription.value = result.settings.user.description || "";
+    elements.playerAvatar.value = "";
+    state.playerNameDirty = false;
+    state.avatarVersion = Date.now();
+    renderSavedProfiles();
+    renderPlayerAvatarPreview();
+    if (state.snapshot?.openingId) renderMessages(state.snapshot.messages);
+    elements.userSettingsStatus.textContent = `已删除“${playerName}”`;
+  } catch (error) {
+    renderSavedProfiles();
+    elements.userSettingsStatus.textContent = "删除失败";
+    showError(error);
+  }
 }
 
 function renderPlayerAvatarPreview() {
@@ -1064,6 +1094,7 @@ elements.savedProfile.addEventListener("change", () => {
   state.playerNameDirty = true;
   elements.userSettingsStatus.textContent = "选择后请保存以应用到当前会话";
 });
+elements.deleteSavedProfile.addEventListener("click", deleteSavedProfile);
 elements.cardSearch.addEventListener("input", renderCards);
 elements.userSettingsForm.addEventListener("submit", saveUserSettings);
 elements.playerAvatar.addEventListener("change", () => {

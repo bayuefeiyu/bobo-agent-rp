@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SIGNATURE = b"\xff\xd8\xff"
+WEBP_RIFF = b"RIFF"
 
 
 def sha256_file(path: Path) -> str:
@@ -134,6 +136,61 @@ def extract_png(path: Path) -> tuple[Any, dict[str, Any]]:
     raise ValueError("PNG does not contain a ccv3 or chara card chunk")
 
 
+def image_kind(payload: bytes) -> tuple[str, str] | None:
+    if payload.startswith(PNG_SIGNATURE):
+        return ".png", "image/png"
+    if payload.startswith(JPEG_SIGNATURE):
+        return ".jpg", "image/jpeg"
+    if len(payload) >= 12 and payload.startswith(WEBP_RIFF) and payload[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    return None
+
+
+def card_asset_entries(card: Any) -> list[dict[str, Any]]:
+    if not isinstance(card, dict):
+        return []
+    data = card.get("data") if isinstance(card.get("data"), dict) else card
+    assets = data.get("assets") if isinstance(data, dict) else None
+    return [item for item in assets if isinstance(item, dict)] if isinstance(assets, list) else []
+
+
+def embedded_asset_name(uri: Any, names: list[str]) -> str | None:
+    if not isinstance(uri, str):
+        return None
+    normalized = uri.replace("\\", "/")
+    for prefix in ("embeded://", "embedded://", "charx://"):
+        if normalized.lower().startswith(prefix):
+            normalized = normalized[len(prefix):].lstrip("/")
+            break
+    else:
+        return None
+    if normalized in names:
+        return normalized
+    matches = [name for name in names if name.replace("\\", "/").endswith(f"/{normalized}")]
+    return matches[0] if len(matches) == 1 else None
+
+
+def select_charx_cover(card: Any, archive: zipfile.ZipFile, names: list[str]) -> tuple[tuple[str, bytes] | None, list[str]]:
+    icon_assets = [item for item in card_asset_entries(card) if str(item.get("type", "")).lower() in {"icon", "avatar", "cover"}]
+    candidates: list[str] = []
+    for asset in icon_assets:
+        name = embedded_asset_name(asset.get("uri"), names)
+        if name and name not in candidates:
+            candidates.append(name)
+    if not candidates:
+        for name in names:
+            normalized = name.replace("\\", "/").lower()
+            stem = Path(normalized).stem
+            if stem in {"icon", "avatar", "cover"} or "/icon/" in normalized:
+                candidates.append(name)
+    valid: list[tuple[str, bytes]] = []
+    for name in candidates:
+        payload = archive.read(name)
+        if image_kind(payload):
+            valid.append((name, payload))
+    return (valid[0] if valid else None), [name for name, _ in valid]
+
+
 def extract_charx(path: Path) -> tuple[Any, dict[str, Any]]:
     try:
         with zipfile.ZipFile(path) as archive:
@@ -142,19 +199,44 @@ def extract_charx(path: Path) -> tuple[Any, dict[str, Any]]:
                 raise ValueError("CHARX archive does not contain card.json at its root")
             card = parse_json_bytes(archive.read("card.json"), "CHARX card.json")
             assets = sorted(name for name in names if name != "card.json" and not name.endswith("/"))
-            return card, {"format": "charx", "embedded_files": assets}
+            cover, cover_candidates = select_charx_cover(card, archive, assets)
+            cover_details = None
+            if cover:
+                cover_name, cover_payload = cover
+                extension, mime_type = image_kind(cover_payload) or ("", "")
+                cover_details = {
+                    "available": True,
+                    "archive_path": cover_name,
+                    "extension": extension,
+                    "mime_type": mime_type,
+                    "candidate_paths": cover_candidates,
+                    "ambiguous": len(cover_candidates) > 1,
+                }
+            return card, {"format": "charx", "embedded_files": assets, "cover": cover_details or {"available": False}}
     except zipfile.BadZipFile as error:
         raise ValueError(f"Input is not a valid CHARX ZIP archive: {error}") from error
 
 
-def extract(path: Path) -> dict[str, Any]:
+def extract_with_cover(path: Path) -> tuple[dict[str, Any], bytes | None, str | None]:
     suffix = path.suffix.lower()
     if suffix == ".json":
         card, details = extract_json(path)
+        cover_bytes = None
+        cover_extension = None
     elif suffix in {".png", ".apng"}:
         card, details = extract_png(path)
+        cover_bytes = path.read_bytes()
+        cover_extension = ".png"
+        details["cover"] = {"available": True, "source": "packaged-card", "extension": ".png", "mime_type": "image/png"}
     elif suffix == ".charx":
         card, details = extract_charx(path)
+        cover_bytes = None
+        cover_extension = None
+        cover = details.get("cover")
+        if isinstance(cover, dict) and cover.get("available") and isinstance(cover.get("archive_path"), str):
+            with zipfile.ZipFile(path) as archive:
+                cover_bytes = archive.read(cover["archive_path"])
+            cover_extension = cover.get("extension")
     else:
         raise ValueError("Supported inputs are .json, .png, .apng, and .charx")
 
@@ -166,19 +248,35 @@ def extract(path: Path) -> dict[str, Any]:
             **details,
         },
         "card": card,
-    }
+    }, cover_bytes, cover_extension
+
+
+def extract(path: Path) -> dict[str, Any]:
+    """Return extracted metadata and card data without writing packaged assets."""
+    result, _, _ = extract_with_cover(path)
+    return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Source .json, .png, .apng, or .charx card")
     parser.add_argument("output", type=Path, help="Destination extracted JSON file")
+    parser.add_argument(
+        "--asset-directory",
+        type=Path,
+        help="During formal conversion, preserve an available authored cover here as original.png/jpg/webp",
+    )
     arguments = parser.parse_args()
 
     if not arguments.input.is_file():
         parser.error(f"input file does not exist: {arguments.input}")
     try:
-        result = extract(arguments.input)
+        result, cover_bytes, cover_extension = extract_with_cover(arguments.input)
+        if arguments.asset_directory is not None and cover_bytes is not None and cover_extension is not None:
+            arguments.asset_directory.mkdir(parents=True, exist_ok=True)
+            cover_path = arguments.asset_directory / f"original{cover_extension}"
+            cover_path.write_bytes(cover_bytes)
+            result["source"]["cover"]["preserved_path"] = str(cover_path.resolve())
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError) as error:

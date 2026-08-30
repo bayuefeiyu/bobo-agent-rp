@@ -106,7 +106,10 @@
               </div>
               <div class="setting-control setting-control-text">
                 <label for="saved-profile">已保存的名字</label>
-                <select id="saved-profile" class="setting-select"></select>
+                <div class="saved-profile-control">
+                  <select id="saved-profile" class="setting-select"></select>
+                  <button id="delete-saved-profile" class="secondary-danger" type="button">删除</button>
+                </div>
                 <label for="player-name">当前名字</label>
                 <input id="player-name" class="setting-input" name="playerName" type="text" maxlength="200" autocomplete="nickname" required />
                 <label for="player-avatar">头像</label>

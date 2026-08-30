@@ -581,6 +581,18 @@ h2 {
 .setting-textarea:focus { border-color: rgba(143, 87, 66, 0.7); box-shadow: 0 0 0 3px rgba(143, 87, 66, 0.1); }
 .setting-textarea { resize: vertical; line-height: 1.6; }
 .setting-control > label:not(:first-child) { margin-top: 15px; }
+.saved-profile-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; align-items: stretch; }
+.saved-profile-control .setting-select { min-width: 0; }
+.secondary-danger {
+  padding: 0 14px;
+  border: 1px solid rgba(144, 63, 50, 0.28);
+  border-radius: 10px;
+  color: #8d3f34;
+  background: rgba(255, 255, 255, 0.7);
+  font-weight: 700;
+}
+.secondary-danger:hover, .secondary-danger:focus-visible { outline: none; border-color: rgba(144, 63, 50, 0.52); background: #fff1ec; }
+.secondary-danger:disabled { cursor: not-allowed; opacity: 0.42; }
 .avatar-upload { display: flex; align-items: center; gap: 15px; }
 .avatar-preview {
   position: relative;

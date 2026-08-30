@@ -12,7 +12,7 @@ Classify each source unit on four independent axes.
 - `character`: identity, appearance, motivation, behavior, relationship, voice, capability, knowledge, belief, or secret.
 - `writing-rule`: instruction governing prose, pacing, viewpoint, agency, or characterization.
 - `scene-rule`: instruction used only in a particular situation.
-- `output-module`: status bar, side story, commentary channel, or other text outside the main prose.
+- `output-module`: status bar, “meanwhile” side story, thought channel, commentary, choice list, summary, or other source-required text outside the main narrative.
 - `opening`: visible greeting or facts that only initialize one opening.
 - `example`: style/dialogue example, not automatically historical fact.
 - `metadata`: author-facing information not used during play.
@@ -117,7 +117,8 @@ Do not promote a detail merely because it was a blue/constant worldbook entry in
 - Put card-specific rules that affect nearly every response in `rules/core.md`.
 - Put situation-specific writing rules in `rules/scenes/`.
 - Put rules describing how the fictional world works in `world/domains/`, not in writing rules.
-- Put status bars, side stories, commentary channels, and other extra textual formats in `rules/outputs/`.
+- Convert every `output-module` into a frontend feature module. Its authored prompts belong in that module's skill, and its generated content is stored and rendered in the Web feature rail rather than appended to the main chat prose.
+- Use `rules/outputs/` only for authored rules that influence presentation of the main narrative itself and do not produce a separate output channel.
 - Keep the universal player-agency and continuous-RP protocol in the shared runtime, not duplicated in every card.
 
 ## Openings
@@ -136,4 +137,3 @@ An anchor must be:
 - Linked to the authoritative file.
 
 For small collections, list entities directly in `core/knowledge-map.md`. For large collections, point to a category index that lists every entity. Every on-demand file must be reachable from the fixed map in at most two reads.
-

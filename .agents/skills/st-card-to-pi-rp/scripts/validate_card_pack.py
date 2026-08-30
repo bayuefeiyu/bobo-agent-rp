@@ -21,6 +21,46 @@ ALLOWED_TRANSFORMS = {
     "generated-runtime",
 }
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SIGNATURE = b"\xff\xd8\xff"
+
+
+def supported_image_type(path: Path) -> str | None:
+    try:
+        head = path.read_bytes()[:12]
+    except OSError:
+        return None
+    if head.startswith(PNG_SIGNATURE):
+        return "image/png"
+    if head.startswith(JPEG_SIGNATURE):
+        return "image/jpeg"
+    if len(head) >= 12 and head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def extracted_source_requires_cover(root: Path, manifest: dict[str, Any]) -> bool:
+    candidates = [root / "source" / "extracted.json"]
+    artifact = manifest.get("source", {}).get("artifact") if isinstance(manifest.get("source"), dict) else None
+    if isinstance(artifact, str) and artifact.endswith(".json") and safe_relative_path(artifact):
+        candidates.append(root / artifact)
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        source = payload.get("source") if isinstance(payload, dict) else None
+        if not isinstance(source, dict):
+            continue
+        if source.get("format") == "png":
+            return True
+        cover = source.get("cover")
+        if isinstance(cover, dict) and cover.get("available") is True:
+            return True
+    return False
+
 
 def load_json(path: Path, errors: list[str]) -> Any:
     try:
@@ -353,18 +393,25 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
         if storage.get("contextSource") == "snapshot" and not isinstance(storage.get("snapshot"), dict):
             errors.append(f"{label}.storageFile cannot use unavailable snapshot context")
         engine = storage.get("engine")
-        if engine is not None and (
-            not isinstance(engine, dict)
-            or set(engine) != {"kind", "configFile"}
-            or engine.get("kind") != "variables"
-            or not safe_relative_path(engine.get("configFile"))
-        ):
-            errors.append(f"{label}.storageFile.engine must be null or a variables engine with a safe configFile")
+        variable_engine = (
+            isinstance(engine, dict)
+            and set(engine) == {"kind", "configFile"}
+            and engine.get("kind") == "variables"
+            and safe_relative_path(engine.get("configFile"))
+        )
+        output_engine = isinstance(engine, dict) and set(engine) == {"kind"} and engine.get("kind") == "post-narrative-output"
+        if engine is not None and not variable_engine and not output_engine:
+            errors.append(f"{label}.storageFile.engine must be null, a variables engine with a safe configFile, or a post-narrative-output engine")
             engine = None
-        elif isinstance(engine, dict):
+        elif variable_engine:
             variable_engine_count += 1
             if kind != "hybrid" or storage.get("contextSource") != "snapshot":
                 errors.append(f"{label} variables engine requires hybrid storage with snapshot context")
+        elif output_engine:
+            if kind != "record-log" or storage.get("contextSource") != "records":
+                errors.append(f"{label} post-narrative-output engine requires record-log storage with records context")
+            if module.get("surface") != "frontend":
+                errors.append(f"{label} post-narrative-output engine must use the frontend surface")
         for stream_name in ("records", "snapshot"):
             stream = storage.get(stream_name)
             if not isinstance(stream, dict):
@@ -384,6 +431,18 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
             schema = load_json(schema_path, errors)
             if not isinstance(schema, dict):
                 errors.append(f"{label}.{stream_name}.schemaFile must contain a JSON schema object")
+            elif output_engine and stream_name == "records":
+                properties = schema.get("properties")
+                if (
+                    schema.get("type") != "object"
+                    or schema.get("additionalProperties") is not False
+                    or schema.get("required") != ["content"]
+                    or not isinstance(properties, dict)
+                    or set(properties) != {"content"}
+                    or not isinstance(properties.get("content"), dict)
+                    or properties["content"].get("type") != "string"
+                ):
+                    errors.append(f"{label}.records.schemaFile for post-narrative-output must define exactly one required string content field and disallow additional properties")
             initial = load_json(initial_path, errors)
             source = f"module:{module_id}"
             if stream_name == "records":
@@ -401,7 +460,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
         policy = load_json(policy_path, errors)
         validate_retrieval_policy(policy, f"module:{module_id}", f"{label}.retrievalPolicyFile", errors)
 
-        if isinstance(engine, dict):
+        if variable_engine:
             config_path = module_root / engine["configFile"]
             config = load_json(config_path, errors)
             config_fields = {"schemaVersion", "schemaFile", "initial", "bindingsFile", "hooks", "context"}
@@ -472,6 +531,11 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
         errors.append("manifest id must be filesystem-safe: letters, digits, dot, underscore, and hyphen only")
     if manifest.get("cover") is not None:
         require_file(root, manifest.get("cover"), "cover", errors)
+        if safe_relative_path(manifest.get("cover")) and (root / manifest["cover"]).is_file():
+            if supported_image_type(root / manifest["cover"]) is None:
+                errors.append("cover must contain a valid PNG/APNG, JPEG, or WebP image")
+    elif extracted_source_requires_cover(root, manifest):
+        errors.append("manifest cover is required because the extracted source contains an authored card image")
 
     fixed_context = manifest.get("fixed_context")
     if not isinstance(fixed_context, list) or not fixed_context:
