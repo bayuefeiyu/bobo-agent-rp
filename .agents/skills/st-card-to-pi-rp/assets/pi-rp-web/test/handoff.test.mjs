@@ -30,6 +30,10 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /state\.moduleDisplayDraft\.hidden/);
   assert.match(app, /request\("\/api\/modules"\)/);
   assert.match(app, /expandedFeatureModules: new Set\(\)/);
+  assert.match(app, /workflowPanelHasFocus/);
+  assert.match(app, /workflowRenderSignature/);
+  assert.match(app, /继承工作流默认 Agent（\$\{agentLabel/);
+  assert.match(app, /继承\$\{inherited\.source\}（\$\{modelLabel/);
   assert.match(app, /function beginMessageEdit/);
   assert.match(app, /function deleteSavedMessage/);
   assert.match(app, /function deleteSavedProfile/);

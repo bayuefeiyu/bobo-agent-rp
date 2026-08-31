@@ -81,7 +81,7 @@ Variable changes occur after player-visible prose is saved. The update task rece
 
 The update tool supports idempotent `add`, `replace`, and `cancel` draft actions over `set`, `delta`, `merge`, `append`, and `remove` operations. Finalization applies the concentrated draft, runs hooks and Schema validation, and reports only the failing operation/path/current/attempted value and error. Correct operations remain in the pending draft; the Agent uses the already supplied complete state and authored rules to discover relationships and repair only failed operations. A successful update writes one complete snapshot bound to the AI message. No effective change writes no snapshot.
 
-The session's `draft/` directory is shared disposable workspace for all tasks and is cleared before each new player turn. An interrupted variable draft remains pending and blocks a new turn until resumed or completed; it is not effective state.
+The session's `workspace/public/turn/` directory is shared disposable workspace for all tasks and is cleared before each new player turn. An interrupted variable draft remains pending and blocks a new turn until resumed or completed; it is not effective state.
 
 ## History and direct edits
 

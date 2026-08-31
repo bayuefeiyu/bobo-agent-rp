@@ -518,6 +518,102 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
         errors.append("a card may define only one variables storage engine")
 
 
+def validate_workflows(root: Path, errors: list[str]) -> set[str]:
+    workflow_root = root / "workflows"
+    if not workflow_root.exists():
+        return set()
+    ids: set[str] = set()
+    safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+    allowed_kinds = {"foreground", "turn-background", "global-background"}
+    allowed_types = {"agent", "code", "narrative", "gate", "join", "module-output", "variable-update", "turn-finalize"}
+    for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
+        label = f"workflows/{directory.name}/workflow.json"
+        workflow = load_json(directory / "workflow.json", errors)
+        if not isinstance(workflow, dict):
+            continue
+        workflow_id = workflow.get("id")
+        if workflow.get("schemaVersion") != 1:
+            errors.append(f"{label}.schemaVersion must be 1")
+        if not isinstance(workflow_id, str) or not safe_id.fullmatch(workflow_id):
+            errors.append(f"{label}.id is invalid")
+        elif workflow_id != directory.name:
+            errors.append(f"{label}.id must match its directory")
+        elif workflow_id in ids:
+            errors.append(f"duplicate workflow id: {workflow_id}")
+        else:
+            ids.add(workflow_id)
+        kind = workflow.get("kind")
+        if kind not in allowed_kinds:
+            errors.append(f"{label}.kind is invalid")
+        nodes = workflow.get("nodes")
+        if not isinstance(nodes, list) or not nodes:
+            errors.append(f"{label}.nodes must be a non-empty array")
+            continue
+        node_ids: set[str] = set()
+        by_id: dict[str, dict[str, Any]] = {}
+        for index, node in enumerate(nodes):
+            node_label = f"{label}.nodes[{index}]"
+            if not isinstance(node, dict):
+                errors.append(f"{node_label} must be an object")
+                continue
+            node_id = node.get("id")
+            if not isinstance(node_id, str) or not safe_id.fullmatch(node_id):
+                errors.append(f"{node_label}.id is invalid")
+                continue
+            if node_id in node_ids:
+                errors.append(f"{label} has duplicate node id {node_id}")
+            node_ids.add(node_id)
+            by_id[node_id] = node
+            if node.get("type", "agent") not in allowed_types:
+                errors.append(f"{node_label}.type is invalid")
+        for node_id, node in by_id.items():
+            dependencies = node.get("dependsOn", [])
+            if not isinstance(dependencies, list) or any(item not in node_ids for item in dependencies):
+                errors.append(f"{label} node {node_id} has invalid dependencies")
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(node_id: str) -> None:
+            if node_id in visiting:
+                errors.append(f"{label} contains a dependency cycle at {node_id}")
+                return
+            if node_id in visited:
+                return
+            visiting.add(node_id)
+            for dependency in by_id.get(node_id, {}).get("dependsOn", []):
+                if dependency in by_id:
+                    visit(dependency)
+            visiting.discard(node_id)
+            visited.add(node_id)
+
+        for node_id in by_id:
+            visit(node_id)
+        types = {node.get("type", "agent") for node in by_id.values()}
+        narrative_count = sum(1 for node in by_id.values() if node.get("type", "agent") == "narrative")
+        if kind == "foreground" and (narrative_count != 1 or "turn-finalize" not in types):
+            errors.append(f"{label} foreground workflow requires exactly one narrative and at least one turn-finalize node")
+        elif kind == "foreground":
+            narrative_id = next(node_id for node_id, node in by_id.items() if node.get("type", "agent") == "narrative")
+            finalizers = [node_id for node_id, node in by_id.items() if node.get("type", "agent") == "turn-finalize"]
+
+            def ancestors(node_id: str) -> set[str]:
+                result: set[str] = set()
+                pending = list(by_id[node_id].get("dependsOn", []))
+                while pending:
+                    dependency = pending.pop()
+                    if dependency in result or dependency not in by_id:
+                        continue
+                    result.add(dependency)
+                    pending.extend(by_id[dependency].get("dependsOn", []))
+                return result
+
+            if not any(narrative_id in ancestors(finalizer) for finalizer in finalizers):
+                errors.append(f"{label} turn-finalize must run after narrative")
+        if kind != "foreground" and "narrative" in types:
+            errors.append(f"{label} background workflow cannot contain a narrative node")
+    return ids
+
+
 def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: list[str]) -> None:
     if not isinstance(manifest, dict):
         errors.append("manifest.json must contain an object")
@@ -693,6 +789,7 @@ def main() -> int:
     provenance = load_json(root / "provenance.json", errors)
     validate_manifest(root, manifest, errors, warnings)
     validate_provenance(root, provenance, errors, warnings)
+    workflow_ids = validate_workflows(root, errors)
     if isinstance(card_settings, dict):
         if card_settings.get("schemaVersion") != 1:
             errors.append("settings schemaVersion must be 1")
@@ -701,6 +798,9 @@ def main() -> int:
         if not isinstance(card_settings.get("settings"), dict):
             errors.append("settings settings must be an object")
         else:
+            active_workflow = card_settings["settings"].get("activeWorkflowId")
+            if active_workflow is not None and active_workflow not in workflow_ids:
+                errors.append("settings activeWorkflowId must reference a card-local workflow")
             module_display = card_settings["settings"].get("featureModules")
             if module_display is not None:
                 if not isinstance(module_display, dict) or set(module_display) != {"order", "hidden"}:

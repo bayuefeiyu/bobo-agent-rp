@@ -745,6 +745,40 @@ h2 {
 .module-settings-actions button[type="submit"] { border-color: #8f5742; color: #fff; background: #8f5742; }
 .module-settings-actions .secondary-button { color: #62574e; background: transparent; }
 
+.config-toolbar { display: flex; align-items: end; gap: 10px; margin: 0 0 16px; }
+.config-toolbar label { display: grid; min-width: min(360px, 100%); gap: 7px; color: #62574e; font-size: 0.8rem; font-weight: 700; }
+.config-toolbar button, .config-actions button, .node-binding-controls button, .run-node button, #activate-workflow {
+  padding: 9px 13px; border: 1px solid rgba(143, 87, 66, 0.22); border-radius: 9px; color: #713f2f; background: rgba(255,255,255,.78); font: inherit; font-weight: 700;
+}
+#activate-workflow, .config-actions button[type="submit"] { border-color: #8f5742; color: #fff; background: #8f5742; }
+.config-form { align-items: start; }
+.config-fields { display: grid; gap: 13px; }
+.config-fields label { margin: 0; }
+.field-pair, .model-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.model-picker { grid-template-columns: 1fr auto; }
+.config-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 5px; }
+.code-textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .82rem; }
+.status-badge { padding: 6px 10px; border-radius: 999px; color: #714938; background: #eee1d7; font-size: .76rem; font-weight: 700; }
+.workflow-summary { display: grid; gap: 5px; padding: 18px 20px; border: 1px solid rgba(75,62,49,.14); border-radius: 14px; background: rgba(255,255,255,.66); }
+.workflow-policy { display: grid; grid-template-columns: 120px minmax(220px, 1fr) minmax(180px, 1fr) auto; gap: 10px; align-items: end; margin: 0 0 12px; padding: 13px; border: 1px solid rgba(75,62,49,.12); border-radius: 12px; background: rgba(255,255,255,.5); }
+.workflow-policy label { display: grid; gap: 6px; color: #62574e; font-size: .76rem; font-weight: 700; }
+.workflow-policy .check-label { display: flex; align-items: center; align-self: center; }
+.workflow-policy button { padding: 10px 13px; border: 0; border-radius: 9px; color: #fff; background: #8f5742; font-weight: 700; }
+.workflow-summary strong { font-family: Georgia, "Noto Serif SC", serif; font-size: 1.1rem; }
+.workflow-summary span { color: #8f5742; font-size: .78rem; font-weight: 700; }
+.workflow-summary p { margin: 3px 0 0; color: #746b63; line-height: 1.6; }
+.workflow-node-list, .workflow-run-list { display: grid; gap: 10px; margin-top: 12px; }
+.workflow-node-card, .workflow-run-card { padding: 16px; border: 1px solid rgba(75,62,49,.14); border-radius: 13px; background: rgba(255,255,255,.62); }
+.workflow-node-title, .workflow-run-head, .run-node { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.workflow-node-title span, .workflow-run-head span { color: #7c6e63; font-size: .76rem; }
+.workflow-node-card > p { color: #746b63; font-size: .84rem; line-height: 1.55; }
+.node-binding-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+.run-heading { margin-top: 30px; margin-bottom: 10px; }
+.run-node { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(75,62,49,.09); font-size: .8rem; }
+.run-node.status-running, .workflow-run-card.status-running { border-color: rgba(55,123,92,.45); background: rgba(232,247,239,.72); }
+.run-node.status-failed, .run-node.status-awaiting-model-choice, .workflow-run-card.status-awaiting-model-choice { color: #7e3027; border-color: rgba(158,65,49,.35); }
+.run-cancel { margin-top: 12px; }
+
 .composer textarea {
   display: block;
   width: 100%;
@@ -842,7 +876,7 @@ h2 {
   .sidebar { padding: 8px 10px; border-right: 0; border-bottom: 1px solid rgba(64, 54, 44, 0.13); }
   .sidebar-brand { display: none; }
   .workspace { display: block; width: 100%; height: 100%; overflow-y: auto; }
-  .tab-list { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  .tab-list { grid-template-columns: repeat(7, minmax(72px, 1fr)); gap: 5px; overflow-x: auto; }
   .tab-button { justify-content: center; gap: 6px; padding: 8px 6px; font-size: 0.82rem; }
   .tab-icon { width: 24px; height: 24px; }
   .shell { width: 100%; height: 100%; padding: 14px 10px 10px; }
@@ -865,4 +899,6 @@ h2 {
   .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .inline-control { align-items: stretch; }
   .avatar-upload { align-items: flex-start; }
+  .field-pair, .model-picker, .node-binding-controls, .workflow-policy { grid-template-columns: 1fr; }
+  .config-toolbar { align-items: stretch; flex-direction: column; }
 }

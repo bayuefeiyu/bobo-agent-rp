@@ -43,6 +43,8 @@ test("card-local server only transports view state and player input", async () =
   let moduleDisplaySettings = { order: ["character-memory"], hidden: [] };
   let avatarBody = null;
   let avatarMimeType = null;
+  let savedModel = null;
+  let workflowPolicy = { schemaVersion: 1, maxConcurrency: 10, modelFailure: { silentFallback: false, defaultFallbackModelId: null } };
   const bridge = {
     getState: async () => ({ openingId, playerName, messages, busy: false }),
     getSettings: async () => ({
@@ -56,6 +58,22 @@ test("card-local server only transports view state and player input", async () =
         available: Boolean(openingId), view: { schemaVersion: 1, regions: [] }, data: openingId ? { memories: [] } : null,
       }],
     }),
+    listModels: async () => ({ current: { id: "pi:current", name: "Current", virtual: true }, profiles: savedModel ? [savedModel] : [] }),
+    saveModel: async model => { savedModel = { ...model, hasApiKey: Boolean(model.apiKey) }; delete savedModel.apiKey; return savedModel; },
+    discoverModels: async () => ({ models: ["test-model"] }),
+    testModel: async () => ({ ok: true, elapsedMs: 1, reply: "hello" }),
+    deleteModel: async modelId => { savedModel = null; return { deleted: modelId }; },
+    listAgents: async () => ({ agents: [{ effective: { schemaVersion: 1, id: "writer", name: "Writer", defaultModelId: "pi:current" }, base: {}, override: null, overridden: false }] }),
+    saveAgent: async (agent, scope) => ({ effective: agent, scope }),
+    restoreAgent: async agentId => ({ effective: { id: agentId }, overridden: false }),
+    listWorkflows: async () => ({ activeWorkflowId: "standard", workflows: [{ id: "standard", title: "Standard", kind: "foreground", nodes: [] }] }),
+    listWorkflowRuns: async () => ({ runs: [] }),
+    getWorkflowPolicy: async () => workflowPolicy,
+    saveWorkflowPolicy: async value => { workflowPolicy = value; return value; },
+    activateWorkflow: async workflowId => ({ activated: workflowId }),
+    updateWorkflowNodeBinding: async (workflowId, nodeId, binding) => ({ workflowId, nodeId, binding }),
+    retryWorkflowNode: async (runId, nodeId, value) => ({ runId, nodeId, ...value }),
+    cancelWorkflowRun: async runId => ({ id: runId, status: "cancelled" }),
     listCards: async () => [{ id: "test-card", name: "沈月", hasCover: true }],
     getCardCover: async () => ({ body: Buffer.from([1, 2, 3]), mimeType: "image/png" }),
     getUserAvatar: async () => ({ body: avatarBody, mimeType: avatarMimeType }),
@@ -145,6 +163,17 @@ test("card-local server only transports view state and player input", async () =
     const initialModules = await fetch(`${base}/api/modules`).then(response => response.json());
     assert.equal(initialModules.modules[0].id, "character-memory");
     assert.equal(initialModules.modules[0].available, false);
+
+    const modelSaveResponse = await fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
+    assert.equal(modelSaveResponse.status, 200);
+    assert.equal((await fetch(`${base}/api/models`).then(response => response.json())).profiles[0].hasApiKey, true);
+    assert.deepEqual((await fetch(`${base}/api/models/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json())).models, ["test-model"]);
+    assert.equal((await fetch(`${base}/api/models/test`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelId: "test" }) }).then(response => response.json())).reply, "hello");
+    assert.equal((await fetch(`${base}/api/agents`).then(response => response.json())).agents[0].effective.id, "writer");
+    assert.equal((await fetch(`${base}/api/workflows`).then(response => response.json())).activeWorkflowId, "standard");
+    assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
+    const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) }).then(response => response.json());
+    assert.equal(savedPolicy.maxConcurrency, 8);
 
     const cards = await fetch(`${base}/api/cards`).then(response => response.json());
     assert.equal(cards[0].name, "沈月");

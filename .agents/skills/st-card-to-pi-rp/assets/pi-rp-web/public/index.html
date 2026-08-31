@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>Pi RP</title>
-    <link rel="stylesheet" href="/styles.css?v=17" />
+    <link rel="stylesheet" href="/styles.css?v=18" />
   </head>
   <body>
     <div class="app-layout">
@@ -26,6 +26,15 @@
           </button>
           <button id="tab-system" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-system" data-panel="system">
             <span class="tab-icon" aria-hidden="true">设</span><span>系统设置</span>
+          </button>
+          <button id="tab-api" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-api" data-panel="api">
+            <span class="tab-icon" aria-hidden="true">模</span><span>API 与模型</span>
+          </button>
+          <button id="tab-agents" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-agents" data-panel="agents">
+            <span class="tab-icon" aria-hidden="true">A</span><span>Agent 配置</span>
+          </button>
+          <button id="tab-workflows" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-workflows" data-panel="workflows">
+            <span class="tab-icon" aria-hidden="true">流</span><span>工作流</span>
           </button>
         </nav>
       </aside>
@@ -170,6 +179,70 @@
           </div>
         </section>
 
+        <section id="panel-api" class="panel settings-page" role="tabpanel" aria-labelledby="tab-api" hidden>
+          <div class="settings-heading">
+            <p class="step">MODEL PROFILES</p><h2>API 与模型</h2>
+            <p>保存可由工作流节点引用的模型 ID。测试只发送 hello，不加载角色卡、聊天记录、工具或模型首尾提示词。</p>
+          </div>
+          <div class="config-toolbar">
+            <label>已保存模型<select id="model-profile-select" class="setting-select"></select></label>
+            <button id="new-model-profile" type="button" class="secondary-button">新建</button>
+          </div>
+          <form id="model-profile-form" class="settings-card config-form">
+            <div class="setting-copy"><h3>模型连接</h3><p>内置常见预设，也支持任意 OpenAI 兼容地址和手动模型名。</p></div>
+            <div class="setting-control config-fields">
+              <label>产品预设<select id="model-preset" class="setting-select"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option><option value="gemini">Gemini OpenAI 兼容</option><option value="moonshot">Moonshot / Kimi</option><option value="dashscope">阿里云百炼 / 通义</option><option value="siliconflow">SiliconFlow</option><option value="custom">自定义</option></select></label>
+              <div class="field-pair"><label>配置 ID<input id="model-id" class="setting-input" required /></label><label>显示名称<input id="model-name" class="setting-input" required /></label></div>
+              <label>API URL<input id="model-base-url" class="setting-input" type="url" placeholder="https://.../v1" /></label>
+              <label>API Key<input id="model-api-key" class="setting-input" type="password" autocomplete="off" placeholder="留空时保留已保存的 Key" /></label>
+              <label>API 格式<select id="model-api-format" class="setting-select"><option value="openai-responses">OpenAI Responses</option><option value="openai-completions">OpenAI Chat Completions</option><option value="anthropic-messages">Anthropic Messages</option></select></label>
+              <div class="model-picker"><label>模型名<select id="discovered-models" class="setting-select"></select></label><button id="discover-models" type="button" class="secondary-button">加载模型</button></div>
+              <label>手动模型名<input id="model-name-manual" class="setting-input" required /></label>
+              <div class="field-pair"><label>上下文长度<input id="model-context-window" class="setting-input" type="number" min="1" value="128000" /></label><label>最大输出<input id="model-max-output" class="setting-input" type="number" min="1" value="4096" /></label></div>
+              <div class="field-pair"><label>思考强度<select id="model-thinking" class="setting-select"><option value="off">关闭/默认</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label><label>最大并发<input id="model-max-concurrency" class="setting-input" type="number" min="1" max="10" value="10" /></label></div>
+              <label>头部提示词（可选）<textarea id="model-head-prompt" class="setting-textarea" rows="4"></textarea></label>
+              <label>尾部提示词（可选）<textarea id="model-tail-prompt" class="setting-textarea" rows="4"></textarea></label>
+              <div class="config-actions"><button id="delete-model-profile" type="button" class="secondary-danger">删除</button><button id="test-model-profile" type="button" class="secondary-button">测试 API</button><button type="submit">保存模型</button></div>
+              <p id="model-profile-status" class="setting-status"></p>
+            </div>
+          </form>
+        </section>
+
+        <section id="panel-agents" class="panel settings-page" role="tabpanel" aria-labelledby="tab-agents" hidden>
+          <div class="settings-heading"><p class="step">AGENT PROFILES</p><h2>Agent 配置</h2><p>卡片修改默认写入覆盖层；覆盖全局会改变之后所有卡片使用的基础配置。</p></div>
+          <div class="config-toolbar"><label>Agent ID<select id="agent-select" class="setting-select"></select></label><span id="agent-layer-badge" class="status-badge"></span></div>
+          <form id="agent-form" class="settings-card config-form">
+            <div class="setting-copy"><h3>Agent 属性</h3><p>默认模型只用于节点未指定模型时自动填充，节点或工作流模型优先。</p></div>
+            <div class="setting-control config-fields">
+              <label>名称<input id="agent-name" class="setting-input" required /></label>
+              <label>简介<textarea id="agent-description" class="setting-textarea" rows="3"></textarea></label>
+              <label>默认模型<select id="agent-default-model" class="setting-select"></select></label>
+              <label>工具（逗号分隔）<input id="agent-tools" class="setting-input" /></label>
+              <label>上下文权限（逗号分隔）<input id="agent-context-permissions" class="setting-input" /></label>
+              <label>输出形式<select id="agent-output-mode" class="setting-select"><option value="text">文本</option><option value="json">JSON</option></select></label>
+              <label>Agent 提示词<textarea id="agent-prompt" class="setting-textarea code-textarea" rows="12"></textarea></label>
+              <div class="config-actions"><button id="restore-agent" type="button" class="secondary-button">恢复卡片默认</button><button id="save-agent-global" type="button" class="secondary-danger">覆盖全局</button><button type="submit">保存到当前卡</button></div>
+              <p id="agent-status" class="setting-status"></p>
+            </div>
+          </form>
+        </section>
+
+        <section id="panel-workflows" class="panel settings-page" role="tabpanel" aria-labelledby="tab-workflows" hidden>
+          <div class="settings-heading"><p class="step">WORKFLOW RUNTIME</p><h2>工作流</h2><p>文件修改会在刷新时实时读取；启动中的实例固定使用启动时快照。</p></div>
+          <div class="config-toolbar"><label>可用工作流<select id="workflow-select" class="setting-select"></select></label><button id="show-active-workflow" type="button" class="secondary-button">当前前台</button><button id="activate-workflow" type="button">激活 / 运行</button><button id="refresh-workflows" type="button" class="secondary-button">立即刷新</button></div>
+          <form id="workflow-policy-form" class="workflow-policy">
+            <label>全局最大并发<input id="workflow-max-concurrency" class="setting-input" type="number" min="1" max="10" value="10" /></label>
+            <label class="check-label"><input id="workflow-silent-fallback" type="checkbox" /> 允许节点失败后静默使用兜底模型</label>
+            <label>默认兜底模型<select id="workflow-fallback-model" class="setting-select"></select></label>
+            <button type="submit">保存运行策略</button>
+          </form>
+          <section id="workflow-summary" class="workflow-summary"></section>
+          <div id="workflow-node-list" class="workflow-node-list"></div>
+          <div class="settings-heading run-heading"><p class="step">LIVE RUNS</p><h3>正在执行与最近实例</h3></div>
+          <div id="workflow-run-list" class="workflow-run-list"></div>
+          <p id="workflow-status" class="setting-status"></p>
+        </section>
+
         <div id="error-banner" class="error-banner" role="alert" hidden></div>
       </main>
       <aside class="module-rail" aria-label="角色卡功能区">
@@ -189,6 +262,6 @@
         <p id="handoff-description">此页面对应的 Pi 会话已经结束。请使用最新打开的 Web RP 页面。</p>
       </div>
     </section>
-    <script type="module" src="/app.js?v=17"></script>
+    <script type="module" src="/app.js?v=18"></script>
   </body>
 </html>

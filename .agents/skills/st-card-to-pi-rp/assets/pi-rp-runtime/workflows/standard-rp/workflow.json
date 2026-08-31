@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "standard-rp",
+  "title": "标准角色扮演回合",
+  "description": "使用基本上下文生成一条正文，并在后台功能完成后提交本回合。",
+  "kind": "foreground",
+  "revision": "1",
+  "defaults": {
+    "agentId": "narrative-writer",
+    "modelId": "pi:current",
+    "context": { "mode": "fixed" }
+  },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual" },
+  "nodes": [
+    {
+      "id": "narrative",
+      "title": "正文创作",
+      "description": "生成本轮唯一的玩家可见正文。",
+      "type": "narrative",
+      "retry": { "maxAttempts": 3 },
+      "context": { "mode": "fixed" }
+    },
+    {
+      "id": "finalize-turn",
+      "title": "提交回合",
+      "description": "标记本轮已完成；回合编号只在下一条用户消息被接受时推进。",
+      "type": "turn-finalize",
+      "dependsOn": ["narrative"]
+    }
+  ]
+}

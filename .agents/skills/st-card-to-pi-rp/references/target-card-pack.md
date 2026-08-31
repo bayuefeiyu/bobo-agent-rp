@@ -41,6 +41,10 @@ play/cards/<card-id>/
 │   └── skill/SKILL.md          # required only for Agent-enabled message retrieval/catalog
 ├── runtime/
 │   └── context-processors/
+├── agents/
+│   └── <agent-id>/override.json
+├── workflows/
+│   └── <workflow-id>/workflow.json
 ├── openings/
 ├── web/
 │   ├── public/
@@ -62,6 +66,8 @@ Copy the standard Web view into `web/`; it belongs to this card and may later be
 ```
 
 The standalone runtime root is `play/`. It owns `play/settings/common.json` for settings shared by every card, such as player name and story font size. Card-specific controls and values belong only in the card's `settings.json`. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context.
+
+Selected global workflows are copied under the card and become card-owned definitions. `settings.activeWorkflowId` selects the foreground workflow. Card Agent overrides are optional and contain only fields that differ from `play/agents/<agent-id>/agent.json`. Read [workflow-system.md](workflow-system.md) before creating either structure.
 
 ## Manifest
 

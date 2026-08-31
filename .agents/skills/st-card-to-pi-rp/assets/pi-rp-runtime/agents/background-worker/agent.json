@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "background-worker",
+  "name": "后台任务 Agent",
+  "description": "执行不直接生成正文的卡片后台分析与结构化资料任务。",
+  "prompt": "你负责当前工作流节点指定的后台任务。只读取节点授权的上下文与工作目录，并按节点要求返回结果；不得推进剧情回合或修改权威记录。",
+  "tools": ["read", "write"],
+  "contextPermissions": ["workspace:private", "workspace:public-long-term"],
+  "outputMode": "text",
+  "defaultModelId": "pi:current"
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "maxConcurrency": 10,
+  "modelFailure": {
+    "silentFallback": false,
+    "defaultFallbackModelId": null
+  }
+}

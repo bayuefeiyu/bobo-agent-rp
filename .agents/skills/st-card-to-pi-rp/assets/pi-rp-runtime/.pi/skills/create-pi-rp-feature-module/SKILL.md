@@ -8,6 +8,7 @@ description: Analyze, propose, and after confirmation create or upgrade a card-l
 Package the user's function or an existing mature skill into this project's module contract. The user or source skill decides the feature; this skill decides compliant file placement, record shape, retrieval, prompt ownership, display, and validation.
 
 Read [references/module-schema.md](references/module-schema.md) completely before editing a card.
+Read [references/module-workflows.md](references/module-workflows.md) when the module creates, updates, or publishes data through a workflow node.
 When the source function uses EJS or other embedded prompt code, also read [references/context-processors.md](references/context-processors.md).
 
 ## Mandatory proposal and confirmation gate
@@ -21,6 +22,7 @@ Present a concise proposal covering:
 3. `record-log`, `snapshot`, or `hybrid` storage and the important `data` fields;
 4. default/custom code retrieval, Agent disabled/append/override behavior, and catalog enrichment;
 5. module-skill prompt placement, `contextOrder`, `displayOrder`, and any interaction with existing modules.
+6. workflow placement: node type, trigger, dependencies, blocking behavior, instance policy, context mode, and Agent/model references.
 
 End with only the meaningful choices that may need discussion and offer to handle them one by one. Unless the user already gave explicit advance confirmation to start directly, end the turn after the proposal and wait without editing the card. If the user selects one, resolve it, update the affected portion of the proposal, and guide them to the next unresolved item or final confirmation. Do not force discussion of implementation details the user delegates.
 
@@ -43,6 +45,7 @@ All prompts concerning this module belong inside `features/<module-id>/skill/`. 
 7. Choose catalog Agent mode. Deterministic code always supplies the compact fallback catalog. When Agent enrichment is enabled, put exact `rp_catalog_update` triggers, allowed titles/tags/summaries, and information-boundary rules in the module skill.
 8. Choose `contextOrder` for model behavior and `displayOrder` for Web presentation. Browser settings never affect context order. Background modules sort after frontend modules.
 9. If exact code conditions select module-owned prompt fragments before narrative generation, create a card context processor. Keep its executable code under the module runtime, its selected text under the module skill, and every persistent change in the ordinary module update workflow.
+10. If the module needs scheduled or Agent-driven work, add or adapt a card-local workflow node. Keep all detailed module prompts here in the module skill; workflow JSON contains only routing, dependencies, a short task requirement, and Agent/model IDs. Default model references to `pi:current` unless the confirmed design selects another saved ID.
 
 ## Build and verify
 
@@ -51,4 +54,4 @@ Create the version 3 structure with storage version 2, register `module.json` in
 From the `play/` runtime root, run `python ../.agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py cards/<card-id>`. Confirm record-envelope validity, retrieval mode, skill routing, Web display, and suffix-delete cascade behavior.
 For a context processor, also test every branch boundary, declared dependency isolation, known-fragment enforcement, failure policy, and the recorded selection receipt.
 
-Finish by reporting the surface, storage kind, context/display order, code profile, agent mode, data ownership boundary, validation result, and any source behavior that could not be represented.
+Finish by reporting the surface, storage kind, context/display order, code profile, agent mode, workflow/trigger/blocking choices, data ownership boundary, validation result, and any source behavior that could not be represented.

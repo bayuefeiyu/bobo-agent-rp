@@ -17,6 +17,13 @@ const state = {
   featureModuleSignature: "",
   expandedFeatureModules: new Set(),
   moduleDisplayDraft: null,
+  models: [],
+  agents: [],
+  workflows: [],
+  workflowRuns: [],
+  activeWorkflowId: "standard-rp",
+  workflowPolicy: null,
+  workflowRenderSignature: "",
 };
 
 const elements = {
@@ -59,6 +66,52 @@ const elements = {
   handoffTitle: document.querySelector("#handoff-title"),
   handoffDescription: document.querySelector("#handoff-description"),
   moduleList: document.querySelector("#card-module-list"),
+  modelProfileSelect: document.querySelector("#model-profile-select"),
+  modelForm: document.querySelector("#model-profile-form"),
+  modelPreset: document.querySelector("#model-preset"),
+  modelId: document.querySelector("#model-id"),
+  modelName: document.querySelector("#model-name"),
+  modelBaseUrl: document.querySelector("#model-base-url"),
+  modelApiKey: document.querySelector("#model-api-key"),
+  modelApiFormat: document.querySelector("#model-api-format"),
+  discoveredModels: document.querySelector("#discovered-models"),
+  modelNameManual: document.querySelector("#model-name-manual"),
+  modelContextWindow: document.querySelector("#model-context-window"),
+  modelMaxOutput: document.querySelector("#model-max-output"),
+  modelThinking: document.querySelector("#model-thinking"),
+  modelMaxConcurrency: document.querySelector("#model-max-concurrency"),
+  modelHeadPrompt: document.querySelector("#model-head-prompt"),
+  modelTailPrompt: document.querySelector("#model-tail-prompt"),
+  modelStatus: document.querySelector("#model-profile-status"),
+  newModel: document.querySelector("#new-model-profile"),
+  deleteModel: document.querySelector("#delete-model-profile"),
+  testModel: document.querySelector("#test-model-profile"),
+  discoverModels: document.querySelector("#discover-models"),
+  agentSelect: document.querySelector("#agent-select"),
+  agentForm: document.querySelector("#agent-form"),
+  agentName: document.querySelector("#agent-name"),
+  agentDescription: document.querySelector("#agent-description"),
+  agentDefaultModel: document.querySelector("#agent-default-model"),
+  agentTools: document.querySelector("#agent-tools"),
+  agentContextPermissions: document.querySelector("#agent-context-permissions"),
+  agentOutputMode: document.querySelector("#agent-output-mode"),
+  agentPrompt: document.querySelector("#agent-prompt"),
+  agentLayerBadge: document.querySelector("#agent-layer-badge"),
+  agentStatus: document.querySelector("#agent-status"),
+  restoreAgent: document.querySelector("#restore-agent"),
+  saveAgentGlobal: document.querySelector("#save-agent-global"),
+  workflowSelect: document.querySelector("#workflow-select"),
+  activateWorkflow: document.querySelector("#activate-workflow"),
+  refreshWorkflows: document.querySelector("#refresh-workflows"),
+  showActiveWorkflow: document.querySelector("#show-active-workflow"),
+  workflowSummary: document.querySelector("#workflow-summary"),
+  workflowNodeList: document.querySelector("#workflow-node-list"),
+  workflowRunList: document.querySelector("#workflow-run-list"),
+  workflowStatus: document.querySelector("#workflow-status"),
+  workflowPolicyForm: document.querySelector("#workflow-policy-form"),
+  workflowMaxConcurrency: document.querySelector("#workflow-max-concurrency"),
+  workflowSilentFallback: document.querySelector("#workflow-silent-fallback"),
+  workflowFallbackModel: document.querySelector("#workflow-fallback-model"),
 };
 
 function showHandoff(title, description) {
@@ -1052,6 +1105,297 @@ function resetModuleDisplaySettings() {
   renderModuleSettings();
 }
 
+const modelPresets = {
+  openai: { baseUrl: "https://api.openai.com/v1", api: "openai-responses" },
+  anthropic: { baseUrl: "https://api.anthropic.com/v1", api: "anthropic-messages" },
+  deepseek: { baseUrl: "https://api.deepseek.com/v1", api: "openai-completions" },
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1", api: "openai-completions" },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", api: "openai-completions" },
+  moonshot: { baseUrl: "https://api.moonshot.cn/v1", api: "openai-completions" },
+  dashscope: { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", api: "openai-completions" },
+  siliconflow: { baseUrl: "https://api.siliconflow.cn/v1", api: "openai-completions" },
+  custom: { baseUrl: "", api: "openai-completions" },
+};
+
+function modelOptions(selected = "pi:current") {
+  const fragment = document.createDocumentFragment();
+  for (const profile of state.models) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.name || profile.id;
+    fragment.append(option);
+  }
+  const select = document.createElement("select");
+  select.append(fragment);
+  select.value = selected;
+  return select;
+}
+
+function renderModelSelectors() {
+  const current = elements.modelProfileSelect.value;
+  elements.modelProfileSelect.replaceChildren(...state.models.filter(item => !item.virtual).map(profile => {
+    const option = document.createElement("option"); option.value = profile.id; option.textContent = `${profile.name} · ${profile.id}`; return option;
+  }));
+  if (current && state.models.some(item => item.id === current)) elements.modelProfileSelect.value = current;
+  elements.agentDefaultModel.replaceChildren(...state.models.map(profile => {
+    const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; return option;
+  }));
+  const fallback = state.workflowPolicy?.modelFailure?.defaultFallbackModelId || "";
+  elements.workflowFallbackModel.replaceChildren(new Option("不设置", ""), ...state.models.map(profile => new Option(profile.name, profile.id)));
+  elements.workflowFallbackModel.value = fallback;
+}
+
+function clearModelForm() {
+  elements.modelForm.reset();
+  elements.modelPreset.value = "custom";
+  elements.modelContextWindow.value = "128000";
+  elements.modelMaxOutput.value = "4096";
+  elements.modelMaxConcurrency.value = "10";
+  elements.modelThinking.value = "off";
+  elements.modelId.readOnly = false;
+  elements.modelApiKey.placeholder = "输入 API Key";
+  elements.modelStatus.textContent = "正在创建新的模型配置。";
+}
+
+function loadModelForm() {
+  const profile = state.models.find(item => item.id === elements.modelProfileSelect.value && !item.virtual);
+  if (!profile) return clearModelForm();
+  elements.modelId.value = profile.id;
+  elements.modelId.readOnly = true;
+  elements.modelName.value = profile.name;
+  elements.modelPreset.value = modelPresets[profile.provider] ? profile.provider : "custom";
+  elements.modelBaseUrl.value = profile.baseUrl || "";
+  elements.modelApiKey.value = "";
+  elements.modelApiKey.placeholder = profile.hasApiKey ? "已保存；留空保持不变" : "输入 API Key";
+  elements.modelApiFormat.value = profile.api || "openai-completions";
+  elements.modelNameManual.value = profile.model;
+  elements.modelContextWindow.value = profile.contextWindow;
+  elements.modelMaxOutput.value = profile.maxOutputTokens;
+  elements.modelThinking.value = profile.thinking || "off";
+  elements.modelMaxConcurrency.value = profile.maxConcurrency || 10;
+  elements.modelHeadPrompt.value = profile.headPrompt || "";
+  elements.modelTailPrompt.value = profile.tailPrompt || "";
+  elements.modelStatus.textContent = profile.hasApiKey ? "API Key 已保存在本地设置文件中。" : "此配置没有保存 API Key。";
+}
+
+function modelFormValue() {
+  return {
+    schemaVersion: 1,
+    id: elements.modelId.value.trim(),
+    name: elements.modelName.value.trim(),
+    provider: elements.modelPreset.value === "custom" ? "openai-compatible" : elements.modelPreset.value,
+    baseUrl: elements.modelBaseUrl.value.trim(),
+    apiKey: elements.modelApiKey.value.trim(),
+    api: elements.modelApiFormat.value,
+    model: elements.modelNameManual.value.trim() || elements.discoveredModels.value,
+    contextWindow: Number(elements.modelContextWindow.value),
+    maxOutputTokens: Number(elements.modelMaxOutput.value),
+    thinking: elements.modelThinking.value,
+    maxConcurrency: Number(elements.modelMaxConcurrency.value),
+    headPrompt: elements.modelHeadPrompt.value.trim(),
+    tailPrompt: elements.modelTailPrompt.value.trim(),
+  };
+}
+
+async function refreshModels(selectId) {
+  const payload = await request("/api/models");
+  state.models = [payload.current, ...(payload.profiles || [])];
+  renderModelSelectors();
+  if (selectId) elements.modelProfileSelect.value = selectId;
+  loadModelForm();
+  renderAgents();
+  renderWorkflow();
+}
+
+async function saveModelProfile(event) {
+  event.preventDefault();
+  elements.modelStatus.textContent = "保存并注册模型中……";
+  try {
+    const value = modelFormValue();
+    await request("/api/models", { method: "POST", body: JSON.stringify(value) });
+    await refreshModels(value.id);
+    elements.modelStatus.textContent = "模型配置已保存并立即注册。";
+  } catch (error) { elements.modelStatus.textContent = "保存失败"; showError(error); }
+}
+
+async function discoverModelNames() {
+  elements.discoverModels.disabled = true;
+  elements.modelStatus.textContent = "读取模型列表中……";
+  try {
+    const result = await request("/api/models/discover", { method: "POST", body: JSON.stringify({ baseUrl: elements.modelBaseUrl.value, apiKey: elements.modelApiKey.value, api: elements.modelApiFormat.value }) });
+    elements.discoveredModels.replaceChildren(...result.models.map(id => { const option = document.createElement("option"); option.value = id; option.textContent = id; return option; }));
+    if (result.models[0]) elements.modelNameManual.value = result.models[0];
+    elements.modelStatus.textContent = `已读取 ${result.models.length} 个模型。`;
+  } catch (error) { elements.modelStatus.textContent = "加载失败，可继续手动输入模型名。"; showError(error); }
+  finally { elements.discoverModels.disabled = false; }
+}
+
+async function testModelProfile() {
+  const modelId = elements.modelId.value.trim();
+  if (!state.models.some(item => item.id === modelId)) return showError(new Error("请先保存模型配置，再执行测试。"));
+  elements.modelStatus.textContent = "发送极简 hello 测试中……";
+  try {
+    const result = await request("/api/models/test", { method: "POST", body: JSON.stringify({ modelId }) });
+    elements.modelStatus.textContent = `成功 · ${result.elapsedMs} ms · ${result.reply || "（无文字）"}`;
+  } catch (error) { elements.modelStatus.textContent = "API 测试失败"; showError(error); }
+}
+
+function currentAgentLayer() { return state.agents.find(item => item.effective.id === elements.agentSelect.value); }
+function renderAgents() {
+  const selected = elements.agentSelect.value;
+  elements.agentSelect.replaceChildren(...state.agents.map(item => { const option = document.createElement("option"); option.value = item.effective.id; option.textContent = `${item.effective.name} · ${item.effective.id}`; return option; }));
+  if (state.agents.some(item => item.effective.id === selected)) elements.agentSelect.value = selected;
+  loadAgentForm();
+}
+function loadAgentForm() {
+  const item = currentAgentLayer(); if (!item) return;
+  const agent = item.effective;
+  elements.agentName.value = agent.name;
+  elements.agentDescription.value = agent.description || "";
+  elements.agentDefaultModel.value = agent.defaultModelId || "pi:current";
+  elements.agentTools.value = (agent.tools || []).join(", ");
+  elements.agentContextPermissions.value = (agent.contextPermissions || []).join(", ");
+  elements.agentOutputMode.value = agent.outputMode || "text";
+  elements.agentPrompt.value = agent.prompt || "";
+  elements.agentLayerBadge.textContent = item.overridden ? "当前卡已有覆盖" : "使用全局默认";
+  elements.restoreAgent.disabled = !item.overridden;
+}
+function agentFormValue() {
+  return { schemaVersion: 1, id: elements.agentSelect.value, name: elements.agentName.value.trim(), description: elements.agentDescription.value.trim(), defaultModelId: elements.agentDefaultModel.value, tools: elements.agentTools.value.split(",").map(x => x.trim()).filter(Boolean), contextPermissions: elements.agentContextPermissions.value.split(",").map(x => x.trim()).filter(Boolean), outputMode: elements.agentOutputMode.value, prompt: elements.agentPrompt.value.trim() };
+}
+async function saveAgent(scope) {
+  elements.agentStatus.textContent = scope === "global" ? "覆盖全局配置中……" : "保存当前卡覆盖中……";
+  try {
+    const id = elements.agentSelect.value;
+    await request(`/api/agents/${encodeURIComponent(id)}?scope=${scope}`, { method: "PUT", body: JSON.stringify(agentFormValue()) });
+    state.agents = (await request("/api/agents")).agents;
+    renderAgents();
+    elements.agentStatus.textContent = scope === "global" ? "已覆盖全局基础配置。" : "已保存当前卡个性化覆盖。";
+  } catch (error) { elements.agentStatus.textContent = "保存失败"; showError(error); }
+}
+
+function workflowKindLabel(kind) { return ({ foreground: "前台", "turn-background": "当前回合后台", "global-background": "全局后台" })[kind] || kind; }
+function statusLabel(status) { return ({ pending: "等待", running: "执行中", completed: "完成", skipped: "跳过", failed: "失败", cancelled: "已取消", "awaiting-retry": "等待重试", "awaiting-model-choice": "等待选择模型" })[status] || status; }
+function selectedWorkflow() { return state.workflows.find(item => item.id === elements.workflowSelect.value); }
+function workflowPanelHasFocus() {
+  const active = document.activeElement;
+  return document.querySelector("#panel-workflows")?.contains(active) === true && active?.matches("select, input, textarea");
+}
+function agentLabel(agentId) {
+  if (!agentId) return "未设置";
+  const agent = state.agents.find(item => item.effective.id === agentId)?.effective;
+  return agent ? `${agent.name} · ${agent.id}` : agentId;
+}
+function modelLabel(modelId) {
+  if (!modelId) return "未设置";
+  const model = state.models.find(item => item.id === modelId);
+  return model ? `${model.name || model.id} · ${model.id}` : modelId;
+}
+function inheritedModel(workflow, nodeAgentId = "") {
+  if (workflow.defaults?.modelId) return { source: "工作流默认模型", id: workflow.defaults.modelId };
+  const agentId = nodeAgentId || workflow.defaults?.agentId || "";
+  const agent = state.agents.find(item => item.effective.id === agentId)?.effective;
+  return { source: "Agent 默认模型", id: agent?.defaultModelId || "pi:current" };
+}
+function renderWorkflow() {
+  const workflow = selectedWorkflow();
+  if (!workflow) return;
+  const summaryTitle = document.createElement("strong"); summaryTitle.textContent = workflow.title;
+  const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${workflow.source === "card" ? "当前卡副本" : "全局模板"}${workflow.id === state.activeWorkflowId ? " · 当前前台工作流" : ""}`;
+  const summaryDescription = document.createElement("p"); summaryDescription.textContent = workflow.description || "无简介";
+  elements.workflowSummary.replaceChildren(summaryTitle, summaryMeta, summaryDescription);
+  const fragment = document.createDocumentFragment();
+  for (const node of workflow.nodes || []) {
+    const card = document.createElement("article"); card.className = "workflow-node-card";
+    const title = document.createElement("div"); title.className = "workflow-node-title";
+    const nodeTitle = document.createElement("strong"); nodeTitle.textContent = node.title;
+    const nodeMeta = document.createElement("span"); nodeMeta.textContent = `${node.type}${node.cooldownTurns ? ` · CD ${node.cooldownTurns} 回合` : ""}`;
+    title.append(nodeTitle, nodeMeta);
+    const description = document.createElement("p"); description.textContent = node.description || "无节点说明";
+    const controls = document.createElement("div"); controls.className = "node-binding-controls";
+    const agent = document.createElement("select"); agent.className = "setting-select";
+    agent.append(new Option(`继承工作流默认 Agent（${agentLabel(workflow.defaults?.agentId)}）`, ""), ...state.agents.map(item => new Option(`${item.effective.name} · ${item.effective.id}`, item.effective.id))); agent.value = node.agentId || "";
+    const model = modelOptions(node.modelId || ""); model.className = "setting-select";
+    const inheritedModelOption = new Option("", "");
+    const updateInheritedModelLabel = () => {
+      const inherited = inheritedModel(workflow, agent.value);
+      inheritedModelOption.textContent = `继承${inherited.source}（${modelLabel(inherited.id)}）`;
+    };
+    updateInheritedModelLabel();
+    model.prepend(inheritedModelOption); model.value = node.modelId || "";
+    agent.addEventListener("change", () => {
+      const selectedAgent = state.agents.find(item => item.effective.id === agent.value)?.effective;
+      updateInheritedModelLabel();
+      if (!workflow.defaults?.modelId && selectedAgent?.defaultModelId) model.value = selectedAgent.defaultModelId;
+    });
+    const save = document.createElement("button"); save.type = "button"; save.textContent = "保存节点关联";
+    save.addEventListener("click", async () => { try { await request(`/api/workflows/${workflow.id}/nodes/${node.id}/binding`, { method: "PUT", body: JSON.stringify({ agentId: agent.value, modelId: model.value }) }); await refreshWorkflowData(workflow.id); } catch (error) { showError(error); } });
+    controls.append(agent, model, save); card.append(title, description, controls); fragment.append(card);
+  }
+  elements.workflowNodeList.replaceChildren(fragment);
+  renderWorkflowRuns();
+}
+function renderWorkflowRuns() {
+  const fragment = document.createDocumentFragment();
+  for (const run of state.workflowRuns.slice().reverse().slice(0, 20)) {
+    const card = document.createElement("article"); card.className = `workflow-run-card status-${run.status}`;
+    const head = document.createElement("div"); head.className = "workflow-run-head";
+    const runTitle = document.createElement("strong"); runTitle.textContent = run.workflowId;
+    const runMeta = document.createElement("span"); runMeta.textContent = `${statusLabel(run.status)} · 回合 ${run.turn ?? "—"}`;
+    head.append(runTitle, runMeta); card.append(head);
+    for (const node of Object.values(run.nodes || {})) {
+      const row = document.createElement("div"); row.className = `run-node status-${node.status}`;
+      const runNodeId = document.createElement("span"); runNodeId.textContent = node.id;
+      const runNodeStatus = document.createElement("strong"); runNodeStatus.textContent = statusLabel(node.status);
+      row.append(runNodeId, runNodeStatus);
+      if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status)) {
+        const model = modelOptions(node.attempts?.at(-1)?.modelId || "pi:current"); model.className = "setting-select";
+        const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
+        const retryWith = async saveAsCardDefault => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId: model.value, saveAsCardDefault }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
+        retry.addEventListener("click", () => retryWith(false));
+        const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true));
+        row.append(model, retry, saveAndRetry);
+      }
+      card.append(row);
+    }
+    if (run.live && !["completed", "failed", "cancelled"].includes(run.status)) { const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary-danger run-cancel"; cancel.textContent = "取消实例"; cancel.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/cancel`, { method: "POST" }); await refreshWorkflowData(); }); card.append(cancel); }
+    fragment.append(card);
+  }
+  if (!fragment.childNodes.length) { const empty = document.createElement("p"); empty.className = "module-settings-empty"; empty.textContent = "当前 Pi 会话还没有工作流实例。"; fragment.append(empty); }
+  elements.workflowRunList.replaceChildren(fragment);
+}
+async function refreshWorkflowData(selectId, forceRender = false) {
+  const [workflowData, runData] = await Promise.all([request("/api/workflows"), request("/api/workflow-runs")]);
+  state.workflows = workflowData.workflows || []; state.activeWorkflowId = workflowData.activeWorkflowId; state.workflowRuns = runData.runs || [];
+  if (!forceRender && workflowPanelHasFocus()) return;
+  const signature = JSON.stringify({ workflows: state.workflows, activeWorkflowId: state.activeWorkflowId, runs: state.workflowRuns });
+  if (!forceRender && signature === state.workflowRenderSignature) return;
+  state.workflowRenderSignature = signature;
+  const selected = selectId || elements.workflowSelect.value || state.activeWorkflowId;
+  elements.workflowSelect.replaceChildren(...state.workflows.map(item => new Option(`${item.title} · ${workflowKindLabel(item.kind)}`, item.id)));
+  if (state.workflows.some(item => item.id === selected)) elements.workflowSelect.value = selected;
+  renderWorkflow();
+}
+async function activateSelectedWorkflow() {
+  const workflow = selectedWorkflow(); if (!workflow) return;
+  elements.workflowStatus.textContent = workflow.kind === "foreground" ? "正在复制到当前卡并激活……" : "正在启动后台实例……";
+  try { const result = await request(`/api/workflows/${workflow.id}/activate`, { method: "POST", body: "{}" }); await refreshWorkflowData(workflow.id); elements.workflowStatus.textContent = result.startsOnNextInput ? "已激活；下一条用户消息使用此工作流。" : "后台工作流已启动。"; }
+  catch (error) { elements.workflowStatus.textContent = "操作失败"; showError(error); }
+}
+async function loadWorkflowPolicy() {
+  state.workflowPolicy = await request("/api/workflow-policy");
+  elements.workflowMaxConcurrency.value = state.workflowPolicy.maxConcurrency || 10;
+  elements.workflowSilentFallback.checked = state.workflowPolicy.modelFailure?.silentFallback === true;
+  renderModelSelectors();
+}
+async function saveWorkflowPolicy(event) {
+  event.preventDefault();
+  try {
+    state.workflowPolicy = await request("/api/workflow-policy", { method: "PUT", body: JSON.stringify({ schemaVersion: 1, maxConcurrency: Number(elements.workflowMaxConcurrency.value), modelFailure: { silentFallback: elements.workflowSilentFallback.checked, defaultFallbackModelId: elements.workflowFallbackModel.value || null } }) });
+    elements.workflowStatus.textContent = state.workflowPolicy.modelFailure.silentFallback ? "运行策略已保存；静默回退时仍会在实例记录中显示实际模型。" : "运行策略已保存；节点失败后等待用户选择模型。";
+  } catch (error) { showError(error); }
+}
+
 for (const button of elements.tabButtons) {
   button.addEventListener("click", () => showPanel(button.dataset.panel));
   button.addEventListener("keydown", event => {
@@ -1110,6 +1454,30 @@ elements.fontSize.addEventListener("change", saveSystemSettings);
 elements.moduleSettingsForm.addEventListener("submit", saveModuleDisplaySettings);
 elements.resetModuleSettings.addEventListener("click", resetModuleDisplaySettings);
 elements.chooseChatButton.addEventListener("click", chooseChat);
+elements.modelPreset.addEventListener("change", () => {
+  const preset = modelPresets[elements.modelPreset.value] || modelPresets.custom;
+  elements.modelBaseUrl.value = preset.baseUrl;
+  elements.modelApiFormat.value = preset.api;
+});
+elements.modelProfileSelect.addEventListener("change", loadModelForm);
+elements.newModel.addEventListener("click", clearModelForm);
+elements.modelForm.addEventListener("submit", saveModelProfile);
+elements.discoverModels.addEventListener("click", discoverModelNames);
+elements.discoveredModels.addEventListener("change", () => { if (elements.discoveredModels.value) elements.modelNameManual.value = elements.discoveredModels.value; });
+elements.testModel.addEventListener("click", testModelProfile);
+elements.deleteModel.addEventListener("click", async () => {
+  const id = elements.modelProfileSelect.value; if (!id || !window.confirm(`删除模型配置“${id}”吗？`)) return;
+  try { await request(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" }); await refreshModels(); } catch (error) { showError(error); }
+});
+elements.agentSelect.addEventListener("change", loadAgentForm);
+elements.agentForm.addEventListener("submit", event => { event.preventDefault(); saveAgent("card"); });
+elements.saveAgentGlobal.addEventListener("click", () => { if (window.confirm("覆盖全局 Agent 基础配置会影响其他卡片，确定继续吗？")) saveAgent("global"); });
+elements.restoreAgent.addEventListener("click", async () => { try { const id = elements.agentSelect.value; await request(`/api/agents/${encodeURIComponent(id)}/restore`, { method: "POST" }); state.agents = (await request("/api/agents")).agents; renderAgents(); elements.agentStatus.textContent = "已移除当前卡覆盖，恢复全局默认。"; } catch (error) { showError(error); } });
+elements.workflowSelect.addEventListener("change", renderWorkflow);
+elements.activateWorkflow.addEventListener("click", activateSelectedWorkflow);
+elements.refreshWorkflows.addEventListener("click", () => refreshWorkflowData(undefined, true).catch(showError));
+elements.showActiveWorkflow.addEventListener("click", () => { elements.workflowSelect.value = state.activeWorkflowId; renderWorkflow(); });
+elements.workflowPolicyForm.addEventListener("submit", saveWorkflowPolicy);
 
 async function refreshState() {
   if (state.switching) return;
@@ -1117,6 +1485,7 @@ async function refreshState() {
     const [snapshot, modules] = await Promise.all([request("/api/state"), request("/api/modules")]);
     applySnapshot(snapshot);
     renderFeatureModules(modules);
+    if (state.activePanel === "workflows" && !workflowPanelHasFocus()) await refreshWorkflowData();
   } catch (error) {
     if (!elements.handoffOverlay.hidden) return;
     elements.connectionStatus.textContent = "与 Pi 会话连接中断";
@@ -1138,6 +1507,14 @@ async function initialize() {
   renderSavedProfiles();
   renderPlayerAvatarPreview();
   renderFeatureModules(await request("/api/modules"));
+  const modelPayload = await request("/api/models");
+  state.models = [modelPayload.current, ...(modelPayload.profiles || [])];
+  renderModelSelectors();
+  await loadWorkflowPolicy();
+  loadModelForm();
+  state.agents = (await request("/api/agents")).agents || [];
+  renderAgents();
+  await refreshWorkflowData(undefined, true);
   if (snapshot.openingId) renderMessages(snapshot.messages);
   state.cards = await request("/api/cards");
   renderCards();

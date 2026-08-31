@@ -1,0 +1,93 @@
+import { createHash } from "node:crypto";
+
+const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function object(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
+  return value;
+}
+
+function id(value, label) {
+  if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+export function normalizeModelProfile(value) {
+  const input = object(value, "model profile");
+  if (input.schemaVersion !== 1) throw new Error("model profile schemaVersion must be 1.");
+  const profileId = id(input.id, "model profile id");
+  const provider = id(input.provider, "model provider");
+  if (typeof input.model !== "string" || !input.model.trim()) throw new Error("model profile model is required.");
+  const thinking = typeof input.thinking === "string" ? input.thinking : "off";
+  if (!THINKING_LEVELS.has(thinking)) throw new Error(`Unsupported thinking level: ${thinking}`);
+  const positive = (value, fallback, maximum) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, maximum) : fallback;
+  return {
+    schemaVersion: 1,
+    id: profileId,
+    name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : profileId,
+    provider,
+    model: input.model.trim(),
+    api: typeof input.api === "string" && input.api.trim() ? input.api.trim() : null,
+    contextWindow: positive(input.contextWindow, 128000, 10_000_000),
+    maxOutputTokens: positive(input.maxOutputTokens, 4096, 1_000_000),
+    thinking,
+    maxConcurrency: positive(input.maxConcurrency, 10, 10),
+    headPrompt: typeof input.headPrompt === "string" && input.headPrompt.trim() ? input.headPrompt.trim() : null,
+    tailPrompt: typeof input.tailPrompt === "string" && input.tailPrompt.trim() ? input.tailPrompt.trim() : null,
+    parameters: input.parameters && typeof input.parameters === "object" && !Array.isArray(input.parameters) ? input.parameters : {},
+  };
+}
+
+export function normalizeAgentProfile(value) {
+  const input = object(value, "agent profile");
+  if (input.schemaVersion !== 1) throw new Error("agent profile schemaVersion must be 1.");
+  const agentId = id(input.id, "agent profile id");
+  const tools = Array.isArray(input.tools) ? [...new Set(input.tools.filter(tool => typeof tool === "string" && tool.trim()).map(tool => tool.trim()))] : [];
+  const permissions = Array.isArray(input.contextPermissions)
+    ? [...new Set(input.contextPermissions.filter(item => typeof item === "string" && item.trim()).map(item => item.trim()))]
+    : [];
+  return {
+    schemaVersion: 1,
+    id: agentId,
+    name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : agentId,
+    description: typeof input.description === "string" ? input.description.trim() : "",
+    prompt: typeof input.prompt === "string" && input.prompt.trim() ? input.prompt.trim() : null,
+    tools,
+    contextPermissions: permissions,
+    outputMode: input.outputMode === "json" ? "json" : "text",
+    defaultModelId: typeof input.defaultModelId === "string" && input.defaultModelId.trim() ? input.defaultModelId.trim() : "pi:current",
+  };
+}
+
+export function resolveNodeProfiles({ node, workflow, agent }) {
+  const agentId = node.agentId || workflow.defaults?.agentId || agent?.id || null;
+  const modelId = node.modelId || workflow.defaults?.modelId || agent?.defaultModelId || "pi:current";
+  return { agentId, modelId };
+}
+
+export function composeNodePrompt({ piSystemPrompt, modelHead, agentPrompt, fixedContext, dynamicContext, upstreamArtifacts, currentInput, nodePrompt, modelTail }) {
+  const systemPrompt = [piSystemPrompt, modelHead, agentPrompt, fixedContext].filter(value => typeof value === "string" && value.trim()).join("\n\n");
+  const contextMessages = [dynamicContext, upstreamArtifacts, currentInput, nodePrompt, modelTail]
+    .filter(value => typeof value === "string" && value.trim())
+    .map(content => content.trim());
+  return { systemPrompt, contextMessages };
+}
+
+export function promptHash(value) {
+  return value && value.trim() ? `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}` : null;
+}
+
+export function normalizeRuntimePolicy(value = {}) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    schemaVersion: 1,
+    maxConcurrency: Number.isSafeInteger(input.maxConcurrency) && input.maxConcurrency > 0 ? Math.min(input.maxConcurrency, 10) : 10,
+    modelFailure: {
+      silentFallback: input.modelFailure?.silentFallback === true,
+      defaultFallbackModelId: typeof input.modelFailure?.defaultFallbackModelId === "string" && input.modelFailure.defaultFallbackModelId.trim()
+        ? input.modelFailure.defaultFallbackModelId.trim()
+        : null,
+    },
+  };
+}
