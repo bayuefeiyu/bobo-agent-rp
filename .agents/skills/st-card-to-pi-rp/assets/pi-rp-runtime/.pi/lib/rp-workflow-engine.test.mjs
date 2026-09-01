@@ -17,12 +17,17 @@ const flow = {
 
 test("runs parallel roots before narrative and finalization", async () => {
   const order = [];
+  const records = [];
   const engine = new RpWorkflowEngine({
     executor: async ({ node }) => {
       order.push(`start:${node.id}`);
       await new Promise(resolve => setTimeout(resolve, node.id === "a" ? 8 : 2));
       order.push(`end:${node.id}`);
-      return { output: node.id };
+      return { output: node.id, processRecord: { received: { content: "private-input" }, sent: { content: "private-output" } } };
+    },
+    onNodeComplete: async ({ node, result }) => {
+      records.push([node.id, result.output]);
+      return { available: true, path: `process-records/run/${node.id}.md` };
     },
   });
   const started = await engine.start(flow, { id: "run" });
@@ -30,6 +35,9 @@ test("runs parallel roots before narrative and finalization", async () => {
   assert.equal(completed.status, "completed");
   assert.deepEqual(new Set(order.slice(0, 2)), new Set(["start:a", "start:b"]));
   assert.ok(order.indexOf("start:story") > order.indexOf("end:a"));
+  assert.equal(completed.nodes.story.processRecord.available, true);
+  assert.deepEqual(new Set(records.map(([nodeId]) => nodeId)), new Set(["a", "b", "story", "done"]));
+  assert.doesNotMatch(JSON.stringify(completed), /private-(?:input|output)/);
 });
 
 test("stops for an explicit model choice after exhausted attempts", async () => {

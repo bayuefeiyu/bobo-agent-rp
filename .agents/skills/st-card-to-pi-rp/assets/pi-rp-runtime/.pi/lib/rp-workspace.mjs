@@ -18,6 +18,7 @@ export function workflowWorkspacePaths(sessionDirectory, workflowId, runId, kind
     privateRun: safeResolve(workspace, "private", privateKind, workflowId, runId),
     workflowRuns: safeResolve(sessionDirectory, "workflow", "runs.jsonl"),
     workflowArtifacts: safeResolve(sessionDirectory, "workflow", "artifacts"),
+    workflowProcessRecords: safeResolve(sessionDirectory, "workflow", "process-records"),
   };
 }
 
@@ -28,8 +29,64 @@ export async function ensureWorkflowWorkspace(paths) {
     mkdir(paths.privateRun, { recursive: true }),
     mkdir(resolve(paths.workflowRuns, ".."), { recursive: true }),
     mkdir(paths.workflowArtifacts, { recursive: true }),
+    mkdir(paths.workflowProcessRecords, { recursive: true }),
   ]);
   return paths;
+}
+
+function markdownFence(content) {
+  const longest = Math.max(0, ...String(content).matchAll(/`+/g).map(match => match[0].length));
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+function processRecordSection(title, exchange) {
+  if (!exchange?.content) return `## ${title}\n\n（无内容）`;
+  const content = String(exchange.content);
+  const fence = markdownFence(content);
+  return `## ${title}\n\n角色：\`${exchange.role || "unknown"}\`\n\n${fence}text\n${content}\n${fence}`;
+}
+
+export async function writeWorkflowProcessRecord(processRecordsRoot, record) {
+  const runId = String(record.runId || "");
+  const nodeId = String(record.nodeId || "");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(runId) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(nodeId)) {
+    throw new Error("Workflow process record IDs must be filesystem-safe.");
+  }
+  const directory = safeResolve(processRecordsRoot, runId);
+  const path = safeResolve(directory, `${nodeId}.md`);
+  const exchange = record.exchange || null;
+  const body = [
+    "# 工作流节点过程记录",
+    "",
+    `- 工作流：\`${record.workflowId}\``,
+    `- 实例：\`${runId}\``,
+    `- 节点：\`${nodeId}\``,
+    `- 节点类型：\`${record.nodeType || "unknown"}\``,
+    `- Agent：\`${record.agentId || "未调用"}\``,
+    `- 模型：\`${record.modelId || "未调用"}\``,
+    `- 完成时间：${record.completedAt || new Date().toISOString()}`,
+    "",
+    exchange
+      ? processRecordSection("Agent 最后接收的内容", exchange.received)
+      : "## Agent 最后接收的内容\n\n此节点未调用 Agent，没有 Agent 输入。",
+    "",
+    exchange
+      ? processRecordSection("Agent 最后发送的内容", exchange.sent)
+      : "## Agent 最后发送的内容\n\n此节点未调用 Agent，没有 Agent 输出。",
+    "",
+    "> 此文件仅用于用户查看与调试，不会加入 Agent 上下文。",
+    "",
+  ].join("\n");
+  await mkdir(directory, { recursive: true });
+  await writeFile(path, body, "utf8");
+  return path;
+}
+
+export function workflowProcessRecordPath(processRecordsRoot, runId, nodeId) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(runId) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(nodeId)) {
+    throw new Error("Workflow process record IDs must be filesystem-safe.");
+  }
+  return safeResolve(processRecordsRoot, runId, `${nodeId}.md`);
 }
 
 export async function clearPublicTurnWorkspace(sessionDirectory) {
@@ -92,6 +149,8 @@ export async function pruneWorkflowState(sessionDirectory, fromTurn) {
 
   const artifacts = safeResolve(workflowDirectory, "artifacts");
   for (const runId of removedRunIds) await rm(safeResolve(artifacts, runId), { recursive: true, force: true });
+  const processRecords = safeResolve(workflowDirectory, "process-records");
+  for (const runId of removedRunIds) await rm(safeResolve(processRecords, runId), { recursive: true, force: true });
   const privateRoot = safeResolve(sessionDirectory, "workspace", "private");
   for (const kind of await readdir(privateRoot, { withFileTypes: true }).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error))) {
     if (!kind.isDirectory()) continue;

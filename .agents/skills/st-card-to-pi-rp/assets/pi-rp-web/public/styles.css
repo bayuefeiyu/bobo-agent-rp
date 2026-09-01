@@ -146,7 +146,7 @@ button { cursor: pointer; }
   box-shadow: 0 9px 28px rgba(64, 50, 35, 0.045);
 }
 
-.module-heading { margin: 0; }
+.module-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; margin: 0; }
 .module-toggle {
   display: flex;
   align-items: center;
@@ -162,6 +162,19 @@ button { cursor: pointer; }
 }
 .module-toggle:hover, .module-toggle:focus-visible { outline: none; background: rgba(143, 87, 66, 0.06); }
 .module-toggle-state { color: #8f5742; font-size: 0.72rem; font-weight: 700; }
+.module-file-actions { display: flex; align-items: center; gap: 5px; padding: 8px 10px 8px 0; }
+.module-file-button {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(143, 87, 66, 0.2);
+  border-radius: 8px;
+  color: #79513f;
+  background: rgba(255, 255, 255, 0.56);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.module-file-button:hover, .module-file-button:focus-visible { outline: none; border-color: rgba(143, 87, 66, 0.42); background: rgba(143, 87, 66, 0.08); }
+.module-file-button:disabled { cursor: not-allowed; opacity: 0.42; }
 .module-content { padding: 0 17px 17px; }
 .module-description, .module-empty, .module-text { margin: 0; color: #6f655c; font-size: 0.84rem; line-height: 1.7; }
 .module-description { margin-bottom: 13px; }
@@ -775,8 +788,25 @@ h2 {
 .node-binding-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
 .run-heading { margin-top: 30px; margin-bottom: 10px; }
 .run-node { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(75,62,49,.09); font-size: .8rem; }
+.run-node .process-record-button { margin-left: auto; }
 .run-node.status-running, .workflow-run-card.status-running { border-color: rgba(55,123,92,.45); background: rgba(232,247,239,.72); }
 .run-node.status-failed, .run-node.status-awaiting-model-choice, .workflow-run-card.status-awaiting-model-choice { color: #7e3027; border-color: rgba(158,65,49,.35); }
+.workflow-run-usage { margin: 10px 0 4px; padding: 9px 11px; border-radius: 9px; color: #704633; background: rgba(143,87,66,.08); font-size: .8rem; font-weight: 700; line-height: 1.5; }
+.token-summary { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.token-summary article { display: grid; gap: 7px; padding: 15px 16px; border: 1px solid rgba(75,62,49,.14); border-radius: 13px; background: rgba(255,255,255,.66); }
+.token-summary span { color: #7c6e63; font-size: .76rem; font-weight: 700; }
+.token-summary strong { color: #704633; font-family: Georgia, "Noto Serif SC", serif; font-size: 1.35rem; }
+.token-workflow-list, .token-node-list { display: grid; gap: 10px; }
+.token-section-heading { margin-top: 22px; }
+.token-workflow-card, .token-node-card { padding: 15px 17px; border: 1px solid rgba(75,62,49,.14); border-radius: 13px; background: rgba(255,255,255,.62); }
+.token-workflow-card { border-left: 4px solid rgba(143,87,66,.55); }
+.token-workflow-total { margin: 8px 0 10px; color: #704633; font-family: Georgia, "Noto Serif SC", serif; font-size: 1.3rem; font-weight: 700; }
+.token-node-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.token-node-head span, .token-model, .token-missing { color: #7c6e63; font-size: .78rem; }
+.token-model { margin: 7px 0 10px; }
+.token-missing { margin: 10px 0 0; }
+.token-values { display: flex; flex-wrap: wrap; gap: 8px; }
+.token-values span { padding: 6px 9px; border-radius: 8px; color: #66584d; background: rgba(143,87,66,.08); font-size: .78rem; font-weight: 700; }
 .run-cancel { margin-top: 12px; }
 
 .composer textarea {
@@ -900,5 +930,7 @@ h2 {
   .inline-control { align-items: stretch; }
   .avatar-upload { align-items: flex-start; }
   .field-pair, .model-picker, .node-binding-controls, .workflow-policy { grid-template-columns: 1fr; }
+  .token-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .token-node-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .config-toolbar { align-items: stretch; flex-direction: column; }
 }

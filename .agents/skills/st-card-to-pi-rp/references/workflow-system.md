@@ -4,11 +4,13 @@ Read this reference when conversion chooses or creates workflows.
 
 ## Separation of concerns
 
-- A model profile is a saved API/model configuration under `play/settings/model-profiles.json`. It may include optional head and tail prompts, context/output limits, thinking level, and model concurrency.
+- A model profile stores its shareable API/model configuration under `play/settings/model-profiles.json`. It may include optional head and tail prompts, context/output limits, thinking level, and model concurrency. Credentials never live there: API keys are stored in a project-hashed secret document below the operating system cache directory and are joined only in memory.
 - An Agent profile lives under `play/agents/<agent-id>/agent.json`. It defines task-specific behavior and running rules, tools, permissions, output mode, and a low-priority default model ID. A card may override it at `cards/<card-id>/agents/<agent-id>/override.json`. Shared runtime prompts contain only context and storage mechanics; do not place universal roleplay, prose-only, summary, or analysis behavior there.
 - A workflow node defines one task and references Agent/model IDs. Resolution order is node model, workflow default model, Agent default model, then `pi:current`.
 
 Do not copy model secrets into cards or workflows. Do not duplicate module-specific prompts in workflow JSON; the node points to the owning module Agent/skill.
+
+The default credential locations are `%LOCALAPPDATA%/bobo-agent-rp/projects/<project-hash>/model-secrets.json` on Windows, `~/Library/Caches/bobo-agent-rp/projects/<project-hash>/model-secrets.json` on macOS, and `${XDG_CACHE_HOME:-~/.cache}/bobo-agent-rp/projects/<project-hash>/model-secrets.json` on Linux. `BOBO_AGENT_RP_CACHE_DIR` overrides the `bobo-agent-rp` cache root. The hash is derived from the absolute `play/` root so separate copies do not silently share credentials. On startup, migrate any legacy `apiKey` fields to this file before rewriting the project profile without them. Never return credential values to the browser.
 
 ## Workflow ownership
 
@@ -37,9 +39,11 @@ Parallel sources must be named by node ID. Never rely on array position alone.
 
 Each node defaults to three attempts. Without explicit silent fallback, exhaustion enters `awaiting-model-choice`; the player chooses a model and retries. If the global silent-fallback switch is enabled, the configured fallback may run without confirmation, but the actual model remains recorded and visible. Do not author hidden per-node fallback behavior.
 
+On every successful node completion, persist normalized `usage` on both the completed node state and its successful attempt: `input`, `output`, `cacheRead`, `cacheWrite`, and `totalTokens`. Failed attempts retain usage when the executor produced it. Sum all usage-bearing model and tool-result messages produced inside each attempt boundary. When the workflow reaches a terminal state, persist `run.usage` as the sum of every recorded attempt, plus `usageComplete` and recorded/unrecorded attempt counts. Successful deterministic nodes record zeros; legacy or interrupted attempts without `usage` remain distinguishable as unrecorded.
+
 ## Workspaces and records
 
-Every chat stores workflow snapshots in `sessions/<card>/<chat>/workflow/runs.jsonl` and artifacts under the same chat. Public per-turn drafts are cleared before accepting the next player input. Private workflow workspaces are not context-visible unless the workflow explicitly publishes a result.
+Every chat stores workflow snapshots in `sessions/<card>/<chat>/workflow/runs.jsonl` and artifacts under the same chat. On every successful node completion, also write `workflow/process-records/<run-id>/<node-id>.md` with only the last content received and sent by the Agent. Deterministic nodes still receive a document that explicitly says no Agent was called. A retry overwrites that node's document with the last successful exchange. Run state stores only availability metadata and a relative path: process-record content is user-only diagnostic data and must never enter node context, upstream artifacts, prompts, or long-term publication. Current-turn work uses the public turn workspace; private workflow results become shared only through explicit publication.
 
 Global-background publication uses:
 

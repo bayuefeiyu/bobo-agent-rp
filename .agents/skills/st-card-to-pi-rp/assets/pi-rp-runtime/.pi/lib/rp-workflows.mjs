@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { addTokenUsage, emptyTokenUsage, normalizeTokenUsage } from "./rp-token-usage.mjs";
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const TERMINAL = new Set(["completed", "skipped", "failed", "cancelled"]);
@@ -220,6 +221,9 @@ export function createWorkflowRun(definition, options = {}) {
     createdAt: now,
     updatedAt: now,
     completedAt: null,
+    usage: null,
+    usageComplete: false,
+    usageAttempts: { recorded: 0, unrecorded: 0 },
     nodes: Object.fromEntries(workflow.nodes.map(node => [node.id, {
       id: node.id,
       status: "pending",
@@ -227,6 +231,8 @@ export function createWorkflowRun(definition, options = {}) {
       route: null,
       output: null,
       context: null,
+      usage: null,
+      processRecord: null,
       error: null,
       startedAt: null,
       completedAt: null,
@@ -313,6 +319,7 @@ export function startWorkflowNode(definition, run, nodeId, attempt, now = new Da
     startedAt: now,
     completedAt: null,
     error: null,
+    usage: null,
   });
   run.updatedAt = now;
   return state.attempts.at(-1);
@@ -325,9 +332,11 @@ export function completeWorkflowNode(definition, run, nodeId, result = {}, now =
   const attempt = state.attempts.at(-1);
   attempt.status = "completed";
   attempt.completedAt = now;
+  attempt.usage = normalizeTokenUsage(result.usage) || emptyTokenUsage();
   state.status = "completed";
   state.output = result.output ?? null;
   state.context = result.context ?? null;
+  state.usage = attempt.usage;
   state.route = result.route ?? null;
   state.completedAt = now;
   state.error = null;
@@ -345,6 +354,7 @@ export function failWorkflowNode(definition, run, nodeId, error, options = {}, n
   attempt.status = "failed";
   attempt.error = message;
   attempt.completedAt = now;
+  attempt.usage = normalizeTokenUsage(options.usage ?? error?.usage);
   state.error = message;
   if (options.retryable !== false && state.attempts.length < node.retry.maxAttempts) state.status = "awaiting-retry";
   else if (options.awaitModelChoice !== false) state.status = "awaiting-model-choice";
@@ -393,6 +403,23 @@ export function maybeFinalizeWorkflow(definition, run, now = new Date().toISOStr
   if (states.some(state => ["running", "pending", "awaiting-retry", "awaiting-model-choice"].includes(state.status))) return run;
   const requiredFailed = workflow.nodes.some(node => node.required && ["failed", "cancelled"].includes(run.nodes[node.id].status));
   run.status = requiredFailed ? "failed" : "completed";
+  let usage = emptyTokenUsage();
+  let recorded = 0;
+  let unrecorded = 0;
+  for (const state of states) {
+    for (const attempt of state.attempts || []) {
+      const attemptUsage = normalizeTokenUsage(attempt.usage);
+      if (attemptUsage) {
+        usage = addTokenUsage(usage, attemptUsage);
+        recorded += 1;
+      } else if (["completed", "failed", "cancelled"].includes(attempt.status)) {
+        unrecorded += 1;
+      }
+    }
+  }
+  run.usage = usage;
+  run.usageComplete = unrecorded === 0;
+  run.usageAttempts = { recorded, unrecorded };
   run.completedAt = now;
   run.updatedAt = now;
   return run;

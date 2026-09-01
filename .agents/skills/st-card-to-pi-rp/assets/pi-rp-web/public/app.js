@@ -24,6 +24,7 @@ const state = {
   activeWorkflowId: "standard-rp",
   workflowPolicy: null,
   workflowRenderSignature: "",
+  tokenRenderSignature: "",
 };
 
 const elements = {
@@ -112,6 +113,15 @@ const elements = {
   workflowMaxConcurrency: document.querySelector("#workflow-max-concurrency"),
   workflowSilentFallback: document.querySelector("#workflow-silent-fallback"),
   workflowFallbackModel: document.querySelector("#workflow-fallback-model"),
+  refreshTokens: document.querySelector("#refresh-tokens"),
+  tokenTotal: document.querySelector("#token-total"),
+  tokenInput: document.querySelector("#token-input"),
+  tokenOutput: document.querySelector("#token-output"),
+  tokenCacheRead: document.querySelector("#token-cache-read"),
+  tokenCacheWrite: document.querySelector("#token-cache-write"),
+  tokenWorkflowList: document.querySelector("#token-workflow-list"),
+  tokenNodeList: document.querySelector("#token-node-list"),
+  tokenStatus: document.querySelector("#token-status"),
 };
 
 function showHandoff(title, description) {
@@ -406,6 +416,23 @@ function orderedVisibleModules(modules) {
   return settings.order.filter(id => !settings.hidden.has(id)).map(id => byId.get(id)).filter(Boolean);
 }
 
+async function openFeatureModuleDocument(module, target, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  try {
+    await request(`/api/modules/${encodeURIComponent(module.id)}/open`, {
+      method: "POST",
+      body: JSON.stringify({ target }),
+    });
+    button.textContent = "已打开";
+    window.setTimeout(() => { button.textContent = originalText; }, 1400);
+  } catch (error) {
+    showError(error);
+  } finally {
+    button.disabled = target === "data" && !module.available;
+  }
+}
+
 function renderFeatureModules(payload) {
   const availableModules = Array.isArray(payload?.modules)
     ? [...payload.modules].sort((left, right) => (left.displayOrder ?? 0) - (right.displayOrder ?? 0) || String(left.id).localeCompare(String(right.id)))
@@ -446,7 +473,23 @@ function renderFeatureModules(payload) {
     stateLabel.textContent = expanded ? "收起" : "展开";
     toggle.append(label, stateLabel);
     toggle.addEventListener("click", () => toggleCardModule(toggle));
-    heading.append(toggle);
+    const actions = document.createElement("span");
+    actions.className = "module-file-actions";
+    const openData = document.createElement("button");
+    openData.type = "button";
+    openData.className = "module-file-button";
+    openData.textContent = "修改数据";
+    openData.title = module.available ? "使用系统默认编辑器打开当前显示所读取的数据文件" : "选择开场白或聊天记录后才能打开会话数据";
+    openData.disabled = !module.available;
+    openData.addEventListener("click", () => openFeatureModuleDocument(module, "data", openData));
+    const openDefinition = document.createElement("button");
+    openDefinition.type = "button";
+    openDefinition.className = "module-file-button";
+    openDefinition.textContent = "修改模块";
+    openDefinition.title = "使用系统默认编辑器打开模块定义文件";
+    openDefinition.addEventListener("click", () => openFeatureModuleDocument(module, "definition", openDefinition));
+    actions.append(openData, openDefinition);
+    heading.append(toggle, actions);
     const content = document.createElement("div");
     content.id = contentId;
     content.className = "module-content";
@@ -1175,7 +1218,7 @@ function loadModelForm() {
   elements.modelMaxConcurrency.value = profile.maxConcurrency || 10;
   elements.modelHeadPrompt.value = profile.headPrompt || "";
   elements.modelTailPrompt.value = profile.tailPrompt || "";
-  elements.modelStatus.textContent = profile.hasApiKey ? "API Key 已保存在本地设置文件中。" : "此配置没有保存 API Key。";
+  elements.modelStatus.textContent = profile.hasApiKey ? "API Key 已保存在项目外的系统缓存目录中。" : "此配置没有保存 API Key。";
 }
 
 function modelFormValue() {
@@ -1343,11 +1386,39 @@ function renderWorkflowRuns() {
     const runTitle = document.createElement("strong"); runTitle.textContent = run.workflowId;
     const runMeta = document.createElement("span"); runMeta.textContent = `${statusLabel(run.status)} · 回合 ${run.turn ?? "—"}`;
     head.append(runTitle, runMeta); card.append(head);
+    if (run.status === "completed") {
+      const usage = document.createElement("p"); usage.className = "workflow-run-usage";
+      usage.textContent = run.usage
+        ? `本次工作流总消耗：${formatTokenCount(run.usage.totalTokens)} token（输入 ${formatTokenCount(run.usage.input)} / 输出 ${formatTokenCount(run.usage.output)} / 缓存读 ${formatTokenCount(run.usage.cacheRead)} / 缓存写 ${formatTokenCount(run.usage.cacheWrite)}）${run.usageComplete === false ? " · 部分尝试未记录" : ""}`
+        : "本次工作流总消耗：未记录（升级前完成）";
+      card.append(usage);
+    }
     for (const node of Object.values(run.nodes || {})) {
       const row = document.createElement("div"); row.className = `run-node status-${node.status}`;
       const runNodeId = document.createElement("span"); runNodeId.textContent = node.id;
       const runNodeStatus = document.createElement("strong"); runNodeStatus.textContent = statusLabel(node.status);
       row.append(runNodeId, runNodeStatus);
+      if (node.processRecord?.available) {
+        const openProcessRecord = document.createElement("button");
+        openProcessRecord.type = "button";
+        openProcessRecord.className = "process-record-button";
+        openProcessRecord.textContent = "打开过程记录";
+        openProcessRecord.title = "使用系统默认编辑器打开此节点最后一次 Agent 收发记录";
+        openProcessRecord.addEventListener("click", async () => {
+          const original = openProcessRecord.textContent;
+          openProcessRecord.disabled = true;
+          openProcessRecord.textContent = "正在打开……";
+          try {
+            await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/nodes/${encodeURIComponent(node.id)}/process-record/open`, { method: "POST", body: "{}" });
+          } catch (error) {
+            showError(error);
+          } finally {
+            openProcessRecord.disabled = false;
+            openProcessRecord.textContent = original;
+          }
+        });
+        row.append(openProcessRecord);
+      }
       if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status)) {
         const model = modelOptions(node.attempts?.at(-1)?.modelId || "pi:current"); model.className = "setting-select";
         const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
@@ -1364,9 +1435,108 @@ function renderWorkflowRuns() {
   if (!fragment.childNodes.length) { const empty = document.createElement("p"); empty.className = "module-settings-empty"; empty.textContent = "当前 Pi 会话还没有工作流实例。"; fragment.append(empty); }
   elements.workflowRunList.replaceChildren(fragment);
 }
+
+function formatTokenCount(value) {
+  return new Intl.NumberFormat("zh-CN").format(Number.isFinite(value) ? value : 0);
+}
+
+function completedNodeUsageRows() {
+  const rows = [];
+  for (const run of state.workflowRuns) {
+    for (const node of Object.values(run.nodes || {})) {
+      if (node.status !== "completed") continue;
+      const attempt = [...(node.attempts || [])].reverse().find(item => item.status === "completed") || null;
+      rows.push({
+        workflowId: run.workflowId,
+        runId: run.id,
+        turn: run.turn,
+        nodeId: node.id,
+        completedAt: node.completedAt || attempt?.completedAt || run.completedAt,
+        modelId: attempt?.resolvedModel?.id || attempt?.modelId || "—",
+        usage: node.usage ?? attempt?.usage ?? null,
+      });
+    }
+  }
+  return rows.sort((left, right) => new Date(right.completedAt || 0) - new Date(left.completedAt || 0));
+}
+
+function renderTokenUsage() {
+  const rows = completedNodeUsageRows();
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+  let recorded = 0;
+  for (const run of state.workflowRuns) {
+    for (const node of Object.values(run.nodes || {})) {
+      for (const attempt of node.attempts || []) {
+        if (!attempt.usage) continue;
+        for (const field of Object.keys(totals)) totals[field] += Number(attempt.usage[field]) || 0;
+      }
+    }
+  }
+  elements.tokenTotal.textContent = formatTokenCount(totals.totalTokens);
+  elements.tokenInput.textContent = formatTokenCount(totals.input);
+  elements.tokenOutput.textContent = formatTokenCount(totals.output);
+  elements.tokenCacheRead.textContent = formatTokenCount(totals.cacheRead);
+  elements.tokenCacheWrite.textContent = formatTokenCount(totals.cacheWrite);
+  const workflowFragment = document.createDocumentFragment();
+  for (const run of state.workflowRuns.filter(item => item.status === "completed").slice().reverse()) {
+    const card = document.createElement("article"); card.className = "token-workflow-card";
+    const head = document.createElement("div"); head.className = "token-node-head";
+    const title = document.createElement("strong"); title.textContent = run.workflowId;
+    const meta = document.createElement("span"); meta.textContent = `回合 ${run.turn ?? "—"} · ${formatSessionTime(run.completedAt)}`;
+    head.append(title, meta); card.append(head);
+    if (!run.usage) {
+      const missing = document.createElement("p"); missing.className = "token-missing"; missing.textContent = "本次总消耗未记录（升级前完成）"; card.append(missing);
+    } else {
+      const total = document.createElement("p"); total.className = "token-workflow-total"; total.textContent = `${formatTokenCount(run.usage.totalTokens)} token${run.usageComplete === false ? "（已记录部分）" : ""}`; card.append(total);
+      const values = document.createElement("div"); values.className = "token-values";
+      for (const [label, field] of [["输入", "input"], ["输出", "output"], ["缓存读", "cacheRead"], ["缓存写", "cacheWrite"]]) {
+        const item = document.createElement("span"); item.textContent = `${label} ${formatTokenCount(run.usage[field])}`; values.append(item);
+      }
+      card.append(values);
+    }
+    workflowFragment.append(card);
+  }
+  if (!workflowFragment.childNodes.length) { const empty = document.createElement("p"); empty.className = "module-settings-empty"; empty.textContent = "当前聊天还没有完成的工作流。"; workflowFragment.append(empty); }
+  elements.tokenWorkflowList.replaceChildren(workflowFragment);
+  const fragment = document.createDocumentFragment();
+  for (const row of rows) {
+    if (row.usage) recorded += 1;
+    const card = document.createElement("article"); card.className = "token-node-card";
+    const head = document.createElement("div"); head.className = "token-node-head";
+    const title = document.createElement("strong"); title.textContent = `${row.workflowId} / ${row.nodeId}`;
+    const meta = document.createElement("span"); meta.textContent = `回合 ${row.turn ?? "—"} · ${formatSessionTime(row.completedAt)}`;
+    head.append(title, meta);
+    const model = document.createElement("p"); model.className = "token-model"; model.textContent = `模型：${row.modelId}`;
+    card.append(head, model);
+    if (!row.usage) {
+      const missing = document.createElement("p"); missing.className = "token-missing"; missing.textContent = "未记录（此节点可能在统计功能加入前完成）"; card.append(missing);
+    } else {
+      const values = document.createElement("div"); values.className = "token-values";
+      for (const [label, field] of [["总计", "totalTokens"], ["输入", "input"], ["输出", "output"], ["缓存读", "cacheRead"], ["缓存写", "cacheWrite"]]) {
+        const item = document.createElement("span"); item.textContent = `${label} ${formatTokenCount(row.usage[field])}`; values.append(item);
+      }
+      card.append(values);
+    }
+    fragment.append(card);
+  }
+  if (!rows.length) { const empty = document.createElement("p"); empty.className = "module-settings-empty"; empty.textContent = "当前聊天还没有成功完成的工作流节点。"; fragment.append(empty); }
+  elements.tokenNodeList.replaceChildren(fragment);
+  elements.tokenStatus.textContent = rows.length ? `共 ${rows.length} 个成功节点，${recorded} 个有统计数据。` : "";
+}
+
+async function refreshTokenUsage(force = false) {
+  const payload = await request("/api/workflow-runs");
+  state.workflowRuns = payload.runs || [];
+  const signature = JSON.stringify(state.workflowRuns.map(run => ({ id: run.id, updatedAt: run.updatedAt, nodes: run.nodes })));
+  if (!force && signature === state.tokenRenderSignature) return;
+  state.tokenRenderSignature = signature;
+  renderTokenUsage();
+}
+
 async function refreshWorkflowData(selectId, forceRender = false) {
   const [workflowData, runData] = await Promise.all([request("/api/workflows"), request("/api/workflow-runs")]);
   state.workflows = workflowData.workflows || []; state.activeWorkflowId = workflowData.activeWorkflowId; state.workflowRuns = runData.runs || [];
+  renderTokenUsage();
   if (!forceRender && workflowPanelHasFocus()) return;
   const signature = JSON.stringify({ workflows: state.workflows, activeWorkflowId: state.activeWorkflowId, runs: state.workflowRuns });
   if (!forceRender && signature === state.workflowRenderSignature) return;
@@ -1478,6 +1648,7 @@ elements.activateWorkflow.addEventListener("click", activateSelectedWorkflow);
 elements.refreshWorkflows.addEventListener("click", () => refreshWorkflowData(undefined, true).catch(showError));
 elements.showActiveWorkflow.addEventListener("click", () => { elements.workflowSelect.value = state.activeWorkflowId; renderWorkflow(); });
 elements.workflowPolicyForm.addEventListener("submit", saveWorkflowPolicy);
+elements.refreshTokens.addEventListener("click", () => refreshTokenUsage(true).catch(showError));
 
 async function refreshState() {
   if (state.switching) return;
@@ -1486,6 +1657,7 @@ async function refreshState() {
     applySnapshot(snapshot);
     renderFeatureModules(modules);
     if (state.activePanel === "workflows" && !workflowPanelHasFocus()) await refreshWorkflowData();
+    if (state.activePanel === "tokens") await refreshTokenUsage();
   } catch (error) {
     if (!elements.handoffOverlay.hidden) return;
     elements.connectionStatus.textContent = "与 Pi 会话连接中断";

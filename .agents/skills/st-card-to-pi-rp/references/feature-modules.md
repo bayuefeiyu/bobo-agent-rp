@@ -36,7 +36,7 @@ The module skill owns every prompt related to that module: activation, retrieval
 }
 ```
 
-Use exactly these fields. Frontend modules appear in Web; background modules have identical records and context behavior but do not appear there. All frontend modules precede background modules in Agent context, each sorted by `contextOrder`; `displayOrder` and browser preferences affect only presentation.
+Use exactly these fields. Frontend modules appear in Web; background modules have identical records and context behavior but do not appear there. Agent context uses `contextOrder` across all modules; `surface`, `displayOrder`, and browser preferences affect only presentation.
 
 ## Storage and records
 

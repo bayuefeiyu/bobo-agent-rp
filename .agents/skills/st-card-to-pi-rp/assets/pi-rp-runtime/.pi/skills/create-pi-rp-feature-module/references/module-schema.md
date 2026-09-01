@@ -22,11 +22,11 @@ sessions/<card-id>/<chat-id>/modules/<module-id>/
 ├── snapshot.json
 └── catalog.json
 
-sessions/<card-id>/<chat-id>/draft/
+sessions/<card-id>/<chat-id>/workspace/public/turn/
 └── task-owned temporary files
 ```
 
-Only files enabled by `storage.json` are required. Card files define behavior and initial state; session files contain live data. A module skill owns every module prompt. Message-suffix deletion removes records bound to deleted message IDs. The public `draft/` directory is shared temporary workspace, cleared before each new player turn, and never authoritative state.
+Only files enabled by `storage.json` are required. Card files define behavior and initial state; session files contain live data. A module skill owns every module prompt. Message-suffix deletion removes records bound to deleted message IDs. `workspace/public/turn/` is the shared task workspace.
 
 ## `module.json`
 

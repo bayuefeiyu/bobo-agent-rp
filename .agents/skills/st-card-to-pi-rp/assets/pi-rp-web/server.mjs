@@ -200,6 +200,14 @@ export function createApplication({ cardStore, bridge }) {
       if (request.method === "GET" && url.pathname === "/api/modules") {
         return sendJson(response, 200, await bridge.listFeatureModules());
       }
+      const moduleDocumentMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/open$/);
+      if (request.method === "POST" && moduleDocumentMatch) {
+        const body = await readJson(request);
+        return sendJson(response, 200, await bridge.openFeatureModuleDocument(
+          cleanId(moduleDocumentMatch[1], "moduleId"),
+          body.target,
+        ));
+      }
       if (request.method === "GET" && url.pathname === "/api/models") {
         return sendJson(response, 200, await bridge.listModels());
       }
@@ -234,6 +242,13 @@ export function createApplication({ cardStore, bridge }) {
       }
       if (request.method === "GET" && url.pathname === "/api/workflow-runs") {
         return sendJson(response, 200, await bridge.listWorkflowRuns());
+      }
+      const processRecordMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/process-record\/open$/);
+      if (request.method === "POST" && processRecordMatch) {
+        return sendJson(response, 200, await bridge.openWorkflowNodeProcessRecord(
+          cleanId(processRecordMatch[1], "runId"),
+          cleanId(processRecordMatch[2], "nodeId"),
+        ));
       }
       if (request.method === "GET" && url.pathname === "/api/workflow-policy") {
         return sendJson(response, 200, await bridge.getWorkflowPolicy());

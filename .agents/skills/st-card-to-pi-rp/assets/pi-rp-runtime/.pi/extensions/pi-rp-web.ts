@@ -44,7 +44,8 @@ import { createRpConfigStore } from "../lib/rp-config-store.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
 import { composeNodePrompt, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
 import { workflowTriggerMatches } from "../lib/rp-workflows.mjs";
-import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, publishLongTermRecord, workflowWorkspacePaths } from "../lib/rp-workspace.mjs";
+import { tokenUsageFromMessages } from "../lib/rp-token-usage.mjs";
+import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, publishLongTermRecord, workflowProcessRecordPath, workflowWorkspacePaths, writeWorkflowProcessRecord } from "../lib/rp-workspace.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -163,6 +164,7 @@ type RpRun = {
   phaseModelHeadPrompt?: string | null;
   phaseModelTailPrompt?: string | null;
   phaseAgentPrompt?: string | null;
+  phaseStartedAt?: number;
 };
 
 type FeatureModule = {
@@ -325,7 +327,6 @@ function playerProfileContext(playerName: string, description: string) {
     "# Player character profile (fixed RP context)",
     `Name: ${playerName}`,
     description.trim() ? `Description:\n${description.trim()}` : "Description: not specified",
-    "Apply this player profile before loading or interpreting the single-card primary character profile. It defines stable identity and authored traits; use it according to the selected Agent's task.",
   ].join("\n\n");
 }
 
@@ -353,29 +354,27 @@ async function fixedRpContext(active: ActiveBridge) {
   const render = (text: string) => module?.variable && record
     ? renderVariableTemplates(text, record.data.state, module.variable.bindings)
     : text;
-  return [
+  const sections = [
     "# Fixed card context",
     render(active.stableCardContext),
     playerProfileContext(active.playerName, active.playerDescription),
-    "# Primary card character profiles",
-    render(active.primaryCharacterContext) || "No dedicated primary-character profile is defined for this card.",
-  ].join("\n\n");
+  ];
+  const primaryCharacters = render(active.primaryCharacterContext).trim();
+  if (primaryCharacters) sections.push("# Primary card character profiles", primaryCharacters);
+  return sections.filter(Boolean).join("\n\n");
 }
 
 function featureModuleFixedContext(active: ActiveBridge) {
   if (active.featureModules.length === 0 || !active.sessionDirectory) return "";
   return [
-    "# Card feature modules (fixed routing rules)",
-    "Feature-module data is part of this chat's persistent state. Modules appear here in the card author's context order; frontend display choices never change this order, and background modules follow frontend modules. Every module prompt is owned by its module skill. Read the module skill before interpreting, querying, or changing its records. Do not edit display specifications or binding metadata.",
+    "# Card feature-module routing",
     ...active.featureModules.map(module => {
-      const sessionModulePath = relative(active.context.cwd, resolve(active.sessionDirectory!, "modules", module.id)).replaceAll("\\", "/");
+      const needsSkill = module.variable || module.retrievalPolicy.agent.mode !== "disabled" || module.retrievalPolicy.catalog.agentMode !== "disabled";
       return [
         `## ${module.title} (${module.id})`,
-        `Session module directory: ${sessionModulePath}`,
-        `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
-        `Retrieval mode: code=${module.retrievalPolicy.code.profile}; agent=${module.retrievalPolicy.agent.mode}`,
-        module.variable ? `Narrative fixed variable references: ${module.variable.alwaysForNarrative.length ? module.variable.alwaysForNarrative.join(", ") : "none"}. Other variables are queried by exact binding or JSON Pointer according to the module skill. The post-narrative update task always receives the complete effective variable state.` : "",
         module.skillDescription,
+        needsSkill ? `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}` : "",
+        module.variable ? `Narrative fixed variable references: ${module.variable.alwaysForNarrative.length ? module.variable.alwaysForNarrative.join(", ") : "none"}. Query other variables by exact binding or JSON Pointer according to the module skill.` : "",
       ].filter(Boolean).join("\n");
     }),
   ].join("\n\n");
@@ -386,7 +385,6 @@ function messageRetrievalFixedContext(active: ActiveBridge) {
   return [
     "# Card message-record retrieval skill",
     `Skill: ${relative(active.context.cwd, active.messageSkillPath).replaceAll("\\", "/")}`,
-    `Retrieval mode: code=${active.messagePolicy.code.profile}; agent=${active.messagePolicy.agent.mode}; catalog-agent=${active.messagePolicy.catalog.agentMode}`,
     active.messageSkillDescription,
     "Read this skill before querying message records or enriching their catalog.",
   ].join("\n");
@@ -627,10 +625,7 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     });
   }
   if (modules.filter(module => module.variable).length > 1) throw new Error("A card may define only one variable storage engine.");
-  return modules.sort((left, right) => {
-    const surfaceDifference = Number(left.surface === "background") - Number(right.surface === "background");
-    return surfaceDifference || left.contextOrder - right.contextOrder || left.id.localeCompare(right.id);
-  });
+  return modules.sort((left, right) => left.contextOrder - right.contextOrder || left.id.localeCompare(right.id));
 }
 
 async function readContextProcessors(cardDirectory: string, paths: unknown, modules: FeatureModule[]): Promise<ContextProcessor[]> {
@@ -770,6 +765,19 @@ function openBrowser(url: string) {
   }
 }
 
+function openLocalDocument(path: string) {
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const done = (error: Error | null) => error ? rejectPromise(error) : resolvePromise();
+    if (process.platform === "win32") {
+      execFile("rundll32.exe", ["url.dll,FileProtocolHandler", path], done);
+    } else if (process.platform === "darwin") {
+      execFile("open", [path], done);
+    } else {
+      execFile("xdg-open", [path], done);
+    }
+  });
+}
+
 function messageText(message: any): string {
   if (typeof message?.content === "string") return message.content.trim();
   if (!Array.isArray(message?.content)) return "";
@@ -778,6 +786,33 @@ function messageText(message: any): string {
     .map((block: any) => block.text)
     .join("\n")
     .trim();
+}
+
+function debugMessageContent(message: any): string {
+  if (typeof message?.content === "string") return message.content;
+  if (message?.content === undefined) return "";
+  return JSON.stringify(message.content, null, 2);
+}
+
+function lastAgentExchange(messages: any[], startedAt = 0) {
+  const relevant = messages.filter(message => {
+    const timestamp = typeof message?.timestamp === "number" ? message.timestamp : Date.parse(message?.timestamp || "");
+    return !startedAt || !Number.isFinite(timestamp) || timestamp >= startedAt;
+  });
+  let assistantIndex = -1;
+  for (let index = relevant.length - 1; index >= 0; index -= 1) {
+    if (relevant[index]?.role === "assistant") {
+      assistantIndex = index;
+      break;
+    }
+  }
+  if (assistantIndex === -1) return null;
+  const received = relevant.slice(0, assistantIndex).reverse().find(message => message?.role !== "assistant");
+  const sent = relevant[assistantIndex];
+  return {
+    received: received ? { role: received.role || received.customType || "unknown", content: debugMessageContent(received) } : null,
+    sent: { role: sent.role || "assistant", content: debugMessageContent(sent) },
+  };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -908,9 +943,10 @@ export default function (pi: ExtensionAPI) {
     run.variableModuleId = module.id;
     run.contextContent = null;
     await prepareLifecycleNodeModel(target, run, "variable-update");
+    run.phaseStartedAt = Date.now();
     pi.sendMessage({
       customType: "pi-rp-variable-update-task",
-      content: `The player-visible RP prose for turn ${target.turn} has been saved. Perform the card's post-narrative variable update task now. Read the variable module skill, inspect the complete effective state supplied by the authoritative update context, call rp_variable_update as many times as useful, then call rp_variable_finalize. Do not write another RP response.`,
+      content: `Run the post-narrative variable update for turn ${target.turn}.`,
       display: false,
       details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleId: module.id },
     }, { deliverAs: "followUp", triggerTurn: true });
@@ -935,9 +971,10 @@ export default function (pi: ExtensionAPI) {
     await mkdir(publicDraftDirectory(target), { recursive: true });
     await writeFile(outputDraftPath(target), `${JSON.stringify(draft, null, 2)}\n`, "utf8");
     await prepareLifecycleNodeModel(target, run, "module-output");
+    run.phaseStartedAt = Date.now();
     pi.sendMessage({
       customType: "pi-rp-output-update-task",
-      content: `The player-visible RP prose for turn ${target.turn} has been saved. Resolve every auxiliary output module with rp_output_update, then call rp_output_finalize. Do not write another RP response.`,
+      content: `Run the post-narrative auxiliary-output update for turn ${target.turn}.`,
       display: false,
       details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleIds: draft.moduleIds },
     }, { deliverAs: "followUp", triggerTurn: true });
@@ -979,8 +1016,7 @@ export default function (pi: ExtensionAPI) {
       "The RP prose is already final and player-visible. Update persistent variables from that prose; do not continue or rewrite the story.",
       `Variable module skill: ${relative(target.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
       `Public per-turn draft directory: ${relative(target.context.cwd, publicDraftDirectory(target)).replaceAll("\\", "/")}`,
-      "This directory is shared by temporary task work and is cleared before the next RP turn. The variable draft remains pending across interruptions but is not effective context until rp_variable_finalize succeeds.",
-      "The complete effective variable state is supplied below. Use the module skill for semantic update rules. Code reports only the variable operation and error that failed; infer any relationships yourself from the complete state and authored rules.",
+      "Use the module skill for semantic update rules. Validation reports identify failed operations; use the complete state and authored rules to infer any related corrections.",
       `## Current user message\n${draft.userMessage}`,
       `## Saved AI prose\n${draft.assistantMessage}`,
       `## Complete effective variable state\n${JSON.stringify(record?.data.state ?? {}, null, 2)}`,
@@ -1220,7 +1256,6 @@ export default function (pi: ExtensionAPI) {
         }
         sections.push([
           `# Dynamic card context: ${processor.id}`,
-          processor.description,
           ...content,
         ].filter(Boolean).join("\n\n"));
       } catch (error) {
@@ -1398,6 +1433,7 @@ export default function (pi: ExtensionAPI) {
       variableFinalized: false,
       workflowRunId: runId,
       baseModel: target.context.model,
+      phaseStartedAt: Date.now(),
     };
     await prepareLifecycleNodeModel(target, recovered, nodeType, modelId);
     target.pending = true;
@@ -1405,8 +1441,8 @@ export default function (pi: ExtensionAPI) {
     return () => pi.sendMessage({
       customType: nodeType === "module-output" ? "pi-rp-output-update-task" : "pi-rp-variable-update-task",
       content: nodeType === "module-output"
-        ? "Recover the pending auxiliary-output workflow node. Resolve every listed module and finish with rp_output_finalize. Do not write story prose."
-        : "Recover the pending variable workflow node. Read the complete state and module skill, continue the draft, and finish with rp_variable_finalize. Do not write story prose.",
+        ? "Resume the pending auxiliary-output workflow node."
+        : "Resume the pending variable-update workflow node.",
       display: false,
       details: { recovered: true, runId, draftId: draft.id },
     }, { deliverAs: "followUp", triggerTurn: true });
@@ -1457,6 +1493,7 @@ export default function (pi: ExtensionAPI) {
         rpRun!.workflowNarrativeNodeId = node.id;
         rpRun!.resolveNarrative = resolveNarrative;
         rpRun!.rejectNarrative = rejectNarrative;
+        rpRun!.phaseStartedAt = Date.now();
         try {
           pi.sendUserMessage(rpRun!.submittedText);
         } catch (error) {
@@ -1502,7 +1539,7 @@ export default function (pi: ExtensionAPI) {
       modelHead: profile?.headPrompt,
       agentPrompt: agent?.prompt,
       fixedContext: await fixedRpContext(active),
-      dynamicContext: [`Workflow: ${workflow.id}\nNode: ${node.id}\nTurn: ${run.turn ?? "none"}`, run.payload?.frozenContext ? `Frozen completed-turn context:\n${run.payload.frozenContext}` : "", await publicLongTermContext(active, run.visibleThroughTurn ?? run.turn ?? latestCompletedTurn(active)), customContext].filter(Boolean).join("\n\n"),
+      dynamicContext: [Number.isSafeInteger(run.turn) ? `Turn: ${run.turn}` : "", run.payload?.frozenContext ? `Frozen completed-turn context:\n${run.payload.frozenContext}` : "", await publicLongTermContext(active, run.visibleThroughTurn ?? run.turn ?? latestCompletedTurn(active)), customContext].filter(Boolean).join("\n\n"),
       upstreamArtifacts: upstream.length ? `Upstream node outputs:\n${JSON.stringify(upstream, null, 2)}` : "",
       currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
       nodePrompt: node.prompt || node.description,
@@ -1552,7 +1589,20 @@ export default function (pi: ExtensionAPI) {
         try { output = JSON.parse(normalized); }
         catch { throw new Error(`Workflow Agent ${agent.id} must return valid JSON.`); }
       }
-      return { output, context: { mode: node.context.mode, systemPrompt: prompt.systemPrompt, messages: prompt.contextMessages } };
+      return {
+        output,
+        usage: tokenUsageFromMessages(session.messages),
+        processRecord: lastAgentExchange(session.messages),
+        context: {
+          mode: node.context.mode,
+          nodePrompt: node.prompt || node.description || null,
+          customContext: customContext || null,
+        },
+      };
+    } catch (error) {
+      const wrapped = error instanceof Error ? error : new Error(String(error));
+      (wrapped as any).usage = tokenUsageFromMessages(session.messages);
+      throw wrapped;
     } finally {
       session.dispose();
     }
@@ -1704,6 +1754,24 @@ export default function (pi: ExtensionAPI) {
       resolveModel: async (modelId: string) => (await configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId) || null,
       executor: executeWorkflowNode,
       nodeHistory: (workflowId: string, nodeId: string) => nodeCompletionTurns.get(`${workflowId}:${nodeId}`) ?? null,
+      onNodeComplete: async ({ workflow, run, node, agent, binding, result }: any) => {
+        if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow process record has no active RP chat.");
+        const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
+        const documentPath = await writeWorkflowProcessRecord(paths.workflowProcessRecords, {
+          workflowId: workflow.id,
+          runId: run.id,
+          nodeId: node.id,
+          nodeType: node.type,
+          agentId: result.processRecord ? agent?.id || binding.agentId || null : null,
+          modelId: result.processRecord ? binding.modelId || null : null,
+          completedAt: run.nodes[node.id]?.completedAt,
+          exchange: result.processRecord || null,
+        });
+        return {
+          available: true,
+          path: relative(active.context.cwd, documentPath).replaceAll("\\", "/"),
+        };
+      },
       onChange: async (run: any, workflow: any) => {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) return;
         const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
@@ -1714,7 +1782,7 @@ export default function (pi: ExtensionAPI) {
             await serializeWorkflowWrite(async () => {
               const artifactDirectory = resolve(paths.workflowArtifacts, run.id);
               await mkdir(artifactDirectory, { recursive: true });
-              await writeFile(resolve(artifactDirectory, `${state.id}.json`), `${JSON.stringify({ schemaVersion: 1, workflowId: workflow.id, runId: run.id, nodeId: state.id, turn: run.turn, output: state.output }, null, 2)}\n`, "utf8");
+              await writeFile(resolve(artifactDirectory, `${state.id}.json`), `${JSON.stringify({ schemaVersion: 1, workflowId: workflow.id, runId: run.id, nodeId: state.id, turn: run.turn, output: state.output, usage: state.usage }, null, 2)}\n`, "utf8");
             });
             if (Number.isSafeInteger(run.turn)) nodeCompletionTurns.set(`${workflow.id}:${state.id}`, run.turn);
             deliveredWorkflowEvents.add(eventKey);
@@ -1861,6 +1929,27 @@ export default function (pi: ExtensionAPI) {
             for (const run of active.workflowEngine.snapshot()) latest.set(run.id, { ...run, live: true });
             return { runs: [...latest.values()].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt))) };
           },
+          openWorkflowNodeProcessRecord: async (runId: string, nodeId: string) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening a workflow process record.");
+            const runs = active.workflowEngine.snapshot();
+            const live = runs.find((run: any) => run.id === runId);
+            const persisted = live ? null : await readFile(resolve(active.sessionDirectory, "workflow", "runs.jsonl"), "utf8")
+              .then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)).reverse().find(run => run.id === runId))
+              .catch(error => {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                throw error;
+              });
+            const run = live || persisted;
+            if (!run?.nodes?.[nodeId]?.processRecord?.available) throw httpError(404, "Workflow node process record was not found.");
+            const documentPath = workflowProcessRecordPath(resolve(active.sessionDirectory, "workflow", "process-records"), runId, nodeId);
+            await readFile(documentPath, "utf8");
+            try {
+              await openLocalDocument(documentPath);
+            } catch (error) {
+              throw httpError(500, `Could not open the workflow process record: ${(error as Error).message}`);
+            }
+            return { opened: true, path: relative(active.context.cwd, documentPath).replaceAll("\\", "/") };
+          },
           getWorkflowPolicy: async () => configStore.getRuntimePolicy(),
           saveWorkflowPolicy: async (value: any) => {
             const policy = await configStore.saveRuntimePolicy(value);
@@ -1968,6 +2057,33 @@ export default function (pi: ExtensionAPI) {
               });
             }
             return { sessionId: active.recordId, modules };
+          },
+          openFeatureModuleDocument: async (moduleId: string, target: unknown) => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
+            if (target !== "data" && target !== "definition") throw httpError(400, "Module document target must be data or definition.");
+            const module = active.featureModules.find(item => item.id === moduleId && item.surface === "frontend");
+            if (!module) throw httpError(404, "Feature module was not found in the Web interface.");
+            let documentPath: string;
+            if (target === "definition") {
+              documentPath = resolve(module.moduleDirectory, "module.json");
+            } else {
+              if (!active.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening module data.");
+              await ensureFeatureModuleRecords(active);
+              const stream = module.storage[module.storage.contextSource];
+              if (!stream) throw httpError(409, "This module has no data document for its display source.");
+              documentPath = resolve(active.sessionDirectory, "modules", module.id, stream.file);
+            }
+            await readFile(documentPath, "utf8");
+            try {
+              await openLocalDocument(documentPath);
+            } catch (error) {
+              throw httpError(500, `Could not open the local document: ${(error as Error).message}`);
+            }
+            return {
+              opened: true,
+              target,
+              path: relative(active.context.cwd, documentPath).replaceAll("\\", "/"),
+            };
           },
           getUserAvatar: async (playerName: string) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -2811,7 +2927,7 @@ export default function (pi: ExtensionAPI) {
       };
       pi.sendMessage({
         customType: "pi-rp-variable-update-task",
-        content: "Resume the interrupted post-narrative variable update. Read the supplied complete state and module skill, inspect existing draft operations, correct or continue them, and finish with rp_variable_finalize.",
+        content: "Resume the pending post-narrative variable update.",
         display: false,
         details: { resumed: true, draftId: draft.id, moduleId: draft.moduleId },
       }, { deliverAs: "followUp", triggerTurn: true });
@@ -2861,7 +2977,7 @@ export default function (pi: ExtensionAPI) {
       };
       pi.sendMessage({
         customType: "pi-rp-output-update-task",
-        content: "Resume the interrupted post-narrative auxiliary-output task. Resolve every listed module with rp_output_update, then finish with rp_output_finalize. Do not write story prose.",
+        content: "Resume the pending post-narrative auxiliary-output task.",
         display: false,
         details: { resumed: true, draftId: draft.id, moduleIds: draft.moduleIds },
       }, { deliverAs: "followUp", triggerTurn: true });
@@ -2878,9 +2994,7 @@ export default function (pi: ExtensionAPI) {
           event.systemPrompt,
           rpRun.phaseModelHeadPrompt,
           rpRun.phaseAgentPrompt,
-          "# Active Web RP post-narrative auxiliary-output task",
-          "The player-visible response is already saved. Read every listed card-local output-module skill, resolve each with rp_output_update, and finish with rp_output_finalize. Never create additional story prose in this phase.",
-        ].join("\n\n"),
+        ].filter(Boolean).join("\n\n"),
       };
     }
     if (rpRun.phase === "variable-update") {
@@ -2889,9 +3003,7 @@ export default function (pi: ExtensionAPI) {
           event.systemPrompt,
           rpRun.phaseModelHeadPrompt,
           rpRun.phaseAgentPrompt,
-          "# Active Web RP post-narrative task",
-          "The player-visible response is already saved. This run performs only variable maintenance. Read the card-local variable skill, use rp_variable_update as many times as needed, and finish with rp_variable_finalize. Never create additional story prose in this phase.",
-        ].join("\n\n"),
+        ].filter(Boolean).join("\n\n"),
       };
     }
     if (rpRun.phase !== "narrative" || event.prompt.trim() !== rpRun.submittedText.trim()) return;
@@ -2905,7 +3017,7 @@ export default function (pi: ExtensionAPI) {
         featureModuleFixedContext(active),
         await publicLongTermContext(active, Math.max(0, active.turn - 1)),
         rpRun.workflowNodePrompt,
-        active.sessionDirectory ? `# Per-turn public draft directory\n${relative(active.context.cwd, publicDraftDirectory(active)).replaceAll("\\", "/")}\nTemporary work for any RP task may be written here. The runtime clears this directory before every new player turn; it is never persistent story state.` : "",
+        active.sessionDirectory ? `# Public turn workspace\n${relative(active.context.cwd, publicDraftDirectory(active)).replaceAll("\\", "/")}\nUse this shared workspace for drafts, intermediate results, and files that coordinate tasks in the current turn.` : "",
       ].join("\n\n"),
     };
   });
@@ -2951,7 +3063,6 @@ export default function (pi: ExtensionAPI) {
     if (boundary === -1) return;
 
     if (rpRun.contextContent === null) {
-      const submittedRecord = active.messages.find(record => record.sequence === rpRun!.submittedSequence);
       const workflowRun = rpRun.workflowRunId
         ? active.workflowEngine.snapshot().find((run: any) => run.id === rpRun!.workflowRunId)
         : null;
@@ -2964,9 +3075,7 @@ export default function (pi: ExtensionAPI) {
         ? Object.values(workflowRun.nodes).filter((state: any) => upstreamIds.has(state.id) && state.status === "completed" && state.output !== null)
         : [];
       rpRun.contextContent = [
-        "# Authoritative Web RP context for this turn",
-        "Only the fixed context, deterministic dynamic fragments, the current player message, and the code- or agent-selected records in this block are authoritative input for this node. Replaced Pi-session work context is not source data for this task.",
-        `Current delivered-turn binding: messageId=${submittedRecord?.id || "unknown"}; turn=${submittedRecord?.binding.turn ?? active.turn}. Module records established by this response must use this binding.`,
+        "# Web RP context for this turn",
         await buildDynamicProcessorContext(active, rpRun),
         await buildAutomaticContext(active, rpRun),
         upstreamOutputs.length ? `# Completed workflow-node outputs\n${JSON.stringify(upstreamOutputs, null, 2)}` : "",
@@ -3007,18 +3116,20 @@ export default function (pi: ExtensionAPI) {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
     if ((event as any).willRetry) return;
+    const nodeUsage = tokenUsageFromMessages(event.messages, rpRun.phaseStartedAt || 0);
+    const nodeProcessRecord = lastAgentExchange(event.messages, rpRun.phaseStartedAt || 0);
     if (rpRun.phase === "output-update") {
       if (!rpRun.outputFinalized) return;
       const assistantRecord = active.messages.find(message => message.id === rpRun!.assistantMessageId);
       if (!assistantRecord) throw new Error("The saved AI message for the output task no longer exists.");
       if (!await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
-      rpRun.resolveOutputWorkflow?.({ output: { updated: [...rpRun.outputModuleIds] } });
+      rpRun.resolveOutputWorkflow?.({ output: { updated: [...rpRun.outputModuleIds] }, usage: nodeUsage, processRecord: nodeProcessRecord });
       rpRun.resolveOutputWorkflow = null;
       return;
     }
     if (rpRun.phase === "variable-update") {
       if (rpRun.variableFinalized) {
-        rpRun.resolveVariableWorkflow?.({ output: { updated: rpRun.variableModuleId ? [rpRun.variableModuleId] : [] } });
+        rpRun.resolveVariableWorkflow?.({ output: { updated: rpRun.variableModuleId ? [rpRun.variableModuleId] : [] }, usage: nodeUsage, processRecord: nodeProcessRecord });
         rpRun.resolveVariableWorkflow = null;
         rpRun.phase = "done";
       }
@@ -3043,7 +3154,7 @@ export default function (pi: ExtensionAPI) {
     const resolveNarrative = rpRun.resolveNarrative;
     rpRun.resolveNarrative = null;
     rpRun.rejectNarrative = null;
-    resolveNarrative?.({ output: content });
+    resolveNarrative?.({ output: content, usage: nodeUsage, processRecord: nodeProcessRecord });
     if (!await beginOutputUpdate(active, rpRun, assistantRecord) && !await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
   });
 

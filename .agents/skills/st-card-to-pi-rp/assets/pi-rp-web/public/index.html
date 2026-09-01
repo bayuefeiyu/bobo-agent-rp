@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>Pi RP</title>
-    <link rel="stylesheet" href="/styles.css?v=18" />
+    <link rel="stylesheet" href="/styles.css?v=20" />
   </head>
   <body>
     <div class="app-layout">
@@ -35,6 +35,9 @@
           </button>
           <button id="tab-workflows" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-workflows" data-panel="workflows">
             <span class="tab-icon" aria-hidden="true">流</span><span>工作流</span>
+          </button>
+          <button id="tab-tokens" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-tokens" data-panel="tokens">
+            <span class="tab-icon" aria-hidden="true">T</span><span>Token 统计</span>
           </button>
         </nav>
       </aside>
@@ -243,6 +246,23 @@
           <p id="workflow-status" class="setting-status"></p>
         </section>
 
+        <section id="panel-tokens" class="panel settings-page" role="tabpanel" aria-labelledby="tab-tokens" hidden>
+          <div class="settings-heading"><p class="step">TOKEN USAGE</p><h2>Token 统计</h2><p>统计当前聊天中每个成功工作流节点的模型消耗；代码节点等未调用模型的节点记为 0。</p></div>
+          <div class="config-toolbar"><button id="refresh-tokens" type="button" class="secondary-button">立即刷新</button></div>
+          <section class="token-summary" aria-label="Token 消耗汇总">
+            <article><span>总计</span><strong id="token-total">0</strong></article>
+            <article><span>输入</span><strong id="token-input">0</strong></article>
+            <article><span>输出</span><strong id="token-output">0</strong></article>
+            <article><span>缓存读取</span><strong id="token-cache-read">0</strong></article>
+            <article><span>缓存写入</span><strong id="token-cache-write">0</strong></article>
+          </section>
+          <div class="settings-heading token-section-heading"><p class="step">WORKFLOW TOTALS</p><h3>已完成工作流</h3></div>
+          <div id="token-workflow-list" class="token-workflow-list" aria-live="polite"></div>
+          <div class="settings-heading token-section-heading"><p class="step">NODE DETAILS</p><h3>成功节点明细</h3></div>
+          <div id="token-node-list" class="token-node-list" aria-live="polite"></div>
+          <p id="token-status" class="setting-status"></p>
+        </section>
+
         <div id="error-banner" class="error-banner" role="alert" hidden></div>
       </main>
       <aside class="module-rail" aria-label="角色卡功能区">
@@ -262,6 +282,6 @@
         <p id="handoff-description">此页面对应的 Pi 会话已经结束。请使用最新打开的 Web RP 页面。</p>
       </div>
     </section>
-    <script type="module" src="/app.js?v=18"></script>
+    <script type="module" src="/app.js?v=20"></script>
   </body>
 </html>

@@ -407,6 +407,17 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
             variable_engine_count += 1
             if kind != "hybrid" or storage.get("contextSource") != "snapshot":
                 errors.append(f"{label} variables engine requires hybrid storage with snapshot context")
+            if module.get("surface") == "frontend":
+                view = loaded.get("viewFile")
+                regions = view.get("regions") if isinstance(view, dict) else None
+                if (
+                    not isinstance(regions, list)
+                    or len(regions) != 1
+                    or not isinstance(regions[0], dict)
+                    or regions[0].get("type") != "json"
+                    or regions[0].get("path") != "snapshot.data.state"
+                ):
+                    errors.append(f"{label} frontend variables engine must expose exactly one complete json region at snapshot.data.state")
         elif output_engine:
             if kind != "record-log" or storage.get("contextSource") != "records":
                 errors.append(f"{label} post-narrative-output engine requires record-log storage with records context")

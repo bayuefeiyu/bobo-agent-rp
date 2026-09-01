@@ -32,7 +32,9 @@ features/variables/
 
 Use hybrid storage with snapshot context and the `variables` storage engine. History records and the current snapshot contain complete state. The default initial file contains a complete state; each opening file is an object overlay. Arrays in an overlay replace arrays rather than merging by index.
 
-Unless the source card needs a deliberately authored presentation, use one declarative `json` region at `snapshot.data.state` in `view.json`. The shared frontend recursively presents its objects and arrays as nested key/value fields rather than raw JSON syntax, exposing the complete effective state without card-specific JavaScript.
+By default the native variable module is also the fixed frontend **variable inspector**. Its `view.json` contains one declarative `json` region at `snapshot.data.state`; the shared frontend recursively presents every object and array as nested key/value fields rather than raw JSON syntax. Keep it deliberately plain and complete for inspection and debugging.
+
+An authored status bar, HUD, or selective dashboard is a separate frontend module and never replaces or narrows the variable inspector. If the user explicitly cancels the inspector during conversion, set the variable module surface to `background`; its storage, updates, bindings, and retrieval continue unchanged, but it does not appear in Web.
 
 ## Runtime declaration
 
@@ -81,7 +83,7 @@ Variable changes occur after player-visible prose is saved. The update task rece
 
 The update tool supports idempotent `add`, `replace`, and `cancel` draft actions over `set`, `delta`, `merge`, `append`, and `remove` operations. Finalization applies the concentrated draft, runs hooks and Schema validation, and reports only the failing operation/path/current/attempted value and error. Correct operations remain in the pending draft; the Agent uses the already supplied complete state and authored rules to discover relationships and repair only failed operations. A successful update writes one complete snapshot bound to the AI message. No effective change writes no snapshot.
 
-The session's `workspace/public/turn/` directory is shared disposable workspace for all tasks and is cleared before each new player turn. An interrupted variable draft remains pending and blocks a new turn until resumed or completed; it is not effective state.
+The session's `workspace/public/turn/` directory is shared workspace for variable-update drafts and other current-turn tasks.
 
 ## History and direct edits
 

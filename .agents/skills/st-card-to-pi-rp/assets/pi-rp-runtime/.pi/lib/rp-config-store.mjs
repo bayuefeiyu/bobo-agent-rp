@@ -1,4 +1,6 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
 import { normalizeAgentProfile, normalizeModelProfile, normalizeRuntimePolicy } from "./rp-model-config.mjs";
@@ -20,11 +22,12 @@ async function readJson(path, fallback = undefined) {
   }
 }
 
-async function atomicJson(path, value) {
-  await mkdir(dirname(path), { recursive: true });
+async function atomicJson(path, value, { sensitive = false } = {}) {
+  await mkdir(dirname(path), { recursive: true, mode: sensitive ? 0o700 : undefined });
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: sensitive ? 0o600 : undefined });
   await rename(temporary, path);
+  if (sensitive && process.platform !== "win32") await chmod(path, 0o600);
 }
 
 function mergeDefined(base, override) {
@@ -52,19 +55,59 @@ function publicModel(profile) {
   return { ...safe, hasApiKey: Boolean(profile.apiKey) };
 }
 
-export function createRpConfigStore(rootDirectory, cardDirectory) {
+function systemCacheRoot() {
+  if (process.env.BOBO_AGENT_RP_CACHE_DIR?.trim()) return resolve(process.env.BOBO_AGENT_RP_CACHE_DIR.trim());
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) return resolve(process.env.LOCALAPPDATA, "bobo-agent-rp");
+  if (process.platform === "darwin") return resolve(homedir(), "Library", "Caches", "bobo-agent-rp");
+  return resolve(process.env.XDG_CACHE_HOME || resolve(homedir(), ".cache"), "bobo-agent-rp");
+}
+
+function projectCacheId(root) {
+  const identity = process.platform === "win32" ? root.toLowerCase() : root;
+  return createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 20);
+}
+
+function cleanSecretDocument(value) {
+  const models = value?.models && typeof value.models === "object" && !Array.isArray(value.models) ? value.models : {};
+  return { schemaVersion: 1, models };
+}
+
+export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null } = {}) {
   const root = resolve(rootDirectory);
   const card = resolve(cardDirectory);
+  const secretDirectory = resolve(secretCacheDirectory || systemCacheRoot(), "projects", projectCacheId(root));
   const paths = {
     root,
     card,
     models: resolve(root, "settings", "model-profiles.json"),
+    modelSecrets: resolve(secretDirectory, "model-secrets.json"),
     runtime: resolve(root, "settings", "workflow-runtime.json"),
     agents: resolve(root, "agents"),
     cardAgents: resolve(card, "agents"),
     workflows: resolve(root, "workflows"),
     cardWorkflows: resolve(card, "workflows"),
   };
+
+  async function modelDocuments({ migrate = false } = {}) {
+    const models = await readJson(paths.models, { schemaVersion: 1, profiles: [] });
+    if (!Array.isArray(models.profiles)) models.profiles = [];
+    const secrets = cleanSecretDocument(await readJson(paths.modelSecrets, { schemaVersion: 1, models: {} }));
+    let migrated = false;
+    models.profiles = models.profiles.map(profile => {
+      if (!profile || typeof profile !== "object" || Array.isArray(profile)) return profile;
+      const { apiKey, ...safe } = profile;
+      if (typeof apiKey === "string" && apiKey.trim() && typeof profile.id === "string") {
+        secrets.models[profile.id] = { ...(secrets.models[profile.id] || {}), apiKey: apiKey.trim() };
+      }
+      if ("apiKey" in profile) migrated = true;
+      return safe;
+    });
+    if (migrate && migrated) {
+      await atomicJson(paths.modelSecrets, secrets, { sensitive: true });
+      await atomicJson(paths.models, models);
+    }
+    return { models, secrets };
+  }
 
   return {
     paths,
@@ -76,7 +119,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory) {
         mkdir(paths.cardWorkflows, { recursive: true }),
         mkdir(dirname(paths.models), { recursive: true }),
       ]);
-      const models = await readJson(paths.models, { schemaVersion: 1, profiles: [] });
+      const { models } = await modelDocuments({ migrate: true });
       const runtime = await readJson(paths.runtime, normalizeRuntimePolicy());
       await atomicJson(paths.models, models);
       await atomicJson(paths.runtime, normalizeRuntimePolicy(runtime));
@@ -90,35 +133,40 @@ export function createRpConfigStore(rootDirectory, cardDirectory) {
       return policy;
     },
     async listModels({ includeSecrets = false } = {}) {
-      const value = await readJson(paths.models, { schemaVersion: 1, profiles: [] });
-      const profiles = Array.isArray(value.profiles) ? value.profiles.map(normalizeModelProfile) : [];
+      const { models: value, secrets } = await modelDocuments({ migrate: true });
+      const profiles = value.profiles.map(normalizeModelProfile);
       return profiles.map(profile => {
         const source = value.profiles.find(item => item.id === profile.id) || {};
-        const combined = { ...profile, apiKey: typeof source.apiKey === "string" ? source.apiKey : "", baseUrl: typeof source.baseUrl === "string" ? source.baseUrl : "" };
+        const apiKey = typeof secrets.models[profile.id]?.apiKey === "string" ? secrets.models[profile.id].apiKey : "";
+        const combined = { ...profile, apiKey, baseUrl: typeof source.baseUrl === "string" ? source.baseUrl : "" };
         return includeSecrets ? combined : publicModel(combined);
       });
     },
     async saveModel(value) {
       const profile = normalizeModelProfile(value);
-      const document = await readJson(paths.models, { schemaVersion: 1, profiles: [] });
-      const previous = document.profiles.find(item => item.id === profile.id);
+      const { models: document, secrets } = await modelDocuments({ migrate: true });
       const saved = {
         ...profile,
         baseUrl: typeof value.baseUrl === "string" ? value.baseUrl.trim().replace(/\/$/, "") : "",
-        apiKey: typeof value.apiKey === "string" && value.apiKey.trim() ? value.apiKey.trim() : previous?.apiKey || "",
       };
+      if (typeof value.apiKey === "string" && value.apiKey.trim()) {
+        secrets.models[profile.id] = { ...(secrets.models[profile.id] || {}), apiKey: value.apiKey.trim() };
+      }
       const index = document.profiles.findIndex(item => item.id === profile.id);
       if (index === -1) document.profiles.push(saved);
       else document.profiles[index] = saved;
+      await atomicJson(paths.modelSecrets, secrets, { sensitive: true });
       await atomicJson(paths.models, document);
-      return publicModel(saved);
+      return publicModel({ ...saved, apiKey: secrets.models[profile.id]?.apiKey || "" });
     },
     async removeModel(modelId) {
       assertId(modelId, "modelId");
-      const document = await readJson(paths.models, { schemaVersion: 1, profiles: [] });
+      const { models: document, secrets } = await modelDocuments({ migrate: true });
       const before = document.profiles.length;
       document.profiles = document.profiles.filter(item => item.id !== modelId);
       if (before === document.profiles.length) throw new Error(`Unknown model profile: ${modelId}`);
+      delete secrets.models[modelId];
+      await atomicJson(paths.modelSecrets, secrets, { sensitive: true });
       await atomicJson(paths.models, document);
     },
     async listAgents() {

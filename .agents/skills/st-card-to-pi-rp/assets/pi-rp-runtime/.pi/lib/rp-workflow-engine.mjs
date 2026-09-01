@@ -23,13 +23,14 @@ function modelLimit(models, modelId) {
 }
 
 export class RpWorkflowEngine {
-  constructor({ executor, resolveAgent, resolveModel, policy = {}, onChange = async () => {}, nodeHistory = () => null }) {
+  constructor({ executor, resolveAgent, resolveModel, policy = {}, onChange = async () => {}, onNodeComplete = async () => null, nodeHistory = () => null }) {
     if (typeof executor !== "function") throw new Error("RpWorkflowEngine requires an executor.");
     this.executor = executor;
     this.resolveAgent = resolveAgent || (() => null);
     this.resolveModel = resolveModel || (() => null);
     this.policy = normalizeRuntimePolicy(policy);
     this.onChange = onChange;
+    this.onNodeComplete = onNodeComplete;
     this.nodeHistory = nodeHistory;
     this.runs = new Map();
     this.instances = new Map();
@@ -190,6 +191,21 @@ export class RpWorkflowEngine {
         const result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding });
         if (entry.stopped || entry.run.status === "cancelled") return;
         completeWorkflowNode(entry.workflow, entry.run, node.id, result || {});
+        try {
+          entry.run.nodes[node.id].processRecord = await this.onNodeComplete({
+            workflow: entry.workflow,
+            run: entry.run,
+            node,
+            agent,
+            binding,
+            result: result || {},
+          });
+        } catch (error) {
+          entry.run.nodes[node.id].processRecord = {
+            available: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
       } catch (error) {
         if (entry.stopped || entry.run.status === "cancelled") return;
         const state = failWorkflowNode(entry.workflow, entry.run, node.id, error);

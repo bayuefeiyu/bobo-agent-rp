@@ -45,6 +45,8 @@ test("card-local server only transports view state and player input", async () =
   let avatarMimeType = null;
   let savedModel = null;
   let workflowPolicy = { schemaVersion: 1, maxConcurrency: 10, modelFailure: { silentFallback: false, defaultFallbackModelId: null } };
+  let openedModuleDocument = null;
+  let openedProcessRecord = null;
   const bridge = {
     getState: async () => ({ openingId, playerName, messages, busy: false }),
     getSettings: async () => ({
@@ -58,6 +60,10 @@ test("card-local server only transports view state and player input", async () =
         available: Boolean(openingId), view: { schemaVersion: 1, regions: [] }, data: openingId ? { memories: [] } : null,
       }],
     }),
+    openFeatureModuleDocument: async (moduleId, target) => {
+      openedModuleDocument = { moduleId, target };
+      return { opened: true, moduleId, target, path: `sessions/test/${moduleId}/${target}.json` };
+    },
     listModels: async () => ({ current: { id: "pi:current", name: "Current", virtual: true }, profiles: savedModel ? [savedModel] : [] }),
     saveModel: async model => { savedModel = { ...model, hasApiKey: Boolean(model.apiKey) }; delete savedModel.apiKey; return savedModel; },
     discoverModels: async () => ({ models: ["test-model"] }),
@@ -68,6 +74,10 @@ test("card-local server only transports view state and player input", async () =
     restoreAgent: async agentId => ({ effective: { id: agentId }, overridden: false }),
     listWorkflows: async () => ({ activeWorkflowId: "standard", workflows: [{ id: "standard", title: "Standard", kind: "foreground", nodes: [] }] }),
     listWorkflowRuns: async () => ({ runs: [] }),
+    openWorkflowNodeProcessRecord: async (runId, nodeId) => {
+      openedProcessRecord = { runId, nodeId };
+      return { opened: true, path: `workflow/process-records/${runId}/${nodeId}.md` };
+    },
     getWorkflowPolicy: async () => workflowPolicy,
     saveWorkflowPolicy: async value => { workflowPolicy = value; return value; },
     activateWorkflow: async workflowId => ({ activated: workflowId }),
@@ -163,6 +173,9 @@ test("card-local server only transports view state and player input", async () =
     const initialModules = await fetch(`${base}/api/modules`).then(response => response.json());
     assert.equal(initialModules.modules[0].id, "character-memory");
     assert.equal(initialModules.modules[0].available, false);
+    const openedDefinition = await fetch(`${base}/api/modules/character-memory/open`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target: "definition" }) }).then(response => response.json());
+    assert.equal(openedDefinition.opened, true);
+    assert.deepEqual(openedModuleDocument, { moduleId: "character-memory", target: "definition" });
 
     const modelSaveResponse = await fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
     assert.equal(modelSaveResponse.status, 200);
@@ -172,6 +185,9 @@ test("card-local server only transports view state and player input", async () =
     assert.equal((await fetch(`${base}/api/agents`).then(response => response.json())).agents[0].effective.id, "writer");
     assert.equal((await fetch(`${base}/api/workflows`).then(response => response.json())).activeWorkflowId, "standard");
     assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
+    const openedProcess = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
+    assert.equal(openedProcess.opened, true);
+    assert.deepEqual(openedProcessRecord, { runId: "run-1", nodeId: "story" });
     const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) }).then(response => response.json());
     assert.equal(savedPolicy.maxConcurrency, 8);
 

@@ -19,6 +19,10 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.doesNotMatch(page, /data-module-id="character-memory"/);
   assert.match(app, /function toggleCardModule/);
   assert.match(app, /function renderFeatureModules/);
+  assert.match(app, /function openFeatureModuleDocument/);
+  assert.match(app, /修改数据/);
+  assert.match(app, /修改模块/);
+  assert.match(styles, /\.module-file-actions/);
   assert.match(app, /region\.type === "json"/);
   assert.match(styles, /\.module-json-fields/);
   assert.match(styles, /\.module-json-pair/);
@@ -32,6 +36,16 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /expandedFeatureModules: new Set\(\)/);
   assert.match(app, /workflowPanelHasFocus/);
   assert.match(app, /workflowRenderSignature/);
+  assert.match(app, /打开过程记录/);
+  assert.match(app, /process-record\/open/);
+  assert.match(page, /id="panel-tokens"/);
+  assert.match(page, /id="token-node-list"/);
+  assert.match(page, /id="token-workflow-list"/);
+  assert.match(app, /function renderTokenUsage/);
+  assert.match(app, /本次工作流总消耗/);
+  assert.match(app, /run\.usageComplete === false/);
+  assert.match(app, /node\.usage \?\? attempt\?\.usage/);
+  assert.match(styles, /\.token-summary/);
   assert.match(app, /继承工作流默认 Agent（\$\{agentLabel/);
   assert.match(app, /继承\$\{inherited\.source\}（\$\{modelLabel/);
   assert.match(app, /function beginMessageEdit/);

@@ -5,11 +5,13 @@
 !/.gitignore
 !/README.md
 !/PI-PLAY-CONTEXT-ISOLATION.md
+!/PROJECT_STATUS.md
 
 /.agents/*
 !/.agents/skills/
 /.agents/skills/*
 !/.agents/skills/st-card-to-pi-rp/
+!/.agents/skills/codex-delegate-bounded-tasks/
 
 **/__pycache__/
 **/*.py[cod]
