@@ -58,7 +58,7 @@ test("prefers a card workflow copy over the global template", async () => {
   const store = testStore(root);
   await store.ensure();
   const workflow = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "standard",
     kind: "foreground",
     title: "Global",

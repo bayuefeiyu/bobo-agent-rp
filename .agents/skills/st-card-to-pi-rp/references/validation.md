@@ -1,105 +1,66 @@
-# Conversion Validation
+# Conversion validation
 
-Validation must protect both structural usability and the author's voice. Passing the script is necessary but not sufficient.
+Validation protects structural usability, data ownership, workflow safety, and source fidelity. Passing the script is necessary but not sufficient.
 
 ## Structural validation
 
 Run:
 
 ```bash
-python scripts/validate_card_pack.py <path-to-card-pack>
-```
-
-From this conversion repository root, the concrete form is:
-
-```bash
 python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
 ```
 
-The script checks the manifest, message retrieval policy, deterministic context-processor definitions/dependencies/fragments, module v3 definitions, storage v2 contracts and engines, initial common record envelopes, native variable configs/bindings/hooks, schemas, module-skill frontmatter, required files, opening IDs, path safety, provenance statuses, transform labels, and target-file existence.
+The validator checks the manifest, safe paths, openings, provenance, context processors, module v4 definitions, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, workflow v2 nodes/outputs/access/commits, frontend declarations, and referenced files.
 
-## Coverage audit
+## Coverage and fidelity
 
-Confirm that every non-empty source unit has exactly one explicit disposition:
+Every non-empty source unit has one explicit disposition: mapped, metadata-only, unsupported, unresolved, or an identified duplicate. Review every non-verbatim transform:
 
-- Mapped into runtime content.
-- Metadata-only and intentionally excluded from RP.
-- Unsupported and archived.
-- Unresolved and preserved for review.
-- Duplicate with an identified authoritative occurrence.
+- `format-only` keeps wording and meaning;
+- split/merged passages retain their original relationships and uncertainty;
+- every summary anchor is supported and points to retained detail;
+- bridges add no canon and are removed when headings suffice;
+- generated runtime text describes behavior, not invented story facts.
 
-No source passage may disappear because it was difficult to classify or seemed unimportant.
+Preserve unusual diction, pacing, motifs, biased narration, deliberate contradictions, and information boundaries. Do not promote a character belief to objective truth or leak opening-specific state.
 
-## Fidelity audit
+## Unified-data audit
 
-Review every target passage not copied verbatim.
+Apply the data-design Skill's complete [validation contract](../../design-pi-rp-data/references/validation.md) to every module. In conversion, additionally verify that every source variable, memory, secret, rumor, auxiliary output, and other persistent feature maps to the common protocol without inventing a separate storage, draft, catalog, or publication mechanism.
 
-- `format-only`: verify that wording and meaning did not change.
-- `split`: read the pieces in their new context and verify that omitted surrounding text did not alter meaning.
-- `merged`: verify that proximity does not falsely imply a relationship or chronology.
-- `summary-anchor`: verify every claim against its source and ensure the authoritative detail still exists.
-- `bridge`: remove it if headings or ordering already make the relationship clear.
-- `generated-runtime`: verify it is generic behavior, not invented card canon.
+## Workflow audit
 
-Preserve unusual diction, repeated motifs, emotional pacing, uncertainty, biased narration, and deliberate contradictions. Do not score polished prose as higher fidelity merely because it is easier to read.
+Validate the DAG, conditions, joins, retries, triggers, instance policy, blocking behavior, and exactly one foreground narrative. For each node, verify:
 
-The report must enumerate all generated anchors and bridges. There is no universal acceptable percentage, but every rewrite or expansion requires a concrete necessity; stylistic improvement alone is not sufficient.
+- its prompt assumptions match declared context and upstream logical outputs;
+- module access names exact collections, capabilities, views, and budgets;
+- change files are declared outputs with format `unified-change-batch`;
+- `dataCommit.onNodeEnd` names exact outputs/paths and runs before downstream nodes;
+- concurrent nodes do not write the same authoritative collection incompatibly;
+- scoped artifacts and retention match every later consumer;
+- process records remain user-only.
 
-## Semantic placement audit
-
-Check that:
-
-- Foundational facts needed in ordinary turns are present or anchored in fixed context.
-- Detailed systems are in domain modules.
-- Named objects are in entity dossiers.
-- Primary-character material is fixed; supporting-character material is discoverable on demand.
-- Writing rules are not treated as world facts.
-- Character beliefs are not promoted to objective truth.
-- Opening-specific state has not leaked into other openings or global canon.
-- Examples have not been treated as historical events without evidence.
-- Feature modules exist only for genuine persistent structured state or card-specific functions; every module-specific prompt is owned by its module skill and not duplicated in shared fixed context.
-- Every source `output-module` has a frontend feature module using the post-narrative output engine. Its content is absent from the main chat-body contract, its activation and formatting prompts live in the module skill, and emitted records bind to the corresponding assistant message.
-- Every module declares the strict version 3 field set, storage version 2 kind/engine, common record/data schema, retrieval policy, view, and skill. `contextOrder` is chosen by the converter or card author and is never derived from browser preferences; `displayOrder` affects only visible frontend modules.
-- A native variable module preserves authored structure, defaults, opening overlays, constraints, relationships, update meanings, and prompt references without retaining legacy MVU output syntax. Narrative context contains only authored fixed references and exact on-demand projections; the post-narrative update task receives every effective variable. When frontend, its generic inspector contains a complete `snapshot.data.state` JSON region; authored status bars remain separate modules. Background is accepted only when the user cancelled the inspector.
-- Code retrieval defaults are all messages and latest one module record. Custom selectors are deterministic and valid. Agent append/override is used only when semantic selection is actually needed, and each module skill explains `select`, `success_empty`, and `not_triggered` behavior.
-- Background modules are omitted from the Web UI, remain fully persisted, and follow every frontend module in Agent context.
-- Every source EJS block has a lifecycle and behavior disposition. Native context processors declare exact dependencies, select only declared authoritative fragments, contain no persistent update behavior, preserve authored processor order, and never hide unsupported ST APIs behind a claim of compatibility.
-
-## Reachability audit
-
-Starting only from `core/knowledge-map.md`, verify that every on-demand file is discoverable in at most two reads.
-
-- Important concepts should have direct anchors.
-- Large collections should have category indexes.
-- Aliases should cover card-specific terms and alternative names actually present in source.
-- `read_when` guidance should describe narrative relevance, not ST activation settings.
-
-Do not list every low-value detail directly in fixed context when a category index keeps it reachable.
+Across workflows, build a trigger and ownership map. Detect cycles, duplicate starts, unstable dedupe keys, incompatible concurrent writes, and conflicting assumptions about record status or schema.
 
 ## Runtime audit
 
-Simulate at least:
+Simulate the default and one alternate opening, ordinary narration, on-demand lore, and information-boundary temptations. For each module/type, test a relevant and irrelevant turn plus:
 
-- Starting the default opening.
-- Starting one alternate opening when present.
-- A normal character-focused turn requiring no extra lore.
-- A turn requiring one domain module.
-- A turn mentioning a specific entity dossier.
-- A turn that could tempt the Agent to use a narrator-only secret as character knowledge.
-- A turn that could tempt the Agent to decide the player's action or feelings.
-- For every declared feature module, one turn that should read or update it and one ordinary turn that should leave it untouched. Also verify that frontend modules default to `displayOrder`, system settings can hide and rearrange them without changing Agent context, background modules never appear in the Web endpoint or module-settings list, and Agent routing follows `contextOrder` across both surfaces.
-- For every post-narrative output module, test one emitted turn, one `not_triggered` turn, resume after interruption, absence from the main prose, Web rendering, and suffix deletion of its assistant-bound record. When variable and output modules coexist, verify output finalization occurs first and both use the same saved assistant binding.
-- One code-only turn, one successful `rp_context_query` turn for every Agent-enabled mode, one failed selector that uses code fallback, and one message-suffix deletion that removes every module record bound to the deleted IDs. Inspect the generated context receipt.
-- For a native variable module: fixed and exact-path references, default plus opening initialization, repeated draft calls, idempotent operation IDs, a locally invalid operation followed by Agent correction, hook/schema validation, one full snapshot bound to the AI message, interruption/resume, suffix deletion restoring the latest surviving snapshot, and historical text editing that deliberately leaves later records unchanged.
-- For every context processor: each branch boundary, empty selection where allowed, required and optional failure behavior, selected-fragment order, declared input isolation, and one context receipt containing the selected IDs.
+- indexed query, content query where declared, pagination/truncation, `rp` view, and custom view;
+- denied view/capability and a conservative-budget boundary;
+- create/update/revise/archive/restore as declared;
+- explicit submit and node-end fallback without duplicate commit;
+- atomic/grouped behavior, idempotent replay, revision conflict, and failure receipt;
+- frontend rendering based on customized code, background invisibility, and display ordering;
+- message-suffix pruning for bound data;
+- initial data and opening-specific initialization where authored.
 
-Judge preservation of facts, voice, motivation, information boundaries, and output rules. Do not require exact generated wording.
+For context processors, test each branch boundary, declared input isolation, known-fragment enforcement, and failure policy. Judge preservation of facts, voice, motivation, knowledge, and output separation rather than exact generated wording.
 
-## Failure severity
+## Severity
 
-- `error`: lost source content, invented canon, unsafe path, missing target, invalid opening, inaccessible on-demand file, or an unsupported executable behavior presented as successfully converted.
-- Treat an available source card image without a valid manifest cover, or an auxiliary output left only in ordinary Markdown/main prose, as an `error`.
-- `warning`: ambiguity, preserved contradiction, unknown macro, external dependency, unusually large fixed context, or generated anchor needing review.
+- `error`: lost source content, invented canon, unsafe/missing target, invalid contract, unauthorized disclosure/write, conflicting ownership, auxiliary output left in chat prose, or unsupported executable behavior claimed as converted.
+- `warning`: ambiguity, preserved contradiction, unknown macro, external dependency, unusually large context/query budget, or a generated anchor needing review.
 - `note`: intentional metadata exclusion, exact duplicate, or optional refinement.
 
-Do not claim completion while any `error` remains. Warnings may remain only when listed clearly in `conversion-report.md`.
+Do not claim completion while an error remains. List accepted warnings in `conversion-report.md`.

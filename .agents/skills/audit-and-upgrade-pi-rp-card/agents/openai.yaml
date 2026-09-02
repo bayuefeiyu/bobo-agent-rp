@@ -1,0 +1,6 @@
+interface:
+  display_name: "Audit and Upgrade Pi RP Card"
+  short_description: "逐项检查已转换角色卡并设计项目升级后的兼容适配方案"
+  default_prompt: "Use $audit-and-upgrade-pi-rp-card to inspect a converted Pi RP card and discuss each maintenance area with me before proposing changes."
+policy:
+  allow_implicit_invocation: false

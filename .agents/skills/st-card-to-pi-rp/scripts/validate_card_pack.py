@@ -127,11 +127,12 @@ def validate_context_processors(root: Path, values: Any, module_ids: set[str], e
         errors.append("context_processors must be an array")
         return
     processor_ids: set[str] = set()
+    global_query_signatures: dict[str, str] = {}
     fields = {
         "schemaVersion", "id", "description", "phase", "contextOrder", "entryFile",
         "dependencies", "fragments", "failure",
     }
-    dependency_fields = {"currentInput", "opening", "player", "messages", "variables", "modules", "settings"}
+    dependency_fields = {"currentInput", "opening", "player", "messages", "dataQueries", "settings"}
     for index, path in enumerate(values):
         label = f"context_processors[{index}]"
         require_file(root, path, label, errors)
@@ -144,8 +145,8 @@ def validate_context_processors(root: Path, values: Any, module_ids: set[str], e
         if set(processor) != fields:
             errors.append(f"{label} must contain exactly {sorted(fields)}")
         processor_id = processor.get("id")
-        if processor.get("schemaVersion") != 1:
-            errors.append(f"{label}.schemaVersion must be 1")
+        if processor.get("schemaVersion") != 2:
+            errors.append(f"{label}.schemaVersion must be 2")
         if not isinstance(processor_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", processor_id):
             errors.append(f"{label}.id is invalid")
         elif processor_id in processor_ids:
@@ -166,18 +167,33 @@ def validate_context_processors(root: Path, values: Any, module_ids: set[str], e
             for field in ("currentInput", "opening", "player", "settings"):
                 if not isinstance(dependencies.get(field), bool):
                     errors.append(f"{label}.dependencies.{field} must be boolean")
-            for field in ("messages", "variables"):
-                if dependencies.get(field) not in {"none", "all"}:
-                    errors.append(f"{label}.dependencies.{field} must be none or all")
-            modules = dependencies.get("modules")
-            if not isinstance(modules, list) or any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", item) for item in modules):
-                errors.append(f"{label}.dependencies.modules must contain safe module IDs")
-            elif len(set(modules)) != len(modules):
-                errors.append(f"{label}.dependencies.modules must not contain duplicates")
+            if dependencies.get("messages") not in {"none", "all"}:
+                errors.append(f"{label}.dependencies.messages must be none or all")
+            queries = dependencies.get("dataQueries")
+            if not isinstance(queries, list):
+                errors.append(f"{label}.dependencies.dataQueries must be an array")
             else:
-                missing = sorted(set(modules) - module_ids)
-                if missing:
-                    errors.append(f"{label}.dependencies.modules references unknown modules: {missing}")
+                query_ids: set[str] = set()
+                for query_index, query in enumerate(queries):
+                    query_label = f"{label}.dependencies.dataQueries[{query_index}]"
+                    if not isinstance(query, dict):
+                        errors.append(f"{query_label} must be an object")
+                        continue
+                    for field in ("id", "moduleId", "collectionId", "view"):
+                        if not isinstance(query.get(field), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", query[field]):
+                            errors.append(f"{query_label}.{field} is invalid")
+                    if query.get("id") in query_ids:
+                        errors.append(f"{query_label}.id is duplicated")
+                    elif isinstance(query.get("id"), str):
+                        query_ids.add(query["id"])
+                        signature = json.dumps(query, ensure_ascii=False, sort_keys=True)
+                        if query["id"] in global_query_signatures and global_query_signatures[query["id"]] != signature:
+                            errors.append(f"{query_label}.id conflicts with another processor query")
+                        global_query_signatures[query["id"]] = signature
+                    if isinstance(query.get("moduleId"), str) and query["moduleId"] not in module_ids:
+                        errors.append(f"{query_label}.moduleId references an unknown module")
+                    if "limit" in query and (isinstance(query["limit"], bool) or not isinstance(query["limit"], int) or query["limit"] < 1):
+                        errors.append(f"{query_label}.limit must be positive")
         fragments = processor.get("fragments")
         if not isinstance(fragments, list) or not fragments:
             errors.append(f"{label}.fragments must be a non-empty array")
@@ -204,11 +220,11 @@ def validate_retrieval_policy(value: Any, expected_source: str, label: str, erro
     if not isinstance(value, dict):
         errors.append(f"{label} must be a JSON object")
         return
-    required = {"schemaVersion", "source", "code", "agent", "catalog"}
+    required = {"schemaVersion", "source", "code", "agent"}
     if set(value) != required:
         errors.append(f"{label} must contain exactly {sorted(required)}")
-    if value.get("schemaVersion") != 1 or value.get("source") != expected_source:
-        errors.append(f"{label} must use schemaVersion 1 and source {expected_source!r}")
+    if value.get("schemaVersion") != 2 or value.get("source") != expected_source:
+        errors.append(f"{label} must use schemaVersion 2 and source {expected_source!r}")
     code = value.get("code")
     if not isinstance(code, dict) or code.get("profile") not in {"default", "custom"}:
         errors.append(f"{label}.code.profile must be default or custom")
@@ -241,11 +257,6 @@ def validate_retrieval_policy(value: Any, expected_source: str, label: str, erro
             errors.append(f"{label}.agent.onNotTriggered must be code or empty")
         if isinstance(agent.get("maxRecords"), bool) or not isinstance(agent.get("maxRecords"), int) or agent["maxRecords"] < 1:
             errors.append(f"{label}.agent.maxRecords must be a positive integer")
-    catalog = value.get("catalog")
-    if not isinstance(catalog, dict) or catalog.get("codeProfile") != "default" or catalog.get("agentMode") not in {"disabled", "append", "override"}:
-        errors.append(f"{label}.catalog has invalid codeProfile or agentMode")
-    elif set(catalog) != {"codeProfile", "agentMode"}:
-        errors.append(f"{label}.catalog must contain exactly codeProfile and agentMode")
 
 
 def validate_record(value: Any, expected_source: str, label: str, errors: list[str]) -> None:
@@ -273,260 +284,188 @@ def validate_record(value: Any, expected_source: str, label: str, errors: list[s
         errors.append(f"{label}.data must be an object")
 
 
+def validate_data_record_v2(value: Any, module_id: str, collection_id: str, record_type: str, label: str, errors: list[str]) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be a record object")
+        return
+    required = {"protocolVersion", "id", "moduleId", "collectionId", "recordType", "dataSchemaVersion", "sequence", "revision", "status", "createdAt", "updatedAt", "binding", "data", "note", "provenance"}
+    if set(value) != required:
+        errors.append(f"{label} must use the exact record-envelope v2 field set")
+    if value.get("protocolVersion") != 2 or value.get("moduleId") != module_id or value.get("collectionId") != collection_id or value.get("recordType") != record_type:
+        errors.append(f"{label} has an invalid protocol/module/collection/recordType binding")
+    if not isinstance(value.get("data"), dict):
+        errors.append(f"{label}.data must be an object")
+
+
 def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None:
     if not isinstance(values, list):
         errors.append("feature_modules must be an array")
         return
-    required_fields = {
-        "schemaVersion",
-        "id",
-        "title",
-        "description",
-        "surface",
-        "contextOrder",
-        "displayOrder",
-        "storageFile",
-        "viewFile",
-        "skillFile",
-    }
+    safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     ids: set[str] = set()
-    variable_engine_count = 0
-    for index, value in enumerate(values):
+    module_fields = {"schemaVersion", "id", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "frontendViewFile", "skillFile"}
+    index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
+    index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
+    for index, path_value in enumerate(values):
         label = f"feature_modules[{index}]"
-        if not safe_relative_path(value):
-            errors.append(f"{label} is not a safe relative POSIX path: {value!r}")
+        if not safe_relative_path(path_value):
+            errors.append(f"{label} must be a safe relative path")
             continue
-        module_path = root / value
-        module = load_json(module_path, errors)
+        module_root = (root / path_value).parent
+        module = load_json(root / path_value, errors)
         if not isinstance(module, dict):
-            errors.append(f"{label} must reference a JSON object")
             continue
-        missing_fields = sorted(required_fields - module.keys())
-        unexpected_fields = sorted(module.keys() - required_fields)
-        if missing_fields:
-            errors.append(f"{label} is missing required fields: {missing_fields}")
-        if unexpected_fields:
-            errors.append(f"{label} contains unexpected fields: {unexpected_fields}")
-        if module.get("schemaVersion") != 3:
-            errors.append(f"{label} schemaVersion must be 3")
+        if set(module) != module_fields or module.get("schemaVersion") != 4:
+            errors.append(f"{label} must use the exact module v4 field set")
+            continue
         module_id = module.get("id")
-        if not isinstance(module_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", module_id):
-            errors.append(f"{label}.id must be filesystem-safe")
-        elif module_id in ids:
+        if not isinstance(module_id, str) or not safe_id.fullmatch(module_id):
+            errors.append(f"{label}.id is invalid")
+            continue
+        if module_id in ids:
             errors.append(f"duplicate feature module id: {module_id}")
-        else:
-            ids.add(module_id)
-
-        if not isinstance(module.get("title"), str) or not module["title"].strip():
-            errors.append(f"{label}.title must be a non-empty string")
-        if not isinstance(module.get("description"), str):
-            errors.append(f"{label}.description must be a string")
+        ids.add(module_id)
+        if module.get("basedOn") is not None and (not isinstance(module.get("basedOn"), str) or not safe_id.fullmatch(module["basedOn"])):
+            errors.append(f"{label}.basedOn must be null or a safe module ID")
         if module.get("surface") not in {"frontend", "background"}:
-            errors.append(f"{label}.surface must be frontend or background")
-        for field in ("contextOrder", "displayOrder"):
-            value_order = module.get(field)
-            if isinstance(value_order, bool) or not isinstance(value_order, int):
-                errors.append(f"{label}.{field} must be an integer")
-
-        module_root = module_path.parent
-        loaded: dict[str, Any] = {}
-        for field in ("storageFile", "viewFile", "skillFile"):
-            child = module.get(field)
-            if not safe_relative_path(child):
-                errors.append(f"{label}.{field} must be a safe relative path")
+            errors.append(f"{label}.surface is invalid")
+        if not isinstance(module.get("contextOrder"), int) or not isinstance(module.get("displayOrder"), int):
+            errors.append(f"{label} contextOrder and displayOrder must be integers")
+        for field in ("dataContractFile", "frontendViewFile", "skillFile"):
+            require_file(module_root, module.get(field), f"{label}.{field}", errors)
+        view = load_json(module_root / str(module.get("frontendViewFile", "")), errors)
+        if not isinstance(view, dict) or view.get("schemaVersion") != 1 or not isinstance(view.get("regions"), list):
+            errors.append(f"{label}.frontendViewFile must contain schemaVersion 1 and a regions array")
+        contract = load_json(module_root / str(module.get("dataContractFile", "")), errors)
+        if not isinstance(contract, dict) or contract.get("schemaVersion") != 1 or contract.get("moduleId") != module_id or not isinstance(contract.get("collections"), dict) or not contract["collections"]:
+            errors.append(f"{label}.dataContractFile must be a data contract v1 for {module_id}")
+            continue
+        collections = contract["collections"]
+        for collection_id, collection in collections.items():
+            collection_label = f"{label}.collections.{collection_id}"
+            if not isinstance(collection_id, str) or not safe_id.fullmatch(collection_id) or not isinstance(collection, dict):
+                errors.append(f"{collection_label} is invalid")
                 continue
-            child_path = module_root / child
-            if not child_path.is_file():
-                errors.append(f"{label}.{field} does not exist: {child}")
+            storage = collection.get("storage")
+            if not isinstance(storage, dict) or storage.get("kind") not in {"record-log", "snapshot", "hybrid"}:
+                errors.append(f"{collection_label}.storage is invalid")
                 continue
-            if field in {"storageFile", "viewFile"}:
-                value_data = load_json(child_path, errors)
-                loaded[field] = value_data
-                if field == "viewFile" and (
-                    not isinstance(value_data, dict)
-                    or value_data.get("schemaVersion") != 1
-                    or not isinstance(value_data.get("regions"), list)
-                ):
-                    errors.append(f"{label}.viewFile must contain schemaVersion 1 and a regions array")
-                elif field == "viewFile":
-                    allowed_region_types = {"text", "markdown", "key-value", "list", "table", "json"}
-                    for region_index, region in enumerate(value_data["regions"]):
-                        region_label = f"{label}.viewFile.regions[{region_index}]"
-                        if not isinstance(region, dict) or region.get("type") not in allowed_region_types:
-                            errors.append(f"{region_label}.type must be one of {sorted(allowed_region_types)}")
+            partition = storage.get("partition", {"mode": "single"})
+            if not isinstance(partition, dict) or partition.get("mode", "single") not in {"single", "index", "turn-range"}:
+                errors.append(f"{collection_label}.storage.partition is invalid")
+            record_types = collection.get("recordTypes")
+            if not isinstance(record_types, dict) or not record_types:
+                errors.append(f"{collection_label}.recordTypes must be a non-empty object")
+                continue
+            for record_type, definition in record_types.items():
+                type_label = f"{collection_label}.recordTypes.{record_type}"
+                if not isinstance(record_type, str) or not safe_id.fullmatch(record_type) or not isinstance(definition, dict):
+                    errors.append(f"{type_label} is invalid")
+                    continue
+                if not isinstance(definition.get("dataSchemaVersion"), int) or definition["dataSchemaVersion"] < 1:
+                    errors.append(f"{type_label}.dataSchemaVersion must be positive")
+                identity = definition.get("identity")
+                if identity is not None:
+                    if not isinstance(identity, dict) or set(identity) - {"namePath", "aliasesPath"} or "namePath" not in identity:
+                        errors.append(f"{type_label}.identity is invalid")
+                    elif any(not isinstance(path, str) or not path.startswith("/data/") for path in identity.values()):
+                        errors.append(f"{type_label}.identity paths must be below /data/")
+                if definition.get("schemaFile") is not None:
+                    require_file(module_root, definition.get("schemaFile"), f"{type_label}.schemaFile", errors)
+                    if safe_relative_path(definition.get("schemaFile")) and (module_root / definition["schemaFile"]).is_file():
+                        schema = load_json(module_root / definition["schemaFile"], errors)
+                        if not isinstance(schema, dict):
+                            errors.append(f"{type_label}.schemaFile must contain a JSON Schema object")
+                indexes = definition.get("indexes", {})
+                if not isinstance(indexes, dict):
+                    errors.append(f"{type_label}.indexes must be an object")
+                    indexes = {}
+                for index_id, spec in indexes.items():
+                    if not isinstance(spec, dict) or not isinstance(spec.get("path"), str) or not spec["path"].startswith("/data/") or spec.get("type") not in index_types:
+                        errors.append(f"{type_label}.indexes.{index_id} is invalid")
+                    elif any(operator not in index_operators for operator in spec.get("operators", ["eq"])):
+                        errors.append(f"{type_label}.indexes.{index_id}.operators is invalid")
+                views = definition.get("views", {})
+                if not isinstance(views, dict):
+                    errors.append(f"{type_label}.views must be an object")
+                else:
+                    for view_id, spec in views.items():
+                        if not isinstance(spec, dict) or spec.get("format", "object") not in {"text", "object"} or not isinstance(spec.get("fields"), list) or not spec["fields"]:
+                            errors.append(f"{type_label}.views.{view_id} is invalid")
+                actions = definition.get("actions", [])
+                if not isinstance(actions, list) or any(not isinstance(action, str) or not safe_id.fullmatch(action) for action in actions):
+                    errors.append(f"{type_label}.actions must contain safe action IDs")
+                    actions = []
+                processors = definition.get("processors", {})
+                if not isinstance(processors, dict):
+                    errors.append(f"{type_label}.processors must be an object")
+                else:
+                    for action, processor in processors.items():
+                        if action not in actions or not isinstance(processor, dict) or set(processor) != {"file", "export"}:
+                            errors.append(f"{type_label}.processors.{action} is invalid")
                             continue
-                        if region.get("path") is not None and not isinstance(region.get("path"), str):
-                            errors.append(f"{region_label}.path must be a string")
-                        if region.get("type") == "key-value" and not isinstance(region.get("fields"), list):
-                            errors.append(f"{region_label}.fields must be an array")
-                        if region.get("type") == "list" and not isinstance(region.get("item"), dict):
-                            errors.append(f"{region_label}.item must be an object")
-                        if region.get("type") == "table" and not isinstance(region.get("columns"), list):
-                            errors.append(f"{region_label}.columns must be an array")
-            else:
-                skill_text = child_path.read_text(encoding="utf-8-sig")
-                if not skill_text.strip():
-                    errors.append(f"{label}.{field} must not be empty")
-                elif not re.match(r"^---\r?\n[\s\S]*?^name:\s*\S+[\s\S]*?^description:\s*\S+[\s\S]*?^---", skill_text, re.MULTILINE):
-                    errors.append(f"{label}.{field} must be a skill with name and one-line description frontmatter")
+                        require_file(module_root, processor.get("file"), f"{type_label}.processors.{action}.file", errors)
+                        if not isinstance(processor.get("export"), str) or not safe_id.fullmatch(processor["export"]):
+                            errors.append(f"{type_label}.processors.{action}.export is invalid")
+                for initial_field in ("initialRecordsFile", "initialSnapshotFile"):
+                    initial_path = storage.get(initial_field)
+                    if initial_path is not None:
+                        require_file(module_root, initial_path, f"{collection_label}.storage.{initial_field}", errors)
+                initial_records = storage.get("initialRecordsFile")
+                if initial_records and safe_relative_path(initial_records) and (module_root / initial_records).is_file():
+                    values_to_check = load_json(module_root / initial_records, errors)
+                    if not isinstance(values_to_check, list):
+                        errors.append(f"{collection_label}.initialRecordsFile must contain an array")
+                    else:
+                        for record_index, record in enumerate(values_to_check):
+                            if isinstance(record, dict) and record.get("recordType") in record_types:
+                                validate_data_record_v2(record, module_id, collection_id, record["recordType"], f"{collection_label}.initialRecords[{record_index}]", errors)
+        capabilities = contract.get("capabilities", {})
+        if not isinstance(capabilities, dict):
+            errors.append(f"{label}.dataContractFile.capabilities must be an object")
+        else:
+            for capability_id, capability in capabilities.items():
+                if not isinstance(capability_id, str) or not safe_id.fullmatch(capability_id) or not isinstance(capability, dict):
+                    errors.append(f"{label}.capability {capability_id!r} is invalid")
+                    continue
+                unknown = set(capability.get("collections", [])) - set(collections)
+                if unknown:
+                    errors.append(f"{label}.capability {capability_id} references unknown collections: {sorted(unknown)}")
+                actions = capability.get("actions", [])
+                views = capability.get("views", [])
+                if not isinstance(actions, list) or not isinstance(views, list):
+                    errors.append(f"{label}.capability {capability_id} actions and views must be arrays")
+                    continue
+                for collection_id in capability.get("collections", []):
+                    collection = collections.get(collection_id, {})
+                    definitions = collection.get("recordTypes", {}).values() if isinstance(collection, dict) else []
+                    declared_actions = {action for definition in definitions if isinstance(definition, dict) for action in definition.get("actions", [])}
+                    type_definitions = [definition for definition in collection.get("recordTypes", {}).values() if isinstance(definition, dict)]
+                    invalid_actions = set(actions) - declared_actions - {"query"}
+                    invalid_views = {view for view in views if any(view not in definition.get("views", {}) for definition in type_definitions)}
+                    if invalid_actions:
+                        errors.append(f"{label}.capability {capability_id} has unsupported actions for {collection_id}: {sorted(invalid_actions)}")
+                    if invalid_views:
+                        errors.append(f"{label}.capability {capability_id} has undefined views for {collection_id}: {sorted(invalid_views)}")
 
-        storage = loaded.get("storageFile")
-        if not isinstance(storage, dict):
+
+def module_contract_map(root: Path) -> dict[str, dict[str, Any]]:
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) else []:
+        if not safe_relative_path(module_path):
             continue
-        storage_fields = {"schemaVersion", "kind", "contextSource", "records", "snapshot", "catalogFile", "retrievalPolicyFile", "engine"}
-        if set(storage) != storage_fields or storage.get("schemaVersion") != 2:
-            errors.append(f"{label}.storageFile must use the exact schemaVersion 2 field set")
+        module = load_json(root / module_path, [])
+        if not isinstance(module, dict) or not safe_relative_path(module.get("dataContractFile")):
             continue
-        kind = storage.get("kind")
-        if kind not in {"record-log", "snapshot", "hybrid"}:
-            errors.append(f"{label}.storageFile.kind is invalid")
-        if storage.get("contextSource") not in {"records", "snapshot"}:
-            errors.append(f"{label}.storageFile.contextSource is invalid")
-        requires_records = kind in {"record-log", "hybrid"}
-        requires_snapshot = kind in {"snapshot", "hybrid"}
-        if requires_records != isinstance(storage.get("records"), dict):
-            errors.append(f"{label}.storageFile.records does not match kind")
-        if requires_snapshot != isinstance(storage.get("snapshot"), dict):
-            errors.append(f"{label}.storageFile.snapshot does not match kind")
-        if storage.get("contextSource") == "records" and not isinstance(storage.get("records"), dict):
-            errors.append(f"{label}.storageFile cannot use unavailable records context")
-        if storage.get("contextSource") == "snapshot" and not isinstance(storage.get("snapshot"), dict):
-            errors.append(f"{label}.storageFile cannot use unavailable snapshot context")
-        engine = storage.get("engine")
-        variable_engine = (
-            isinstance(engine, dict)
-            and set(engine) == {"kind", "configFile"}
-            and engine.get("kind") == "variables"
-            and safe_relative_path(engine.get("configFile"))
-        )
-        output_engine = isinstance(engine, dict) and set(engine) == {"kind"} and engine.get("kind") == "post-narrative-output"
-        if engine is not None and not variable_engine and not output_engine:
-            errors.append(f"{label}.storageFile.engine must be null, a variables engine with a safe configFile, or a post-narrative-output engine")
-            engine = None
-        elif variable_engine:
-            variable_engine_count += 1
-            if kind != "hybrid" or storage.get("contextSource") != "snapshot":
-                errors.append(f"{label} variables engine requires hybrid storage with snapshot context")
-            if module.get("surface") == "frontend":
-                view = loaded.get("viewFile")
-                regions = view.get("regions") if isinstance(view, dict) else None
-                if (
-                    not isinstance(regions, list)
-                    or len(regions) != 1
-                    or not isinstance(regions[0], dict)
-                    or regions[0].get("type") != "json"
-                    or regions[0].get("path") != "snapshot.data.state"
-                ):
-                    errors.append(f"{label} frontend variables engine must expose exactly one complete json region at snapshot.data.state")
-        elif output_engine:
-            if kind != "record-log" or storage.get("contextSource") != "records":
-                errors.append(f"{label} post-narrative-output engine requires record-log storage with records context")
-            if module.get("surface") != "frontend":
-                errors.append(f"{label} post-narrative-output engine must use the frontend surface")
-        for stream_name in ("records", "snapshot"):
-            stream = storage.get(stream_name)
-            if not isinstance(stream, dict):
-                continue
-            if set(stream) != {"file", "initialFile", "schemaFile"}:
-                errors.append(f"{label}.storageFile.{stream_name} must contain file, initialFile, and schemaFile")
-                continue
-            stream_paths_are_safe = True
-            for field in ("file", "initialFile", "schemaFile"):
-                if not safe_relative_path(stream.get(field)):
-                    errors.append(f"{label}.storageFile.{stream_name}.{field} must be a safe relative path")
-                    stream_paths_are_safe = False
-            if not stream_paths_are_safe:
-                continue
-            initial_path = module_root / stream["initialFile"]
-            schema_path = module_root / stream["schemaFile"]
-            schema = load_json(schema_path, errors)
-            if not isinstance(schema, dict):
-                errors.append(f"{label}.{stream_name}.schemaFile must contain a JSON schema object")
-            elif output_engine and stream_name == "records":
-                properties = schema.get("properties")
-                if (
-                    schema.get("type") != "object"
-                    or schema.get("additionalProperties") is not False
-                    or schema.get("required") != ["content"]
-                    or not isinstance(properties, dict)
-                    or set(properties) != {"content"}
-                    or not isinstance(properties.get("content"), dict)
-                    or properties["content"].get("type") != "string"
-                ):
-                    errors.append(f"{label}.records.schemaFile for post-narrative-output must define exactly one required string content field and disallow additional properties")
-            initial = load_json(initial_path, errors)
-            source = f"module:{module_id}"
-            if stream_name == "records":
-                if not isinstance(initial, list):
-                    errors.append(f"{label}.records.initialFile must contain an array")
-                else:
-                    for record_index, record in enumerate(initial):
-                        validate_record(record, source, f"{label}.records.initialFile[{record_index}]", errors)
-            elif initial is not None:
-                validate_record(initial, source, f"{label}.snapshot.initialFile", errors)
-        for field in ("catalogFile", "retrievalPolicyFile"):
-            if not safe_relative_path(storage.get(field)):
-                errors.append(f"{label}.storageFile.{field} must be a safe relative path")
-        policy_path = module_root / storage.get("retrievalPolicyFile", "")
-        policy = load_json(policy_path, errors)
-        validate_retrieval_policy(policy, f"module:{module_id}", f"{label}.retrievalPolicyFile", errors)
-
-        if variable_engine:
-            config_path = module_root / engine["configFile"]
-            config = load_json(config_path, errors)
-            config_fields = {"schemaVersion", "schemaFile", "initial", "bindingsFile", "hooks", "context"}
-            if not isinstance(config, dict) or set(config) != config_fields or config.get("schemaVersion") != 1:
-                errors.append(f"{label}.variables config must use the exact schemaVersion 1 field set")
-                continue
-            for field in ("schemaFile", "bindingsFile"):
-                require_file(module_root, config.get(field), f"{label}.variables.{field}", errors)
-            initial = config.get("initial")
-            if not isinstance(initial, dict) or set(initial) != {"defaultFile", "openingFiles"}:
-                errors.append(f"{label}.variables.initial must contain defaultFile and openingFiles")
-            else:
-                require_file(module_root, initial.get("defaultFile"), f"{label}.variables.initial.defaultFile", errors)
-                opening_files = initial.get("openingFiles")
-                if not isinstance(opening_files, dict):
-                    errors.append(f"{label}.variables.initial.openingFiles must be an object")
-                else:
-                    for opening_id, opening_file in opening_files.items():
-                        if not isinstance(opening_id, str) or not opening_id:
-                            errors.append(f"{label}.variables.initial.openingFiles contains an invalid opening ID")
-                        require_file(module_root, opening_file, f"{label}.variables.initial.openingFiles[{opening_id!r}]", errors)
-            hooks = config.get("hooks")
-            if not isinstance(hooks, dict) or set(hooks) != {"normalizeFile", "afterUpdateFile"}:
-                errors.append(f"{label}.variables.hooks must contain normalizeFile and afterUpdateFile")
-            else:
-                for hook_name, hook_file in hooks.items():
-                    if hook_file is not None:
-                        require_file(module_root, hook_file, f"{label}.variables.hooks.{hook_name}", errors)
-            context = config.get("context")
-            if not isinstance(context, dict) or set(context) != {"alwaysForNarrative"} or not isinstance(context.get("alwaysForNarrative"), list) or any(not isinstance(item, str) for item in context.get("alwaysForNarrative", [])):
-                errors.append(f"{label}.variables.context must contain a string-array alwaysForNarrative")
-            bindings_path = module_root / config.get("bindingsFile", "")
-            bindings = load_json(bindings_path, errors) if bindings_path.is_file() else None
-            if not isinstance(bindings, dict) or set(bindings) != {"schemaVersion", "bindings"} or bindings.get("schemaVersion") != 1 or not isinstance(bindings.get("bindings"), dict):
-                errors.append(f"{label}.variables.bindingsFile must contain schemaVersion 1 and bindings")
-            else:
-                for binding_id, definition in bindings["bindings"].items():
-                    binding_label = f"{label}.variables.bindings[{binding_id!r}]"
-                    if not isinstance(binding_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", binding_id):
-                        errors.append(f"{binding_label} has an invalid ID")
-                    if not isinstance(definition, dict) or definition.get("shape") not in {"scalar", "object", "subtree"} or definition.get("missing") not in {"error", "omit", "empty"}:
-                        errors.append(f"{binding_label} has an invalid shape or missing policy")
-                        continue
-                    has_path = isinstance(definition.get("path"), str)
-                    has_paths = isinstance(definition.get("paths"), list) and all(isinstance(item, str) for item in definition["paths"])
-                    expected = {"shape", "missing", "path" if has_path else "paths"}
-                    if has_path == has_paths or set(definition) != expected:
-                        errors.append(f"{binding_label} must define exactly one of path or paths")
-                if isinstance(context, dict) and isinstance(context.get("alwaysForNarrative"), list):
-                    missing_bindings = sorted(set(context["alwaysForNarrative"]) - set(bindings["bindings"]))
-                    if missing_bindings:
-                        errors.append(f"{label}.variables.context references unknown bindings: {missing_bindings}")
-
-    if variable_engine_count > 1:
-        errors.append("a card may define only one variables storage engine")
+        contract = load_json((root / module_path).parent / module["dataContractFile"], [])
+        if isinstance(contract, dict) and isinstance(module.get("id"), str):
+            result[module["id"]] = contract
+    return result
 
 
 def validate_workflows(root: Path, errors: list[str]) -> set[str]:
@@ -536,15 +475,16 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     ids: set[str] = set()
     safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     allowed_kinds = {"foreground", "turn-background", "global-background"}
-    allowed_types = {"agent", "code", "narrative", "gate", "join", "module-output", "variable-update", "turn-finalize"}
+    allowed_types = {"agent", "code", "narrative", "gate", "join", "turn-finalize"}
+    contracts = module_contract_map(root)
     for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
         label = f"workflows/{directory.name}/workflow.json"
         workflow = load_json(directory / "workflow.json", errors)
         if not isinstance(workflow, dict):
             continue
         workflow_id = workflow.get("id")
-        if workflow.get("schemaVersion") != 1:
-            errors.append(f"{label}.schemaVersion must be 1")
+        if workflow.get("schemaVersion") != 2:
+            errors.append(f"{label}.schemaVersion must be 2")
         if not isinstance(workflow_id, str) or not safe_id.fullmatch(workflow_id):
             errors.append(f"{label}.id is invalid")
         elif workflow_id != directory.name:
@@ -577,6 +517,68 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             by_id[node_id] = node
             if node.get("type", "agent") not in allowed_types:
                 errors.append(f"{node_label}.type is invalid")
+            outputs = node.get("outputs", {})
+            if not isinstance(outputs, dict):
+                errors.append(f"{node_label}.outputs must be an object")
+                outputs = {}
+            for output_id, output in outputs.items():
+                if not isinstance(output_id, str) or not safe_id.fullmatch(output_id) or not isinstance(output, dict) or not safe_relative_path(output.get("path")):
+                    errors.append(f"{node_label}.outputs.{output_id} is invalid")
+                elif output.get("scope", "node") not in {"node", "workflow", "turn", "session", "public"}:
+                    errors.append(f"{node_label}.outputs.{output_id}.scope is invalid")
+                elif output.get("retain", "node") not in {"node", "run", "turn", "session", "permanent"}:
+                    errors.append(f"{node_label}.outputs.{output_id}.retain is invalid")
+            module_access = node.get("moduleAccess", [])
+            if not isinstance(module_access, list):
+                errors.append(f"{node_label}.moduleAccess must be an array")
+            else:
+                access_keys: set[tuple[str, str]] = set()
+                for access_index, access in enumerate(module_access):
+                    access_label = f"{node_label}.moduleAccess[{access_index}]"
+                    if not isinstance(access, dict):
+                        errors.append(f"{access_label} must be an object")
+                        continue
+                    module_id, collection_id = access.get("moduleId"), access.get("collectionId")
+                    if module_id not in contracts or collection_id not in contracts.get(module_id, {}).get("collections", {}):
+                        errors.append(f"{access_label} references an unknown module collection")
+                        continue
+                    key = (module_id, collection_id)
+                    if key in access_keys:
+                        errors.append(f"{node_label}.moduleAccess duplicates {module_id}/{collection_id}")
+                    access_keys.add(key)
+                    capabilities = access.get("capabilities", [])
+                    views = access.get("views", [])
+                    if not isinstance(capabilities, list) or not isinstance(views, list):
+                        errors.append(f"{access_label} capabilities and views must be arrays")
+                        continue
+                    contract_capabilities = contracts[module_id].get("capabilities", {})
+                    for capability_id in capabilities:
+                        capability = contract_capabilities.get(capability_id) if isinstance(contract_capabilities, dict) else None
+                        if not isinstance(capability, dict) or collection_id not in capability.get("collections", []):
+                            errors.append(f"{access_label} capability {capability_id!r} is unknown or does not cover the collection")
+                    allowed_views = {
+                        view
+                        for capability_id in capabilities
+                        for view in (contract_capabilities.get(capability_id, {}).get("views", []) if isinstance(contract_capabilities, dict) else [])
+                    }
+                    if any(view not in allowed_views for view in views):
+                        errors.append(f"{access_label}.views exceeds its capabilities")
+                    budget = access.get("queryBudget")
+                    if budget is not None and (not isinstance(budget, dict) or any(isinstance(budget.get(field), bool) or not isinstance(budget.get(field), int) or budget[field] < 1 for field in ("maxRecords", "maxCharacters"))):
+                        errors.append(f"{access_label}.queryBudget is invalid")
+            commit = node.get("dataCommit", {"onNodeEnd": []})
+            if not isinstance(commit, dict) or not isinstance(commit.get("onNodeEnd"), list):
+                errors.append(f"{node_label}.dataCommit.onNodeEnd must be an array")
+            else:
+                if "allowBestEffort" in commit and not isinstance(commit["allowBestEffort"], bool):
+                    errors.append(f"{node_label}.dataCommit.allowBestEffort must be a boolean")
+                for target in commit["onNodeEnd"]:
+                    if not isinstance(target, dict) or (("output" in target) == ("path" in target)):
+                        errors.append(f"{node_label}.dataCommit target must declare exactly one of output or path")
+                    elif "output" in target and target["output"] not in outputs:
+                        errors.append(f"{node_label}.dataCommit references unknown output {target['output']}")
+                    elif "output" in target and outputs[target["output"]].get("format") != "unified-change-batch":
+                        errors.append(f"{node_label}.dataCommit output {target['output']} must use unified-change-batch format")
         for node_id, node in by_id.items():
             dependencies = node.get("dependsOn", [])
             if not isinstance(dependencies, list) or any(item not in node_ids for item in dependencies):
@@ -599,6 +601,34 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
 
         for node_id in by_id:
             visit(node_id)
+
+        def ancestors_for(node_id: str) -> set[str]:
+            result: set[str] = set()
+            pending = list(by_id[node_id].get("dependsOn", []))
+            while pending:
+                dependency = pending.pop()
+                if dependency in result or dependency not in by_id:
+                    continue
+                result.add(dependency)
+                pending.extend(by_id[dependency].get("dependsOn", []))
+            return result
+
+        writers: dict[tuple[str, str], list[str]] = {}
+        read_actions = {"query", "get"}
+        for node_id, node in by_id.items():
+            for access in node.get("moduleAccess", []) if isinstance(node.get("moduleAccess", []), list) else []:
+                if not isinstance(access, dict):
+                    continue
+                contract = contracts.get(access.get("moduleId"), {})
+                capabilities = contract.get("capabilities", {}) if isinstance(contract, dict) else {}
+                actions = {action for capability_id in access.get("capabilities", []) for action in capabilities.get(capability_id, {}).get("actions", [])}
+                if actions - read_actions:
+                    writers.setdefault((access.get("moduleId"), access.get("collectionId")), []).append(node_id)
+        for owner, owner_nodes in writers.items():
+            for left_index, left in enumerate(owner_nodes):
+                for right in owner_nodes[left_index + 1:]:
+                    if left not in ancestors_for(right) and right not in ancestors_for(left):
+                        errors.append(f"{label} has unordered writers {left} and {right} for {owner[0]}/{owner[1]}")
         types = {node.get("type", "agent") for node in by_id.values()}
         narrative_count = sum(1 for node in by_id.values() if node.get("type", "agent") == "narrative")
         if kind == "foreground" and (narrative_count != 1 or "turn-finalize" not in types):
@@ -668,14 +698,12 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
         validate_retrieval_policy(context_policy, "messages", "context_policy", errors)
     context_skill_path = manifest.get("context_skill")
     context_agent = context_policy.get("agent") if isinstance(context_policy, dict) else None
-    context_catalog = context_policy.get("catalog") if isinstance(context_policy, dict) else None
     context_agent_enabled = (
         isinstance(context_agent, dict)
-        and isinstance(context_catalog, dict)
-        and (context_agent.get("mode") != "disabled" or context_catalog.get("agentMode") != "disabled")
+        and context_agent.get("mode") != "disabled"
     )
     if context_agent_enabled and context_skill_path is None:
-        errors.append("manifest context_skill is required when message Agent retrieval or catalog enrichment is enabled")
+        errors.append("manifest context_skill is required when Agent message retrieval is enabled")
     if context_skill_path is not None:
         require_file(root, context_skill_path, "context_skill", errors)
         if safe_relative_path(context_skill_path) and (root / context_skill_path).is_file():

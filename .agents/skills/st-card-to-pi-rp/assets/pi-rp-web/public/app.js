@@ -478,8 +478,8 @@ function renderFeatureModules(payload) {
     const openData = document.createElement("button");
     openData.type = "button";
     openData.className = "module-file-button";
-    openData.textContent = "修改数据";
-    openData.title = module.available ? "使用系统默认编辑器打开当前显示所读取的数据文件" : "选择开场白或聊天记录后才能打开会话数据";
+    openData.textContent = "查看数据";
+    openData.title = module.available ? "使用系统默认编辑器打开当前模块的只读汇总文档" : "选择开场白或聊天记录后才能查看会话数据";
     openData.disabled = !module.available;
     openData.addEventListener("click", () => openFeatureModuleDocument(module, "data", openData));
     const openDefinition = document.createElement("button");

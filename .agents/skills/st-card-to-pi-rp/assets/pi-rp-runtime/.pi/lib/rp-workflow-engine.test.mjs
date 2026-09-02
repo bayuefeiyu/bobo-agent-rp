@@ -4,7 +4,7 @@ import test from "node:test";
 import { RpWorkflowEngine } from "./rp-workflow-engine.mjs";
 
 const flow = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "parallel",
   kind: "foreground",
   nodes: [
@@ -50,7 +50,7 @@ test("stops for an explicit model choice after exhausted attempts", async () => 
 
 test("allows a user-selected model retry after automatic attempts are exhausted", async () => {
   let calls = 0;
-  const workflow = { schemaVersion: 1, id: "retryable", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const workflow = { schemaVersion: 2, id: "retryable", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
   const engine = new RpWorkflowEngine({ executor: async () => { calls += 1; if (calls <= 3) throw new Error("offline"); return { output: "ok" }; } });
   const started = await engine.start(workflow, { id: "retry-run" });
   await engine.wait(started.id);
@@ -58,4 +58,30 @@ test("allows a user-selected model retry after automatic attempts are exhausted"
   const completed = await engine.wait(started.id);
   assert.equal(completed.status, "completed");
   assert.equal(completed.nodes.task.attempts.length, 4);
+});
+
+test("runs node output registration and data commits before marking the node complete", async () => {
+  const order = [];
+  const workflow = { schemaVersion: 2, id: "commit-order", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const engine = new RpWorkflowEngine({
+    executor: async () => { order.push("execute"); return { output: "draft" }; },
+    beforeNodeComplete: async ({ result }) => { order.push("commit"); return result; },
+    onNodeComplete: async () => { order.push("complete"); return null; },
+  });
+  const started = await engine.start(workflow, { id: "commit-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(order, ["execute", "commit", "complete"]);
+});
+
+test("a failed node-end commit fails the node instead of releasing downstream work", async () => {
+  const workflow = { schemaVersion: 2, id: "commit-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }, { id: "after", type: "code", dependsOn: ["task"] }] };
+  const engine = new RpWorkflowEngine({
+    executor: async () => ({ output: "draft" }),
+    beforeNodeComplete: async () => { throw new Error("data commit failed"); },
+  });
+  const started = await engine.start(workflow, { id: "commit-failure-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "awaiting-model-choice");
+  assert.equal(completed.nodes.after.status, "pending");
 });

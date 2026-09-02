@@ -10,7 +10,7 @@ import {
 
 function definition(overrides = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "character-stage",
     description: "Select the authored character stage.",
     phase: "before-narrative",
@@ -21,8 +21,7 @@ function definition(overrides = {}) {
       opening: true,
       player: false,
       messages: "none",
-      variables: "all",
-      modules: ["quests"],
+      dataQueries: [{ id: "active-quests", moduleId: "quests", collectionId: "entries", view: "rp", limit: 10 }],
       settings: false,
     },
     fragments: [
@@ -50,18 +49,16 @@ test("exposes only declared dependencies through a frozen input", () => {
     openingId: "opening-00",
     player: { name: "Player", description: "hidden by declaration" },
     messages: [{ id: "message-1" }],
-    variables: { score: 30 },
-    modules: { quests: { snapshot: { data: { active: true } } }, secret: { snapshot: {} } },
+    dataQueries: { "active-quests": { items: [{ id: "quest-1", value: "active" }] } },
     settings: { common: { fontSize: 16 } },
   });
   assert.equal(input.currentInput, "hello");
   assert.equal(input.openingId, "opening-00");
   assert.equal(input.player, null);
   assert.deepEqual(input.messages, []);
-  assert.deepEqual(input.variables, { score: 30 });
-  assert.deepEqual(Object.keys(input.modules), ["quests"]);
+  assert.deepEqual(Object.keys(input.data), ["active-quests"]);
   assert.equal(input.settings, null);
-  assert.ok(Object.isFrozen(input.variables));
+  assert.ok(Object.isFrozen(input.data));
 });
 
 test("accepts only known, unique authored fragment ids", () => {
@@ -77,12 +74,11 @@ test("runs an asynchronous authored branch against the declared state", async ()
     opening: false,
     player: false,
     messages: "none",
-    variables: "all",
-    modules: [],
+    dataQueries: [{ id: "score", moduleId: "state", collectionId: "values", view: "rp" }],
     settings: false,
   } }));
-  const result = await runContextProcessor(parsed, async ({ variables }) => ({
-    include: [variables.score < 40 ? "low" : "high"],
+  const result = await runContextProcessor(parsed, async ({ data }) => ({
+    include: [data.score.items[0].value < 40 ? "low" : "high"],
   }), {
     card: { id: "card", name: "Card" },
     turn: 1,
@@ -90,8 +86,7 @@ test("runs an asynchronous authored branch against the declared state", async ()
     openingId: "opening-00",
     player: { name: "Player", description: "" },
     messages: [],
-    variables: { score: 39 },
-    modules: {},
+    dataQueries: { score: { items: [{ id: "score", value: 39 }] } },
     settings: {},
   });
   assert.deepEqual(result, { include: ["low"] });

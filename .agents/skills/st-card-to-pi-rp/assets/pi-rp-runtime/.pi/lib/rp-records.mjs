@@ -91,11 +91,8 @@ export function normalizeRetrievalPolicy(value, sourceKind) {
   const maxRecords = Number.isSafeInteger(value?.agent?.maxRecords) && value.agent.maxRecords > 0
     ? Math.min(value.agent.maxRecords, 500)
     : 50;
-  if (value?.catalog?.codeProfile !== undefined && value.catalog.codeProfile !== "default") {
-    throw new Error("Catalog codeProfile must be default.");
-  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     code: {
       profile: codeProfile,
       selector: codeProfile === "custom" ? value.code.selector : defaultSelector(sourceKind),
@@ -105,10 +102,6 @@ export function normalizeRetrievalPolicy(value, sourceKind) {
       fallback: "code",
       onNotTriggered: value?.agent?.onNotTriggered === "empty" ? "empty" : "code",
       maxRecords,
-    },
-    catalog: {
-      codeProfile: "default",
-      agentMode: ["disabled", "append", "override"].includes(value?.catalog?.agentMode) ? value.catalog.agentMode : "disabled",
     },
   };
 }
@@ -182,17 +175,12 @@ function recordTitle(record) {
   return content.replace(/\s+/g, " ").trim().slice(0, 80) || record.metadata.recordType;
 }
 
-export function buildCatalog(records, existing = null) {
-  const previous = new Map(Array.isArray(existing?.entries) ? existing.entries.map(entry => [entry.recordId, entry]) : []);
+export function buildCatalog(records) {
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     entries: chronological(records).map(record => {
       const contentHash = recordContentHash(record);
-      const old = previous.get(record.id);
-      const generated = old?.recordRevision === record.revision && old?.contentHash === contentHash && old?.generated
-        ? old.generated
-        : undefined;
       return {
         recordId: record.id,
         recordRevision: record.revision,
@@ -204,7 +192,6 @@ export function buildCatalog(records, existing = null) {
         entityIds: record.metadata.entityIds,
         tags: record.metadata.tags,
         title: recordTitle(record),
-        ...(generated ? { generated } : {}),
       };
     }),
   };
@@ -213,16 +200,14 @@ export function buildCatalog(records, existing = null) {
 export function formatCatalog(catalog) {
   if (!catalog?.entries?.length) return "No records are available.";
   return catalog.entries.map(entry => {
-    const generatedTitle = typeof entry.generated?.title === "string" ? entry.generated.title : "";
-    const generatedSummary = typeof entry.generated?.summary === "string" ? entry.generated.summary : "";
-    const tags = [...new Set([...(entry.tags || []), ...(entry.generated?.tags || [])])];
+    const tags = [...new Set(entry.tags || [])];
     return [
       entry.recordId,
-      generatedTitle || entry.title,
+      entry.title,
       entry.recordType,
       `turn ${entry.turn}`,
       tags.length ? `tags: ${tags.join(", ")}` : "",
-    ].filter(Boolean).join(" | ") + (generatedSummary ? `\n  ${generatedSummary}` : "");
+    ].filter(Boolean).join(" | ");
   }).join("\n");
 }
 

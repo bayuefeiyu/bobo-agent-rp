@@ -13,7 +13,7 @@ import {
 } from "./rp-workflows.mjs";
 
 const foreground = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "standard-rp",
   kind: "foreground",
   nodes: [
@@ -59,7 +59,7 @@ test("stores successful node token usage on the node and attempt", () => {
 
 test("sums every recorded attempt when the workflow finishes", () => {
   const workflow = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "usage-total",
     kind: "turn-background",
     nodes: [
@@ -96,7 +96,7 @@ test("waits for user model choice after the third failed attempt", () => {
 
 test("supports route conditions and skips the inactive branch", () => {
   const workflow = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "branching",
     kind: "turn-background",
     nodes: [
@@ -114,7 +114,7 @@ test("supports route conditions and skips the inactive branch", () => {
 
 test("uses keyed multi-instance identities for independent characters", () => {
   const workflow = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "character-analysis",
     kind: "global-background",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 6, dedupeKey: "$.characterId" },
@@ -126,9 +126,38 @@ test("uses keyed multi-instance identities for independent characters", () => {
 
 test("rejects narrative nodes in background workflows", () => {
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "bad",
     kind: "global-background",
     nodes: [{ id: "story", type: "narrative" }],
   }), /cannot contain narrative/);
+});
+
+test("normalizes node outputs, scoped module access, and explicit node-end commits", () => {
+  const workflow = normalizeWorkflowDefinition({
+    schemaVersion: 2,
+    id: "data-update",
+    kind: "turn-background",
+    nodes: [{
+      id: "update",
+      type: "agent",
+      outputs: { changes: { path: "drafts/changes.json", scope: "workflow", retain: "run", format: "unified-change-batch" } },
+      moduleAccess: [{ moduleId: "rumors", collectionId: "entries", capabilities: ["rumor.query", "rumor.write"], views: ["rp"], queryBudget: { maxRecords: 50, maxCharacters: 12000 } }],
+      dataCommit: { allowBestEffort: true, onNodeEnd: [{ output: "changes", required: true }] },
+    }],
+  });
+  const node = workflow.nodes[0];
+  assert.equal(node.outputs.changes.scope, "workflow");
+  assert.equal(node.dataCommit.allowBestEffort, true);
+  assert.deepEqual(node.dataCommit.onNodeEnd, [{ output: "changes", path: null, required: true }]);
+  assert.equal(node.moduleAccess[0].queryBudget.maxRecords, 50);
+});
+
+test("rejects node-end commit targets that are not explicitly declared", () => {
+  assert.throws(() => normalizeWorkflowDefinition({
+    schemaVersion: 2,
+    id: "bad-output",
+    kind: "turn-background",
+    nodes: [{ id: "update", type: "agent", dataCommit: { onNodeEnd: [{ output: "missing" }] } }],
+  }), /unknown output/);
 });

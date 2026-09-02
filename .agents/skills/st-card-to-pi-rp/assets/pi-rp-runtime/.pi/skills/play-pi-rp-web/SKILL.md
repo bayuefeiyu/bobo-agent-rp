@@ -11,7 +11,7 @@ The only mode difference is the interface:
 
 1. Identify and prepare the card exactly as in `play-pi-rp`.
 2. Do not ask for an opening or saved chat in the terminal. Call `start_rp_web` with the card ID; the card's own page opens and presents both authored openings and resumable chats belonging to that card.
-3. Resolve every agent-enabled catalog with `rp_context_query` according to its module skill. Treat Web input from `pi.sendUserMessage()` as the current player message.
+3. Treat Web input from `pi.sendUserMessage()` as the current player message. Follow the active workflow's message retrieval and unified-data permissions exactly as in `play-pi-rp`.
 4. Return normal player-visible RP prose. Follow any separate post-narrative task that the bridge starts without emitting more story prose.
 5. Use the supplied `workspace/public/turn/` path for shared task drafts.
 

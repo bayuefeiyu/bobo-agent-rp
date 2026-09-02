@@ -20,7 +20,7 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /function toggleCardModule/);
   assert.match(app, /function renderFeatureModules/);
   assert.match(app, /function openFeatureModuleDocument/);
-  assert.match(app, /修改数据/);
+  assert.match(app, /查看数据/);
   assert.match(app, /修改模块/);
   assert.match(styles, /\.module-file-actions/);
   assert.match(app, /region\.type === "json"/);

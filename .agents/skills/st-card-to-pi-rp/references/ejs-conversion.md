@@ -1,5 +1,7 @@
 # EJS semantic conversion
 
+When EJS reads or changes persistent state, follow the sibling data-design Skill's [modeling](../../design-pi-rp-data/references/modeling.md) and [mutation/runtime](../../design-pi-rp-data/references/mutations-and-runtime.md) guidance. This reference governs source-behavior classification and fidelity.
+
 Convert the behavior expressed by EJS, not the EJS execution environment. Never execute source EJS while inspecting or converting a card. Archive the original source unchanged, inventory every template read, branch, output, side effect, external API, and lifecycle, then map each supported behavior to a native target.
 
 ## Classification
@@ -7,9 +9,9 @@ Convert the behavior expressed by EJS, not the EJS execution environment. Never 
 Classify every EJS block before choosing a target:
 
 - deterministic prompt selection or interpolation before prose generation: a `before-narrative` context processor;
-- deterministic variable normalization, derivation, or previous/next transition: native variable `normalize` or `afterUpdate` hooks;
-- persistent non-variable state: the owning feature module's update workflow and tools;
-- semantic scene relevance: the owning skill and `rp_context_query`, optionally after deterministic code narrows candidates;
+- deterministic normalization, derivation, or previous/next transition: an owning module processor or code node;
+- persistent state of any kind: an owning collection plus unified change batches;
+- semantic scene relevance: the owning skill and `rp_data_query`, optionally after deterministic code narrows indexed candidates;
 - display-only rendering: declarative module Web view or card-local frontend code;
 - message transformation: an explicit message-processing phase, only when the target runtime supports it;
 - ST DOM, extension settings, regex activation, worldbook toggles, or remote imports: translate to an existing native feature or mark unsupported. Do not emulate ST merely to preserve an implementation detail.
@@ -24,7 +26,7 @@ Add card-relative processor definition paths to `manifest.context_processors`. D
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "character-stage",
   "description": "Select the authored character stage from the current dependency value.",
   "phase": "before-narrative",
@@ -35,8 +37,16 @@ Add card-relative processor definition paths to `manifest.context_processors`. D
     "opening": false,
     "player": false,
     "messages": "none",
-    "variables": "all",
-    "modules": [],
+    "dataQueries": [
+      {
+        "id": "character-state",
+        "moduleId": "character-state",
+        "collectionId": "current",
+        "recordTypes": ["character.state"],
+        "view": "processor",
+        "limit": 1
+      }
+    ],
     "settings": false
   },
   "fragments": [
@@ -50,13 +60,13 @@ Add card-relative processor definition paths to `manifest.context_processors`. D
 }
 ```
 
-All paths inside the definition are card-root-relative safe POSIX paths. `phase` is `before-narrative` in version 1. `messages` and `variables` are `none` or `all`; `modules` lists exact feature-module IDs. Declare only actual dependencies. `failure: error` aborts a turn whose required behavior could not be computed; `omit` records the failure and omits that processor for intentionally optional behavior.
+All paths inside the definition are card-root-relative safe POSIX paths. `phase` is `before-narrative` in version 2. Module dependencies are exact named collection queries whose view and capability must also be granted to the narrative node. Declare only actual dependencies. `failure: error` aborts a turn whose required behavior could not be computed; `omit` records the failure and omits that processor for intentionally optional behavior.
 
 The entry module exports `selectContext(input)` or a default function and returns only declared fragment IDs:
 
 ```js
-export function selectContext({ variables }) {
-  const value = variables.白娅.依存度;
+export function selectContext({ data }) {
+  const value = data["character-state"].items[0].value.依存度;
   if (value < 20) return { include: ["dependency-00-19"] };
   if (value < 40) return { include: ["dependency-20-39"] };
   return { include: ["dependency-40-plus"] };
@@ -67,10 +77,10 @@ The frozen input has stable fields:
 
 ```text
 schemaVersion, card, turn, currentInput, openingId, player,
-messages, variables, modules, settings
+messages, data, settings
 ```
 
-Undeclared optional dependencies are represented by `null`, `[]`, or `{}`. Prior messages exclude the current player input, which has its own field. Module values contain `{records, snapshot}`. The processor must be deterministic for the supplied input, perform no persistent writes, and return exactly `{include: string[]}` with unique known IDs. It cannot return inline prompt text, mutate prompt order, update modules, or select arbitrary files.
+Undeclared optional dependencies are represented by `null`, `[]`, or `{}`. Prior messages exclude the current player input, which has its own field. Module values are rendered through an authorized named view. The processor must be deterministic for the supplied input, perform no persistent writes, and return exactly `{include: string[]}` with unique known IDs. It cannot return inline prompt text, mutate prompt order, update modules, or select arbitrary files.
 
 The runtime loads selected fragment files, expands supported native variable references, and injects them after fixed card/player/primary-character context but before retrieved history and module records. Processors are ordered by `contextOrder`, independent of Web settings.
 

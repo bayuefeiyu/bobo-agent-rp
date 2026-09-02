@@ -51,11 +51,13 @@ test("selects exact IDs, ranges, windows, and latest records per key", () => {
   assert.deepEqual(selectRecords(records, { type: "latest_per_key", path: "data.characterId", limitPerKey: 1 }).records.map(item => item.id), ["memory-3", "memory-4"]);
 });
 
-test("invalidates agent catalog enrichment when record revision changes", () => {
+test("rebuilds message catalogs entirely from authoritative records", () => {
   const original = record(1);
   const first = buildCatalog([original]);
-  first.entries[0].generated = { title: "agent title", tags: ["promise"] };
-  assert.equal(buildCatalog([original], first).entries[0].generated.title, "agent title");
   const changed = reviseRecord(original, { characterId: "seraphina", content: "changed" });
-  assert.equal(buildCatalog([changed], first).entries[0].generated, undefined);
+  const rebuilt = buildCatalog([changed]);
+  assert.equal(first.entries[0].recordRevision, 1);
+  assert.equal(rebuilt.entries[0].recordRevision, 2);
+  assert.notEqual(rebuilt.entries[0].contentHash, first.entries[0].contentHash);
+  assert.equal(Object.hasOwn(rebuilt.entries[0], "generated"), false);
 });

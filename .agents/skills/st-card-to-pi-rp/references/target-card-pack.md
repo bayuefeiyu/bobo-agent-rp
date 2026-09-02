@@ -38,7 +38,7 @@ play/cards/<card-id>/
 │   └── <module-id>/
 ├── context/
 │   ├── retrieval-policy.json
-│   └── skill/SKILL.md          # required only for Agent-enabled message retrieval/catalog
+│   └── skill/SKILL.md          # required only for Agent-enabled message retrieval
 ├── runtime/
 │   └── context-processors/
 ├── agents/
@@ -107,8 +107,7 @@ Use UTF-8 JSON so the validation script can parse it without additional dependen
       "recommended_context": []
     }
   ],
-  "default_opening": "opening-00",
-  "default_output_modules": []
+  "default_opening": "opening-00"
 }
 ```
 
@@ -120,7 +119,7 @@ The baseline `context/retrieval-policy.json` is:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "messages",
   "code": { "profile": "default" },
   "agent": {
@@ -128,18 +127,17 @@ The baseline `context/retrieval-policy.json` is:
     "fallback": "code",
     "onNotTriggered": "code",
     "maxRecords": 100
-  },
-  "catalog": { "codeProfile": "default", "agentMode": "disabled" }
+  }
 }
 ```
 
 `context_policy` is required. Use code profile `default` unless the card author has a precise deterministic transcript rule; the default retrieves all message records. Add Agent append or override only when authored semantic selection is needed.
 
-When the message policy enables Agent retrieval or Agent catalog enrichment, add `"context_skill": "context/skill/SKILL.md"` to the manifest. That skill owns the author's activation, selection, non-activation, and catalog-enrichment guidance for message records. A code-only card does not need it.
+When the message policy enables Agent retrieval, add `"context_skill": "context/skill/SKILL.md"` to the manifest. That skill owns the author's activation, `rp_message_query` selection, and non-activation guidance. A code-only card does not need it. Message catalogs are derived runtime aids and are never Agent-authored data.
 
-`feature_modules` is required and contains card-relative `module.json` paths. Keep it empty only when the source has no persistent structured feature, side panel, or auxiliary output. Every source-required output outside the main narrative is a frontend module using the post-narrative output engine. Module definitions use strict version 3 with storage version 2; read [feature-modules.md](feature-modules.md) before creating one. Each module owns its prompts in a card-local skill, record/data schemas, and retrieval policy. Native variable modules additionally follow [variables.md](variables.md): they default to a plain frontend inspector covering the complete current state, unless the user explicitly cancels that surface and leaves the variable module background-only. An authored status bar is separate. Its `contextOrder` is authored Agent behavior, while `displayOrder` affects only the frontend. Background modules remain in Agent context and per-chat storage but never appear in the Web UI.
+`feature_modules` is required and contains card-relative `module.json` paths. Keep it empty only when the source has no persistent structured feature, side panel, or auxiliary output. Every source-required output outside the main narrative is a frontend module record type produced by an ordinary workflow node. Modules use strict version 4 and data-contract version 1; read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one. A module may own multiple collections and record types. It declares optional indexes, named RP/custom views, capabilities, storage, and its card-local skill; workflows grant each node only a subset. `contextOrder` is authored Agent behavior, while `displayOrder` affects only the frontend. Background modules persist identically but never appear in the Web UI.
 
-`context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved history/module records. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 1 contract.
+`context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved message history and upstream workflow output. Module data enters only through the processor's declared `dataQueries` or the active node's authorized data tools. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 2 contract.
 
 ## Fixed files
 

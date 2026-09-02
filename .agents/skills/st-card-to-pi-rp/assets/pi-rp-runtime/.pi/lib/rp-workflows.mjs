@@ -4,8 +4,10 @@ import { addTokenUsage, emptyTokenUsage, normalizeTokenUsage } from "./rp-token-
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const TERMINAL = new Set(["completed", "skipped", "failed", "cancelled"]);
 const WORKFLOW_KINDS = new Set(["foreground", "turn-background", "global-background"]);
-const NODE_TYPES = new Set(["agent", "code", "narrative", "gate", "join", "module-output", "variable-update", "turn-finalize"]);
+const NODE_TYPES = new Set(["agent", "code", "narrative", "gate", "join", "turn-finalize"]);
 const CONTEXT_MODES = new Set(["fixed", "previous-output", "inherit", "custom"]);
+const OUTPUT_SCOPES = new Set(["node", "workflow", "turn", "session", "public"]);
+const RETAIN_POLICIES = new Set(["node", "run", "turn", "session", "permanent"]);
 
 function assertObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
@@ -57,6 +59,73 @@ function normalizeConditions(value, knownNodes) {
   });
 }
 
+function safeRelativePath(value, label) {
+  if (typeof value !== "string" || !value || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value) || value.split(/[\\/]/).includes("..")) {
+    throw new Error(`${label} must be a safe relative path.`);
+  }
+  return value.replaceAll("\\", "/");
+}
+
+function normalizeOutputs(value, nodeId) {
+  if (value === undefined) return {};
+  const input = assertObject(value, `node ${nodeId}.outputs`);
+  return Object.fromEntries(Object.entries(input).map(([id, raw]) => {
+    assertId(id, `node ${nodeId}.outputs key`);
+    const output = assertObject(raw, `node ${nodeId}.outputs.${id}`);
+    const scope = output.scope || "node";
+    const retain = output.retain || (scope === "node" ? "node" : scope === "workflow" ? "run" : scope === "turn" ? "turn" : "session");
+    if (!OUTPUT_SCOPES.has(scope)) throw new Error(`node ${nodeId}.outputs.${id}.scope is unsupported.`);
+    if (!RETAIN_POLICIES.has(retain)) throw new Error(`node ${nodeId}.outputs.${id}.retain is unsupported.`);
+    return [id, { path: safeRelativePath(output.path, `node ${nodeId}.outputs.${id}.path`), scope, retain, format: typeof output.format === "string" ? output.format : null }];
+  }));
+}
+
+function normalizeModuleAccess(value, nodeId) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`node ${nodeId}.moduleAccess must be an array.`);
+  const seen = new Set();
+  return value.map((raw, index) => {
+    const access = assertObject(raw, `node ${nodeId}.moduleAccess[${index}]`);
+    const moduleId = assertId(access.moduleId, `node ${nodeId}.moduleAccess[${index}].moduleId`);
+    const collectionId = assertId(access.collectionId, `node ${nodeId}.moduleAccess[${index}].collectionId`);
+    const key = `${moduleId}/${collectionId}`;
+    if (seen.has(key)) throw new Error(`node ${nodeId}.moduleAccess duplicates ${key}.`);
+    seen.add(key);
+    const queryBudget = access.queryBudget === undefined ? null : assertObject(access.queryBudget, `node ${nodeId}.moduleAccess[${index}].queryBudget`);
+    return {
+      moduleId,
+      collectionId,
+      capabilities: uniqueIds(access.capabilities, `node ${nodeId}.moduleAccess[${index}].capabilities`),
+      views: uniqueIds(access.views, `node ${nodeId}.moduleAccess[${index}].views`),
+      queryBudget: queryBudget ? {
+        maxRecords: Number.isSafeInteger(queryBudget.maxRecords) && queryBudget.maxRecords > 0 ? queryBudget.maxRecords : 20,
+        maxCharacters: Number.isSafeInteger(queryBudget.maxCharacters) && queryBudget.maxCharacters > 0 ? queryBudget.maxCharacters : 6000,
+      } : null,
+    };
+  });
+}
+
+function normalizeDataCommit(value, outputs, nodeId) {
+  if (value === undefined) return { allowBestEffort: false, onNodeEnd: [] };
+  const input = assertObject(value, `node ${nodeId}.dataCommit`);
+  if (!Array.isArray(input.onNodeEnd)) throw new Error(`node ${nodeId}.dataCommit.onNodeEnd must be an array.`);
+  return {
+    allowBestEffort: input.allowBestEffort === true,
+    onNodeEnd: input.onNodeEnd.map((raw, index) => {
+      const target = assertObject(raw, `node ${nodeId}.dataCommit.onNodeEnd[${index}]`);
+      const hasOutput = target.output !== undefined;
+      const hasPath = target.path !== undefined;
+      if (hasOutput === hasPath) throw new Error(`node ${nodeId}.dataCommit.onNodeEnd[${index}] must declare exactly one of output or path.`);
+      if (hasOutput) {
+        const output = assertId(target.output, `node ${nodeId}.dataCommit.onNodeEnd[${index}].output`);
+        if (!outputs[output]) throw new Error(`node ${nodeId}.dataCommit references unknown output ${output}.`);
+        return { output, path: null, required: target.required !== false };
+      }
+      return { output: null, path: safeRelativePath(target.path, `node ${nodeId}.dataCommit.onNodeEnd[${index}].path`), required: target.required !== false };
+    }),
+  };
+}
+
 function normalizeTrigger(value) {
   const trigger = value === undefined ? { type: "manual" } : assertObject(value, "workflow.trigger");
   const type = typeof trigger.type === "string" ? trigger.type : "manual";
@@ -87,7 +156,7 @@ function assertAcyclic(nodes) {
 
 export function normalizeWorkflowDefinition(value) {
   const input = assertObject(value, "workflow");
-  if (input.schemaVersion !== 1) throw new Error("workflow.schemaVersion must be 1.");
+  if (input.schemaVersion !== 2) throw new Error("workflow.schemaVersion must be 2.");
   const id = assertId(input.id, "workflow.id");
   const kind = typeof input.kind === "string" ? input.kind : "foreground";
   if (!WORKFLOW_KINDS.has(kind)) throw new Error(`Unsupported workflow kind: ${kind}`);
@@ -118,6 +187,7 @@ export function normalizeWorkflowDefinition(value) {
     const quorum = Number.isSafeInteger(rawNode.join?.quorum) && rawNode.join.quorum > 0
       ? rawNode.join.quorum
       : 1;
+    const outputs = normalizeOutputs(rawNode.outputs, rawNode.id);
     return {
       id: rawNode.id,
       title: typeof rawNode.title === "string" && rawNode.title.trim() ? rawNode.title.trim() : rawNode.id,
@@ -136,6 +206,9 @@ export function normalizeWorkflowDefinition(value) {
       required: rawNode.required !== false,
       blockNextTurn: kind === "turn-background" ? rawNode.blockNextTurn !== false : false,
       join: { mode: joinMode, quorum },
+      outputs,
+      moduleAccess: normalizeModuleAccess(rawNode.moduleAccess, rawNode.id),
+      dataCommit: normalizeDataCommit(rawNode.dataCommit, outputs, rawNode.id),
       metadata: rawNode.metadata && typeof rawNode.metadata === "object" && !Array.isArray(rawNode.metadata) ? rawNode.metadata : {},
     };
   });
@@ -172,7 +245,7 @@ export function normalizeWorkflowDefinition(value) {
     ? Math.min(input.instancePolicy.maxConcurrentInstances, 10)
     : 1;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     title: typeof input.title === "string" && input.title.trim() ? input.title.trim() : id,
     description: typeof input.description === "string" ? input.description.trim() : "",
@@ -191,13 +264,6 @@ export function normalizeWorkflowDefinition(value) {
         : null,
     },
     trigger: normalizeTrigger(input.trigger),
-    publication: input.publication && typeof input.publication === "object" && !Array.isArray(input.publication)
-      ? {
-          namespace: typeof input.publication.namespace === "string" && ID_PATTERN.test(input.publication.namespace) ? input.publication.namespace : id,
-          nodeIds: uniqueIds(input.publication.nodeIds, "workflow.publication.nodeIds"),
-          schema: input.publication.schema && typeof input.publication.schema === "object" ? input.publication.schema : null,
-        }
-      : null,
     nodes,
   };
 }
@@ -206,7 +272,7 @@ export function createWorkflowRun(definition, options = {}) {
   const workflow = normalizeWorkflowDefinition(definition);
   const now = options.now || new Date().toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: options.id || `workflow-${randomUUID()}`,
     workflowId: workflow.id,
     workflowRevision: workflow.revision,

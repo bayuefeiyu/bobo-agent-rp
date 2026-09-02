@@ -23,13 +23,14 @@ function modelLimit(models, modelId) {
 }
 
 export class RpWorkflowEngine {
-  constructor({ executor, resolveAgent, resolveModel, policy = {}, onChange = async () => {}, onNodeComplete = async () => null, nodeHistory = () => null }) {
+  constructor({ executor, resolveAgent, resolveModel, policy = {}, onChange = async () => {}, beforeNodeComplete = async result => result, onNodeComplete = async () => null, nodeHistory = () => null }) {
     if (typeof executor !== "function") throw new Error("RpWorkflowEngine requires an executor.");
     this.executor = executor;
     this.resolveAgent = resolveAgent || (() => null);
     this.resolveModel = resolveModel || (() => null);
     this.policy = normalizeRuntimePolicy(policy);
     this.onChange = onChange;
+    this.beforeNodeComplete = beforeNodeComplete;
     this.onNodeComplete = onNodeComplete;
     this.nodeHistory = nodeHistory;
     this.runs = new Map();
@@ -188,7 +189,9 @@ export class RpWorkflowEngine {
       });
       await this.#changed(entry);
       try {
-        const result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding });
+        let result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding });
+        if (entry.stopped || entry.run.status === "cancelled") return;
+        result = await this.beforeNodeComplete({ workflow: entry.workflow, run: entry.run, node, agent, binding, result: result || {} }) || result || {};
         if (entry.stopped || entry.run.status === "cancelled") return;
         completeWorkflowNode(entry.workflow, entry.run, node.id, result || {});
         try {

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "standard-rp",
   "title": "标准角色扮演回合",
   "description": "使用基本上下文生成一条正文，并在后台功能完成后提交本回合。",
@@ -19,14 +19,20 @@
       "description": "生成本轮唯一的玩家可见正文。",
       "type": "narrative",
       "retry": { "maxAttempts": 3 },
-      "context": { "mode": "fixed" }
+      "context": { "mode": "fixed" },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] }
     },
     {
       "id": "finalize-turn",
       "title": "提交回合",
       "description": "标记本轮已完成；回合编号只在下一条用户消息被接受时推进。",
       "type": "turn-finalize",
-      "dependsOn": ["narrative"]
+      "dependsOn": ["narrative"],
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] }
     }
   ]
 }

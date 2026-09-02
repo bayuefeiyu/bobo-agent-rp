@@ -1,17 +1,24 @@
-# This repository intentionally publishes only the reusable conversion skill.
+# This repository publishes only reusable project skills and root documentation.
 /*
 !/.agents/
 !/.gitattributes
 !/.gitignore
 !/README.md
 !/PI-PLAY-CONTEXT-ISOLATION.md
+!/PI-RP-DEVELOPMENT-SCOPE.md
 !/PROJECT_STATUS.md
+!/.pi/
+/.pi/*
+!/.pi/APPEND_SYSTEM.md
 
 /.agents/*
 !/.agents/skills/
 /.agents/skills/*
 !/.agents/skills/st-card-to-pi-rp/
+!/.agents/skills/design-pi-rp-data/
+!/.agents/skills/create-pi-rp-feature-module/
 !/.agents/skills/codex-delegate-bounded-tasks/
+!/.agents/skills/audit-and-upgrade-pi-rp-card/
 
 **/__pycache__/
 **/*.py[cod]

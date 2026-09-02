@@ -6,13 +6,11 @@ import { pathToFileURL } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 
 import {
   buildCatalog,
   createRecordEnvelope,
   formatCatalog,
-  formatRecords,
   normalizeRetrievalPolicy,
   parseRecordLines,
   reviseRecord,
@@ -21,31 +19,22 @@ import {
   validateRecordEnvelope,
 } from "../lib/rp-records.mjs";
 import {
-  applyVariableOperations,
-  createVariableDraft,
-  mergeVariableState,
-  projectVariableState,
-  renderVariableTemplates,
-  sameVariableState,
-  updateVariableDraft,
-  variableValueAt,
-} from "../lib/rp-variables.mjs";
-import {
   runContextProcessor,
   validateContextProcessorDefinition,
 } from "../lib/rp-context-processors.mjs";
-import {
-  createOutputDraft,
-  unresolvedOutputModuleIds,
-  updateOutputDraft,
-} from "../lib/rp-outputs.mjs";
 import { removeSavedUserProfile } from "../lib/rp-user-profiles.mjs";
 import { createRpConfigStore } from "../lib/rp-config-store.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
 import { composeNodePrompt, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
 import { workflowTriggerMatches } from "../lib/rp-workflows.mjs";
 import { tokenUsageFromMessages } from "../lib/rp-token-usage.mjs";
-import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, publishLongTermRecord, workflowProcessRecordPath, workflowWorkspacePaths, writeWorkflowProcessRecord } from "../lib/rp-workspace.mjs";
+import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, workflowProcessRecordPath, workflowWorkspacePaths, writeWorkflowProcessRecord } from "../lib/rp-workspace.mjs";
+import { capabilityAllows, normalizeDataContract } from "../lib/rp-data-contracts.mjs";
+import { RpDataStore } from "../lib/rp-data-store.mjs";
+import { getDataRecord, queryData } from "../lib/rp-data-query.mjs";
+import { createDataBatchDraft, executeDataBatch, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
+import { finalizeNodeData } from "../lib/rp-data-node-runtime.mjs";
+import { cleanupArtifacts, readVisibleArtifacts, workflowNodeWorkspace } from "../lib/rp-data-artifacts.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -71,33 +60,9 @@ type RecordEnvelope = {
 };
 
 type RetrievalPolicy = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   code: { profile: "default" | "custom"; selector: Record<string, any> };
   agent: { mode: "disabled" | "append" | "override"; fallback: "code"; onNotTriggered: "code" | "empty"; maxRecords: number };
-  catalog: { codeProfile: "default"; agentMode: "disabled" | "append" | "override" };
-};
-
-type ModuleStorage = {
-  schemaVersion: 2;
-  kind: "record-log" | "snapshot" | "hybrid";
-  contextSource: "records" | "snapshot";
-  records: null | { file: string; initialFile: string; schemaFile: string };
-  snapshot: null | { file: string; initialFile: string; schemaFile: string };
-  catalogFile: string;
-  retrievalPolicyFile: string;
-  engine: null | { kind: "variables"; configFile: string } | { kind: "post-narrative-output" };
-};
-
-type VariableRuntime = {
-  schemaVersion: 1;
-  schemaPath: string;
-  defaultInitialPath: string;
-  openingInitialPaths: Record<string, string>;
-  bindingsPath: string;
-  bindings: Record<string, { path?: string; paths?: string[]; shape: "scalar" | "object" | "subtree"; missing: "error" | "omit" | "empty" }>;
-  normalizePath: string | null;
-  afterUpdatePath: string | null;
-  alwaysForNarrative: string[];
 };
 
 type ActiveBridge = {
@@ -139,17 +104,11 @@ type RpRun = {
   assistantContent: string;
   automaticSelections: Record<string, string[]>;
   agentQueries: Array<Record<string, unknown>>;
-  catalogUpdates: Array<Record<string, unknown>>;
   agentSources: string[];
   processorSelections: Array<{ id: string; include: string[]; error?: string }>;
-  outputUpdates: Array<Record<string, unknown>>;
   contextContent: string | null;
-  phase: "narrative" | "output-update" | "variable-update" | "done";
+  phase: "narrative" | "done";
   assistantMessageId: string | null;
-  outputModuleIds: string[];
-  outputFinalized: boolean;
-  variableModuleId: string | null;
-  variableFinalized: boolean;
   workflowRunId?: string | null;
   workflowNarrativeNodeId?: string | null;
   resolveNarrative?: ((value: any) => void) | null;
@@ -158,12 +117,7 @@ type RpRun = {
   modelTailPrompt?: string | null;
   nodeAgentPrompt?: string | null;
   workflowNodePrompt?: string | null;
-  resolveOutputWorkflow?: ((value: any) => void) | null;
-  resolveVariableWorkflow?: ((value: any) => void) | null;
   baseModel?: any;
-  phaseModelHeadPrompt?: string | null;
-  phaseModelTailPrompt?: string | null;
-  phaseAgentPrompt?: string | null;
   phaseStartedAt?: number;
 };
 
@@ -174,17 +128,13 @@ type FeatureModule = {
   surface: "frontend" | "background";
   contextOrder: number;
   displayOrder: number;
+  basedOn: string | null;
+  contract: any;
   view: { schemaVersion: 1; regions: unknown[] };
   viewPath: string;
   moduleDirectory: string;
-  storage: ModuleStorage;
-  retrievalPolicy: RetrievalPolicy;
   skillPath: string;
   skillDescription: string;
-  initialRecords: RecordEnvelope[];
-  initialSnapshot: RecordEnvelope | null;
-  postNarrativeOutput: boolean;
-  variable: VariableRuntime | null;
 };
 
 type ContextProcessor = {
@@ -330,36 +280,13 @@ function playerProfileContext(playerName: string, description: string) {
   ].join("\n\n");
 }
 
-function activeVariableModule(active: ActiveBridge) {
-  return active.featureModules.find(module => module.variable) || null;
-}
-
-function postNarrativeOutputModules(active: ActiveBridge) {
-  return active.featureModules.filter(module => module.postNarrativeOutput);
-}
-
-async function currentVariableRecord(active: ActiveBridge, module: FeatureModule) {
-  if (!active.sessionDirectory || !module.storage.snapshot) return null;
-  return readFile(resolve(active.sessionDirectory, "modules", module.id, module.storage.snapshot.file), "utf8")
-    .then(text => validateRecordEnvelope(JSON.parse(text)) as RecordEnvelope)
-    .catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    });
-}
-
 async function fixedRpContext(active: ActiveBridge) {
-  const module = activeVariableModule(active);
-  const record = module ? await currentVariableRecord(active, module) : null;
-  const render = (text: string) => module?.variable && record
-    ? renderVariableTemplates(text, record.data.state, module.variable.bindings)
-    : text;
   const sections = [
     "# Fixed card context",
-    render(active.stableCardContext),
+    active.stableCardContext,
     playerProfileContext(active.playerName, active.playerDescription),
   ];
-  const primaryCharacters = render(active.primaryCharacterContext).trim();
+  const primaryCharacters = active.primaryCharacterContext.trim();
   if (primaryCharacters) sections.push("# Primary card character profiles", primaryCharacters);
   return sections.filter(Boolean).join("\n\n");
 }
@@ -369,12 +296,11 @@ function featureModuleFixedContext(active: ActiveBridge) {
   return [
     "# Card feature-module routing",
     ...active.featureModules.map(module => {
-      const needsSkill = module.variable || module.retrievalPolicy.agent.mode !== "disabled" || module.retrievalPolicy.catalog.agentMode !== "disabled";
       return [
         `## ${module.title} (${module.id})`,
         module.skillDescription,
-        needsSkill ? `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}` : "",
-        module.variable ? `Narrative fixed variable references: ${module.variable.alwaysForNarrative.length ? module.variable.alwaysForNarrative.join(", ") : "none"}. Query other variables by exact binding or JSON Pointer according to the module skill.` : "",
+        `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
+        `Collections: ${Object.keys(module.contract.collections).join(", ")}. Use rp_data_query/rp_data_get only within the current workflow node's granted capabilities.`,
       ].filter(Boolean).join("\n");
     }),
   ].join("\n\n");
@@ -386,7 +312,7 @@ function messageRetrievalFixedContext(active: ActiveBridge) {
     "# Card message-record retrieval skill",
     `Skill: ${relative(active.context.cwd, active.messageSkillPath).replaceAll("\\", "/")}`,
     active.messageSkillDescription,
-    "Read this skill before querying message records or enriching their catalog.",
+    "Read this skill before using rp_message_query.",
   ].join("\n");
 }
 
@@ -398,19 +324,6 @@ function authoritativeTranscript(active: ActiveBridge, messages: RecordEnvelope[
     const kind = message.kind === "opening" ? "authored opening" : `turn ${message.turn}`;
     return `[${record.id} | ${speaker} | ${kind}]\n${message.content}`;
   }).join("\n\n");
-}
-
-async function readContinuityContext(sessionDirectory: string | null) {
-  if (!sessionDirectory) return "";
-  const sections = [];
-  for (const fileName of ["current-scene.md", "chronicle.md", "world-changes.md"]) {
-    const content = await readFile(resolve(sessionDirectory, fileName), "utf8").catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-      throw error;
-    });
-    if (content.trim()) sections.push(`## ${fileName}\n${content.trim()}`);
-  }
-  return sections.join("\n\n");
 }
 
 async function readCardContextFiles(cardDirectory: string, paths: unknown, label: string) {
@@ -436,11 +349,11 @@ function resolveFeatureModuleChild(moduleDirectory: string, path: unknown, label
 }
 
 function runtimeRetrievalPolicy(value: any, expectedSource: string, sourceKind: string): RetrievalPolicy {
-  const fields = ["schemaVersion", "source", "code", "agent", "catalog"];
+  const fields = ["schemaVersion", "source", "code", "agent"];
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== fields.length || fields.some(field => !(field in value))) {
-    throw new Error(`Retrieval policy ${expectedSource} must use the exact schemaVersion 1 field set.`);
+    throw new Error(`Retrieval policy ${expectedSource} must use the exact schemaVersion 2 field set.`);
   }
-  if (value.schemaVersion !== 1 || value.source !== expectedSource) throw new Error(`Retrieval policy source must be ${expectedSource}.`);
+  if (value.schemaVersion !== 2 || value.source !== expectedSource) throw new Error(`Retrieval policy source must be ${expectedSource}.`);
   if (!value.code || !["default", "custom"].includes(value.code.profile)) throw new Error(`Retrieval policy ${expectedSource} has an invalid code profile.`);
   if (value.code.profile === "default" && Object.keys(value.code).length !== 1) throw new Error(`Default code policy ${expectedSource} must not define a selector.`);
   if (value.code.profile === "custom" && (Object.keys(value.code).length !== 2 || !value.code.selector || typeof value.code.selector !== "object")) {
@@ -450,68 +363,8 @@ function runtimeRetrievalPolicy(value: any, expectedSource: string, sourceKind: 
   if (!value.agent || Object.keys(value.agent).length !== 4 || !["disabled", "append", "override"].includes(value.agent.mode) || value.agent.fallback !== "code" || !["code", "empty"].includes(value.agent.onNotTriggered) || !Number.isSafeInteger(value.agent.maxRecords) || value.agent.maxRecords < 1) {
     throw new Error(`Retrieval policy ${expectedSource} has an invalid agent policy.`);
   }
-  if (!value.catalog || Object.keys(value.catalog).length !== 2 || value.catalog.codeProfile !== "default" || !["disabled", "append", "override"].includes(value.catalog.agentMode)) {
-    throw new Error(`Retrieval policy ${expectedSource} has an invalid catalog policy.`);
-  }
   return normalizeRetrievalPolicy(value, sourceKind) as RetrievalPolicy;
 }
-
-async function readVariableRuntime(moduleDirectory: string, configPath: string, moduleId: string): Promise<VariableRuntime> {
-  const path = resolveFeatureModuleChild(moduleDirectory, configPath, `${moduleId}.engine.configFile`);
-  const config = JSON.parse(await readFile(path, "utf8"));
-  const fields = ["schemaVersion", "schemaFile", "initial", "bindingsFile", "hooks", "context"];
-  if (!config || Object.keys(config).length !== fields.length || fields.some(field => !(field in config)) || config.schemaVersion !== 1) {
-    throw new Error(`Variable runtime ${moduleId} must use the exact schemaVersion 1 field set.`);
-  }
-  if (!config.initial || Object.keys(config.initial).sort().join(",") !== "defaultFile,openingFiles" || !config.initial.openingFiles || typeof config.initial.openingFiles !== "object" || Array.isArray(config.initial.openingFiles)) {
-    throw new Error(`Variable runtime ${moduleId} has an invalid initial-state specification.`);
-  }
-  if (!config.hooks || Object.keys(config.hooks).sort().join(",") !== "afterUpdateFile,normalizeFile") {
-    throw new Error(`Variable runtime ${moduleId} has an invalid hooks specification.`);
-  }
-  if (!config.context || Object.keys(config.context).length !== 1 || !Array.isArray(config.context.alwaysForNarrative) || config.context.alwaysForNarrative.some((item: unknown) => typeof item !== "string")) {
-    throw new Error(`Variable runtime ${moduleId} has an invalid context specification.`);
-  }
-  const schemaPath = resolveFeatureModuleChild(moduleDirectory, config.schemaFile, `${moduleId}.variable.schemaFile`);
-  const defaultInitialPath = resolveFeatureModuleChild(moduleDirectory, config.initial.defaultFile, `${moduleId}.variable.initial.defaultFile`);
-  await Promise.all([readFile(schemaPath, "utf8").then(JSON.parse), readFile(defaultInitialPath, "utf8").then(JSON.parse)]);
-  const openingInitialPaths: Record<string, string> = {};
-  for (const [openingId, openingFile] of Object.entries(config.initial.openingFiles)) {
-    openingInitialPaths[openingId] = resolveFeatureModuleChild(moduleDirectory, openingFile, `${moduleId}.variable.initial.openingFiles.${openingId}`);
-    await readFile(openingInitialPaths[openingId], "utf8").then(JSON.parse);
-  }
-  const bindingsPath = resolveFeatureModuleChild(moduleDirectory, config.bindingsFile, `${moduleId}.variable.bindingsFile`);
-  const bindingsDocument = JSON.parse(await readFile(bindingsPath, "utf8"));
-  if (bindingsDocument?.schemaVersion !== 1 || !bindingsDocument.bindings || typeof bindingsDocument.bindings !== "object" || Array.isArray(bindingsDocument.bindings)) {
-    throw new Error(`Variable bindings ${moduleId} must contain schemaVersion 1 and a bindings object.`);
-  }
-  for (const [id, definition] of Object.entries(bindingsDocument.bindings) as Array<[string, any]>) {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) || !definition || !["scalar", "object", "subtree"].includes(definition.shape) || !["error", "omit", "empty"].includes(definition.missing)) {
-      throw new Error(`Variable binding ${id} in ${moduleId} is invalid.`);
-    }
-    const hasPath = typeof definition.path === "string";
-    const hasPaths = Array.isArray(definition.paths) && definition.paths.every((item: unknown) => typeof item === "string");
-    if (hasPath === hasPaths) {
-      throw new Error(`Variable binding ${id} must define exactly one of path or paths.`);
-    }
-  }
-  for (const id of config.context.alwaysForNarrative) {
-    if (!(id in bindingsDocument.bindings)) throw new Error(`Variable narrative binding is not defined: ${id}`);
-  }
-  const hookPath = (value: unknown, label: string) => value === null ? null : resolveFeatureModuleChild(moduleDirectory, value, label);
-  return {
-    schemaVersion: 1,
-    schemaPath,
-    defaultInitialPath,
-    openingInitialPaths,
-    bindingsPath,
-    bindings: bindingsDocument.bindings,
-    normalizePath: hookPath(config.hooks.normalizeFile, `${moduleId}.variable.hooks.normalizeFile`),
-    afterUpdatePath: hookPath(config.hooks.afterUpdateFile, `${moduleId}.variable.hooks.afterUpdateFile`),
-    alwaysForNarrative: [...config.context.alwaysForNarrative],
-  };
-}
-
 async function readFeatureModules(cardDirectory: string, paths: unknown): Promise<FeatureModule[]> {
   if (!Array.isArray(paths)) throw new Error("feature_modules must be an array.");
   const modules: FeatureModule[] = [];
@@ -521,15 +374,15 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     const modulePath = resolveCardChild(cardDirectory, value);
     if (!modulePath) throw new Error(`Feature-module path escapes the card directory: ${value}`);
     const record = JSON.parse(await readFile(modulePath, "utf8"));
-    const moduleFields = ["schemaVersion", "id", "title", "description", "surface", "contextOrder", "displayOrder", "storageFile", "viewFile", "skillFile"];
+    const moduleFields = ["schemaVersion", "id", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "frontendViewFile", "skillFile"];
     if (record === null || typeof record !== "object" || Array.isArray(record)) {
       throw new Error(`Feature module ${value} must be a JSON object.`);
     }
     const recordFields = Object.keys(record).sort();
     if (moduleFields.length !== recordFields.length || moduleFields.some(field => !recordFields.includes(field))) {
-      throw new Error(`Feature module ${value} must use the exact schemaVersion 3 field set.`);
+      throw new Error(`Feature module ${value} must use the exact schemaVersion 4 field set.`);
     }
-    if (record.schemaVersion !== 3 || typeof record.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(record.id)) {
+    if (record.schemaVersion !== 4 || typeof record.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(record.id)) {
       throw new Error(`Invalid feature-module definition: ${value}`);
     }
     if (ids.has(record.id)) throw new Error(`Duplicate feature-module id: ${record.id}`);
@@ -547,63 +400,21 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     if (!Number.isSafeInteger(record.contextOrder) || !Number.isSafeInteger(record.displayOrder)) {
       throw new Error(`Feature module ${record.id} must declare integer contextOrder and displayOrder values.`);
     }
-    const viewPath = resolveFeatureModuleChild(moduleDirectory, record.viewFile, `${record.id}.viewFile`);
-    const storagePath = resolveFeatureModuleChild(moduleDirectory, record.storageFile, `${record.id}.storageFile`);
+    if (record.basedOn !== null && (typeof record.basedOn !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(record.basedOn))) {
+      throw new Error(`Feature module ${record.id}.basedOn must be null or a safe module ID.`);
+    }
+    const viewPath = resolveFeatureModuleChild(moduleDirectory, record.frontendViewFile, `${record.id}.frontendViewFile`);
+    const contractPath = resolveFeatureModuleChild(moduleDirectory, record.dataContractFile, `${record.id}.dataContractFile`);
     const skillPath = resolveFeatureModuleChild(moduleDirectory, record.skillFile, `${record.id}.skillFile`);
-    const [view, storage, skillText] = await Promise.all([
+    const [view, rawContract, skillText] = await Promise.all([
       readFile(viewPath, "utf8").then(JSON.parse),
-      readFile(storagePath, "utf8").then(JSON.parse),
+      readFile(contractPath, "utf8").then(JSON.parse),
       readFile(skillPath, "utf8"),
     ]);
     if (view?.schemaVersion !== 1 || !Array.isArray(view.regions)) {
       throw new Error(`Feature module ${record.id} has an invalid view specification.`);
     }
-    const storageFields = ["schemaVersion", "kind", "contextSource", "records", "snapshot", "catalogFile", "retrievalPolicyFile", "engine"];
-    if (!storage || Object.keys(storage).length !== storageFields.length || storageFields.some(field => !(field in storage)) || storage.schemaVersion !== 2 || !["record-log", "snapshot", "hybrid"].includes(storage.kind) || !["records", "snapshot"].includes(storage.contextSource)) {
-      throw new Error(`Feature module ${record.id} has an invalid storage specification.`);
-    }
-    const variableEngine = storage.engine && Object.keys(storage.engine).sort().join(",") === "configFile,kind" && storage.engine.kind === "variables";
-    const outputEngine = storage.engine && Object.keys(storage.engine).join(",") === "kind" && storage.engine.kind === "post-narrative-output";
-    if (storage.engine !== null && !variableEngine && !outputEngine) {
-      throw new Error(`Feature module ${record.id} has an invalid storage engine.`);
-    }
-    if (storage.engine?.kind === "variables" && (storage.kind !== "hybrid" || storage.contextSource !== "snapshot")) {
-      throw new Error(`Variable module ${record.id} must use hybrid storage with snapshot context.`);
-    }
-    if (storage.engine?.kind === "post-narrative-output" && (storage.kind !== "record-log" || storage.contextSource !== "records" || record.surface !== "frontend")) {
-      throw new Error(`Post-narrative output module ${record.id} must use frontend record-log storage with records context.`);
-    }
-    if ((storage.kind === "record-log" || storage.kind === "hybrid") && !storage.records) throw new Error(`Feature module ${record.id} requires records storage.`);
-    if ((storage.kind === "snapshot" || storage.kind === "hybrid") && !storage.snapshot) throw new Error(`Feature module ${record.id} requires snapshot storage.`);
-    if (storage.contextSource === "records" && !storage.records) throw new Error(`Feature module ${record.id} contextSource records is unavailable.`);
-    if (storage.contextSource === "snapshot" && !storage.snapshot) throw new Error(`Feature module ${record.id} contextSource snapshot is unavailable.`);
-    for (const stream of [storage.records, storage.snapshot].filter(Boolean)) {
-      if (Object.keys(stream).length !== 3 || !["file", "initialFile", "schemaFile"].every(field => field in stream)) {
-        throw new Error(`Feature module ${record.id} storage stream must contain exactly file, initialFile, and schemaFile.`);
-      }
-      for (const field of ["file", "initialFile", "schemaFile"]) {
-        const child = resolveFeatureModuleChild(moduleDirectory, stream[field], `${record.id}.storage.${field}`);
-        if (field === "schemaFile") await readFile(child, "utf8").then(JSON.parse);
-      }
-    }
-    const catalogPath = resolveFeatureModuleChild(moduleDirectory, storage.catalogFile, `${record.id}.catalogFile`);
-    const retrievalPolicyPath = resolveFeatureModuleChild(moduleDirectory, storage.retrievalPolicyFile, `${record.id}.retrievalPolicyFile`);
-    const rawRetrievalPolicy = JSON.parse(await readFile(retrievalPolicyPath, "utf8"));
-    const retrievalPolicy = runtimeRetrievalPolicy(rawRetrievalPolicy, `module:${record.id}`, storage.contextSource === "snapshot" ? "snapshot" : "module-records");
-    const initialRecordValues = storage.records
-      ? JSON.parse(await readFile(resolveFeatureModuleChild(moduleDirectory, storage.records.initialFile, `${record.id}.records.initialFile`), "utf8"))
-      : [];
-    if (!Array.isArray(initialRecordValues)) throw new Error(`Feature module ${record.id} initial records must be an array.`);
-    const initialRecords = initialRecordValues.map((item: unknown) => validateRecordEnvelope(item) as RecordEnvelope);
-    if (initialRecords.some(item => item.source !== `module:${record.id}`)) throw new Error(`Feature module ${record.id} initial record source is invalid.`);
-    const initialSnapshot = storage.snapshot
-      ? validateRecordEnvelope(JSON.parse(await readFile(resolveFeatureModuleChild(moduleDirectory, storage.snapshot.initialFile, `${record.id}.snapshot.initialFile`), "utf8"))) as RecordEnvelope
-      : null;
-    if (initialSnapshot && initialSnapshot.source !== `module:${record.id}`) throw new Error(`Feature module ${record.id} initial snapshot source is invalid.`);
-    const variable = storage.engine?.kind === "variables"
-      ? await readVariableRuntime(moduleDirectory, storage.engine.configFile, record.id)
-      : null;
-    void catalogPath;
+    const contract = normalizeDataContract(rawContract, record.id);
     modules.push({
       id: record.id,
       title: record.title.trim(),
@@ -611,20 +422,15 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
       surface: record.surface,
       contextOrder: record.contextOrder,
       displayOrder: record.displayOrder,
+      basedOn: record.basedOn,
+      contract,
       view,
       viewPath,
       moduleDirectory,
-      storage,
-      retrievalPolicy,
       skillPath,
       skillDescription: parseSkillDescription(skillText, `${record.id}.skillFile`),
-      initialRecords,
-      initialSnapshot,
-      postNarrativeOutput: storage.engine?.kind === "post-narrative-output",
-      variable,
     });
   }
-  if (modules.filter(module => module.variable).length > 1) throw new Error("A card may define only one variable storage engine.");
   return modules.sort((left, right) => left.contextOrder - right.contextOrder || left.id.localeCompare(right.id));
 }
 
@@ -640,8 +446,10 @@ async function readContextProcessors(cardDirectory: string, paths: unknown, modu
     const definition = validateContextProcessorDefinition(JSON.parse(await readFile(definitionPath, "utf8")));
     if (ids.has(definition.id)) throw new Error(`Duplicate context-processor id: ${definition.id}`);
     ids.add(definition.id);
-    for (const moduleId of definition.dependencies.modules) {
-      if (!moduleIds.has(moduleId)) throw new Error(`Context processor ${definition.id} requires unknown feature module ${moduleId}.`);
+    for (const query of definition.dependencies.dataQueries) {
+      if (!moduleIds.has(query.moduleId)) throw new Error(`Context processor ${definition.id} requires unknown feature module ${query.moduleId}.`);
+      const module = modules.find(item => item.id === query.moduleId)!;
+      if (!module.contract.collections[query.collectionId]) throw new Error(`Context processor ${definition.id} requires unknown collection ${query.moduleId}/${query.collectionId}.`);
     }
     const entryPath = resolveFeatureModuleChild(cardDirectory, definition.entryFile, `${definition.id}.entryFile`);
     await readFile(entryPath, "utf8");
@@ -818,253 +626,15 @@ function lastAgentExchange(messages: any[], startedAt = 0) {
 export default function (pi: ExtensionAPI) {
   let active: ActiveBridge | null = null;
   let rpRun: RpRun | null = null;
-
-  function publicDraftDirectory(target: ActiveBridge) {
-    if (!target.sessionDirectory) throw new Error("The active RP chat has no session directory.");
-    return resolve(target.sessionDirectory, "workspace", "public", "turn");
-  }
-
-  function variableDraftPath(target: ActiveBridge) {
-    return resolve(publicDraftDirectory(target), "variables.json");
-  }
-
-  function outputDraftPath(target: ActiveBridge) {
-    return resolve(publicDraftDirectory(target), "outputs.json");
-  }
-
-  async function resetPublicDraftDirectory(target: ActiveBridge) {
-    const directory = publicDraftDirectory(target);
-    for (const [fileName, command] of [["outputs.json", "/rp-outputs-resume"], ["variables.json", "/rp-vars-resume"]]) {
-      const pending = await readFile(resolve(directory, fileName), "utf8").then(JSON.parse).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      });
-      if (pending?.status === "pending") {
-        throw httpError(409, `The previous post-narrative draft is unfinished. Run ${command} in Pi and finish it before starting another RP turn.`);
-      }
-    }
-    await rm(directory, { recursive: true, force: true });
-    await mkdir(directory, { recursive: true });
-  }
-
   function latestCompletedTurn(target: ActiveBridge) {
     return target.messages.reduce((maximum, message) => message.data.role === "assistant" ? Math.max(maximum, message.binding.turn) : maximum, 0);
   }
-
-  async function publicLongTermContext(target: ActiveBridge, throughTurn: number) {
-    if (!target.sessionDirectory) return "";
-    const root = resolve(target.sessionDirectory, "workspace", "public", "long-term");
-    const entries = await readdir(root, { withFileTypes: true }).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    });
-    const records = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const record = await readFile(resolve(root, entry.name, "current.json"), "utf8").then(JSON.parse).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      });
-      if (!record) continue;
-      if (Number.isSafeInteger(record.binding?.throughTurn) && record.binding.throughTurn > throughTurn) continue;
-      records.push({ namespace: entry.name, record });
-    }
-    return records.length ? `# Public long-term workflow results\n${JSON.stringify(records, null, 2)}` : "";
-  }
-
-  async function schemaErrors(module: FeatureModule, state: unknown) {
-    if (!module.variable) return [];
-    const schema = JSON.parse(await readFile(module.variable.schemaPath, "utf8"));
-    return Value.Errors(schema as any, state).map((error: any) => ({
-      path: error.instancePath || "",
-      attemptedValue: variableValueAt(state, error.instancePath || ""),
-      currentValue: null,
-      code: `schema_${error.keyword}`,
-      message: error.message,
-    }));
-  }
-
-  async function runVariableHook(path: string | null, exportName: string, args: unknown[]) {
-    if (!path) return { state: args[exportName === "normalize" ? 0 : 1], errors: [] };
-    const loaded = await import(`${pathToFileURL(path).href}?run=${Date.now()}-${randomUUID()}`);
-    const hook = loaded[exportName] || loaded.default;
-    if (typeof hook !== "function") throw new Error(`${path} must export ${exportName}().`);
-    const result = await hook(...args.map(clone => structuredClone(clone)));
-    if (result && typeof result === "object" && !Array.isArray(result) && "state" in result) {
-      return { state: structuredClone(result.state), errors: Array.isArray(result.errors) ? result.errors : [] };
-    }
-    return { state: structuredClone(result), errors: [] };
-  }
-
-  async function initializeVariableModulesForOpening(target: ActiveBridge, openingRecord: RecordEnvelope) {
-    if (!target.sessionDirectory) return;
-    for (const module of target.featureModules.filter(item => item.variable)) {
-      const runtime = module.variable!;
-      const base = JSON.parse(await readFile(runtime.defaultInitialPath, "utf8"));
-      const overlayPath = runtime.openingInitialPaths[target.openingId || ""];
-      const overlay = overlayPath ? JSON.parse(await readFile(overlayPath, "utf8")) : {};
-      let state = mergeVariableState(base, overlay);
-      const normalized = await runVariableHook(runtime.normalizePath, "normalize", [state, { phase: "initialization", openingId: target.openingId }]);
-      state = normalized.state;
-      const errors = [...normalized.errors, ...await schemaErrors(module, state)];
-      if (errors.length) throw new Error(`Variable initialization failed: ${JSON.stringify(errors)}`);
-      const record = createRecordEnvelope({
-        id: `variable-${randomUUID()}`,
-        source: `module:${module.id}`,
-        sequence: 0,
-        binding: { messageId: openingRecord.id, turn: 0 },
-        metadata: { recordType: "variable-snapshot", entityIds: [], tags: ["opening"] },
-        data: { state, changedPaths: [], reasons: [], previousSnapshotId: null },
-      }) as RecordEnvelope;
-      const directory = resolve(target.sessionDirectory, "modules", module.id);
-      await writeFile(resolve(directory, module.storage.records!.file), toRecordLines([record]), "utf8");
-      await writeFile(resolve(directory, module.storage.snapshot!.file), `${JSON.stringify(record, null, 2)}\n`, "utf8");
-      await refreshSourceCatalog(target, `module:${module.id}`, [record]);
-    }
-  }
-
-  async function beginVariableUpdate(target: ActiveBridge, run: RpRun, assistantRecord: RecordEnvelope) {
-    const module = activeVariableModule(target);
-    if (!module || !target.sessionDirectory) return false;
-    const current = await currentVariableRecord(target, module);
-    if (!current) throw new Error(`Variable module ${module.id} has no effective snapshot.`);
-    const draft = createVariableDraft({
-      turnId: `turn-${target.turn}`,
-      moduleId: module.id,
-      assistantMessageId: assistantRecord.id,
-      userMessage: run.submittedText,
-      assistantMessage: run.assistantContent,
-      baseRecordId: current.id,
-    });
-    await mkdir(publicDraftDirectory(target), { recursive: true });
-    await writeFile(variableDraftPath(target), `${JSON.stringify(draft, null, 2)}\n`, "utf8");
-    run.phase = "variable-update";
-    run.assistantMessageId = assistantRecord.id;
-    run.variableModuleId = module.id;
-    run.contextContent = null;
-    await prepareLifecycleNodeModel(target, run, "variable-update");
-    run.phaseStartedAt = Date.now();
-    pi.sendMessage({
-      customType: "pi-rp-variable-update-task",
-      content: `Run the post-narrative variable update for turn ${target.turn}.`,
-      display: false,
-      details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleId: module.id },
-    }, { deliverAs: "followUp", triggerTurn: true });
-    return true;
-  }
-
-  async function beginOutputUpdate(target: ActiveBridge, run: RpRun, assistantRecord: RecordEnvelope) {
-    const modules = postNarrativeOutputModules(target);
-    if (!modules.length || !target.sessionDirectory) return false;
-    const draft = createOutputDraft({
-      id: `output-draft-${randomUUID()}`,
-      turn: target.turn,
-      assistantMessageId: assistantRecord.id,
-      userMessage: run.submittedText,
-      assistantMessage: run.assistantContent,
-      moduleIds: modules.map(module => module.id),
-    });
-    run.phase = "output-update";
-    run.assistantMessageId = assistantRecord.id;
-    run.outputModuleIds = [...draft.moduleIds];
-    run.outputFinalized = false;
-    await mkdir(publicDraftDirectory(target), { recursive: true });
-    await writeFile(outputDraftPath(target), `${JSON.stringify(draft, null, 2)}\n`, "utf8");
-    await prepareLifecycleNodeModel(target, run, "module-output");
-    run.phaseStartedAt = Date.now();
-    pi.sendMessage({
-      customType: "pi-rp-output-update-task",
-      content: `Run the post-narrative auxiliary-output update for turn ${target.turn}.`,
-      display: false,
-      details: { cardId: target.cardId, sessionId: target.recordId, turn: target.turn, moduleIds: draft.moduleIds },
-    }, { deliverAs: "followUp", triggerTurn: true });
-    return true;
-  }
-
-  async function outputUpdateContext(target: ActiveBridge, run: RpRun) {
-    const draft = JSON.parse(await readFile(outputDraftPath(target), "utf8"));
-    const modules = target.featureModules.filter(module => run.outputModuleIds.includes(module.id) && module.postNarrativeOutput);
-    const moduleSections = await Promise.all(modules.map(async module => {
-      const records = await readModuleContextRecords(target, module);
-      const selected = selectRecords(records, module.retrievalPolicy.code.selector).records as RecordEnvelope[];
-      return [
-        `## ${module.title} (${module.id})`,
-        `Module skill: ${relative(target.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
-        module.skillDescription,
-        selected.length ? `Prior selected module records:\n${formatRecords(selected)}` : "No prior selected module records.",
-      ].join("\n");
-    }));
-    return [
-      "# Authoritative post-narrative auxiliary-output task",
-      "The main RP prose is already final and player-visible. Do not continue, repeat, or rewrite it. Resolve each listed module according to its own skill. Emit only content that belongs outside the main narrative; use not_triggered when its authored condition does not apply.",
-      await fixedRpContext(target),
-      run.contextContent ? `## Authoritative context used for the saved prose\n${run.contextContent}` : "",
-      `## Current user message\n${draft.userMessage}`,
-      `## Saved AI prose\n${draft.assistantMessage}`,
-      ...moduleSections,
-      `## Existing decisions\n${JSON.stringify(draft.decisions || {}, null, 2)}`,
-    ].join("\n\n");
-  }
-
-  async function variableUpdateContext(target: ActiveBridge, run: RpRun) {
-    const module = target.featureModules.find(item => item.id === run.variableModuleId && item.variable);
-    if (!module || !target.sessionDirectory) throw new Error("The active variable update module is unavailable.");
-    const record = await currentVariableRecord(target, module);
-    const draft = JSON.parse(await readFile(variableDraftPath(target), "utf8"));
-    return [
-      "# Authoritative post-narrative variable update task",
-      "The RP prose is already final and player-visible. Update persistent variables from that prose; do not continue or rewrite the story.",
-      `Variable module skill: ${relative(target.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
-      `Public per-turn draft directory: ${relative(target.context.cwd, publicDraftDirectory(target)).replaceAll("\\", "/")}`,
-      "Use the module skill for semantic update rules. Validation reports identify failed operations; use the complete state and authored rules to infer any related corrections.",
-      `## Current user message\n${draft.userMessage}`,
-      `## Saved AI prose\n${draft.assistantMessage}`,
-      `## Complete effective variable state\n${JSON.stringify(record?.data.state ?? {}, null, 2)}`,
-      `## Existing draft operations\n${JSON.stringify(draft.operations || [], null, 2)}`,
-    ].join("\n\n");
-  }
-
   async function ensureFeatureModuleRecords(target: ActiveBridge) {
     if (!target.recordId || !target.sessionDirectory) return;
-    for (const module of target.featureModules) {
-      const moduleDirectory = resolve(target.sessionDirectory, "modules", module.id);
-      await mkdir(moduleDirectory, { recursive: true });
-      const binding = {
-        schemaVersion: 1,
-        cardId: target.cardId,
-        sessionId: target.recordId,
-        moduleId: module.id,
-        storageKind: module.storage.kind,
-      };
-      await writeFile(resolve(moduleDirectory, "binding.json"), `${JSON.stringify(binding, null, 2)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-      }).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      });
-      if (module.storage.records) {
-        const recordsPath = resolve(moduleDirectory, module.storage.records.file);
-        await mkdir(resolve(recordsPath, ".."), { recursive: true });
-        await writeFile(recordsPath, toRecordLines(module.initialRecords), { encoding: "utf8", flag: "wx" }).catch(error => {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        });
-      }
-      if (module.storage.snapshot && module.initialSnapshot) {
-        const snapshotPath = resolve(moduleDirectory, module.storage.snapshot.file);
-        await mkdir(resolve(snapshotPath, ".."), { recursive: true });
-        await writeFile(snapshotPath, `${JSON.stringify(module.initialSnapshot, null, 2)}\n`, { encoding: "utf8", flag: "wx" }).catch(error => {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        });
-      }
-      const initialContextRecords = module.storage.contextSource === "snapshot" && module.initialSnapshot
-        ? [module.initialSnapshot]
-        : module.initialRecords;
-      const catalogPath = resolve(moduleDirectory, module.storage.catalogFile);
-      await mkdir(resolve(catalogPath, ".."), { recursive: true });
-      await writeFile(catalogPath, `${JSON.stringify(buildCatalog(initialContextRecords), null, 2)}\n`, { encoding: "utf8", flag: "wx" }).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      });
-    }
+    await new RpDataStore({
+      sessionDirectory: target.sessionDirectory,
+      modules: target.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })),
+    }).initialize();
   }
 
   async function ensureActiveRecord() {
@@ -1105,91 +675,42 @@ export default function (pi: ExtensionAPI) {
 
   async function pruneModuleRecords(target: ActiveBridge, deletedMessageIds: Set<string>) {
     if (!target.sessionDirectory || deletedMessageIds.size === 0) return;
-    for (const module of target.featureModules) {
-      const directory = resolve(target.sessionDirectory, "modules", module.id);
-      let retainedRecords: RecordEnvelope[] | null = null;
-      if (module.storage.records) {
-        const path = resolve(directory, module.storage.records.file);
-        const records = parseRecordLines(await readFile(path, "utf8")) as RecordEnvelope[];
-        const retained = records.filter(record => !record.binding.messageId || !deletedMessageIds.has(record.binding.messageId));
-        retainedRecords = retained;
-        if (retained.length !== records.length) await writeFile(path, toRecordLines(retained), "utf8");
-        if (module.storage.contextSource === "records") await refreshSourceCatalog(target, `module:${module.id}`, retained);
-      }
-      if (module.storage.snapshot) {
-        const path = resolve(directory, module.storage.snapshot.file);
-        const snapshot = validateRecordEnvelope(JSON.parse(await readFile(path, "utf8"))) as RecordEnvelope;
-        if (snapshot.binding.messageId && deletedMessageIds.has(snapshot.binding.messageId) && module.initialSnapshot) {
-          const replacement = module.variable && retainedRecords?.length ? retainedRecords.at(-1)! : module.initialSnapshot;
-          await writeFile(path, `${JSON.stringify(replacement, null, 2)}\n`, "utf8");
-          if (module.storage.contextSource === "snapshot") {
-            await refreshSourceCatalog(target, `module:${module.id}`, [replacement]);
-          }
-        }
-      }
-    }
-  }
-
-  async function readModuleContextRecords(target: ActiveBridge, module: FeatureModule): Promise<RecordEnvelope[]> {
-    if (!target.sessionDirectory) return [];
-    await ensureFeatureModuleRecords(target);
-    const directory = resolve(target.sessionDirectory, "modules", module.id);
-    if (module.storage.contextSource === "records" && module.storage.records) {
-      return parseRecordLines(await readFile(resolve(directory, module.storage.records.file), "utf8")) as RecordEnvelope[];
-    }
-    if (module.storage.contextSource === "snapshot" && module.storage.snapshot) {
-      const snapshot = validateRecordEnvelope(JSON.parse(await readFile(resolve(directory, module.storage.snapshot.file), "utf8"))) as RecordEnvelope;
-      return [snapshot];
-    }
-    return [];
+    await new RpDataStore({
+      sessionDirectory: target.sessionDirectory,
+      modules: target.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })),
+    }).pruneByMessageIds(deletedMessageIds);
   }
 
   async function readModuleProcessorData(target: ActiveBridge, module: FeatureModule) {
-    if (!target.sessionDirectory) return { records: [], snapshot: null };
+    if (!target.sessionDirectory) return { collections: {} };
     await ensureFeatureModuleRecords(target);
-    const directory = resolve(target.sessionDirectory, "modules", module.id);
-    const records = module.storage.records
-      ? parseRecordLines(await readFile(resolve(directory, module.storage.records.file), "utf8")) as RecordEnvelope[]
-      : [];
-    const snapshot = module.storage.snapshot
-      ? validateRecordEnvelope(JSON.parse(await readFile(resolve(directory, module.storage.snapshot.file), "utf8"))) as RecordEnvelope
-      : null;
-    return { records, snapshot };
+    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: target.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+    const collections: Record<string, unknown> = {};
+    for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
+    return { collections };
   }
 
   async function readSourceRecords(target: ActiveBridge, source: string, run: RpRun): Promise<RecordEnvelope[]> {
     if (source === "messages") return target.messages.filter(record => record.sequence < run.submittedSequence);
-    if (!source.startsWith("module:")) throw new Error(`Unknown RP record source: ${source}`);
-    const moduleId = source.slice("module:".length);
-    const module = target.featureModules.find(item => item.id === moduleId);
-    if (!module) throw new Error(`Unknown RP feature module: ${moduleId}`);
-    return readModuleContextRecords(target, module);
+    throw new Error(`Unknown RP transcript source: ${source}`);
   }
 
   function sourcePolicy(target: ActiveBridge, source: string): RetrievalPolicy {
     if (source === "messages") return target.messagePolicy;
-    const module = target.featureModules.find(item => `module:${item.id}` === source);
-    if (!module) throw new Error(`Unknown RP record source: ${source}`);
-    return module.retrievalPolicy;
+    throw new Error(`Unknown RP transcript source: ${source}`);
   }
 
   function sourceCatalogPath(target: ActiveBridge, source: string) {
     if (!target.sessionDirectory) throw new Error("The active RP chat has no session directory.");
     if (source === "messages") return resolve(target.sessionDirectory, "catalog", "messages.json");
-    const module = target.featureModules.find(item => `module:${item.id}` === source);
-    if (!module) throw new Error(`Unknown RP record source: ${source}`);
-    return resolve(target.sessionDirectory, "modules", module.id, module.storage.catalogFile);
+    throw new Error(`Unknown RP transcript source: ${source}`);
   }
 
   async function refreshSourceCatalog(target: ActiveBridge, source: string, records: RecordEnvelope[]) {
     if (!target.sessionDirectory) return buildCatalog(records);
     const path = sourceCatalogPath(target, source);
     await mkdir(resolve(path, ".."), { recursive: true });
-    const existing = await readFile(path, "utf8").then(JSON.parse).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    });
-    const catalog = buildCatalog(records, existing);
+    const catalog = buildCatalog(records);
     await writeFile(path, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
     return catalog;
   }
@@ -1204,9 +725,7 @@ export default function (pi: ExtensionAPI) {
       submittedMessageId: target.messages.find(record => record.sequence === run.submittedSequence)?.id || null,
       automatic: run.automaticSelections,
       agentQueries: run.agentQueries,
-      catalogUpdates: run.catalogUpdates,
       processors: run.processorSelections,
-      outputUpdates: run.outputUpdates,
       unresolvedAgentSources: run.agentSources.filter(source => !run.agentQueries.some(query => query.source === source)),
       updatedAt: new Date().toISOString(),
     };
@@ -1215,16 +734,24 @@ export default function (pi: ExtensionAPI) {
 
   async function buildDynamicProcessorContext(target: ActiveBridge, run: RpRun) {
     if (target.contextProcessors.length === 0) return "";
-    const requiredModuleIds = new Set<string>(target.contextProcessors.flatMap(processor => processor.definition.dependencies.modules as string[]));
-    const moduleData: Record<string, unknown> = {};
-    for (const moduleId of requiredModuleIds) {
-      const module = target.featureModules.find(item => item.id === moduleId);
-      if (!module) throw new Error(`Unknown context-processor module dependency: ${moduleId}`);
-      moduleData[moduleId] = await readModuleProcessorData(target, module);
+    if (!target.sessionDirectory || !run.workflowRunId) throw new Error("Context processors require an active workflow node and session data store.");
+    const workflowEntry = (target.workflowEngine as any).runs.get(run.workflowRunId);
+    const narrativeNode = workflowEntry?.workflow?.nodes?.find((item: any) => item.id === run.workflowNarrativeNodeId);
+    if (!narrativeNode) throw new Error("Context processors cannot resolve the active narrative node.");
+    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: target.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+    const dataQueries: Record<string, unknown> = {};
+    const dataQuerySignatures: Record<string, string> = {};
+    for (const processor of target.contextProcessors) {
+      for (const query of processor.definition.dependencies.dataQueries) {
+        const signature = JSON.stringify(query);
+        if (dataQuerySignatures[query.id] && dataQuerySignatures[query.id] !== signature) throw new Error(`Context processor data query ID ${query.id} has conflicting definitions.`);
+        if (dataQuerySignatures[query.id]) continue;
+        dataQuerySignatures[query.id] = signature;
+        const access = narrativeNode.moduleAccess?.find((item: any) => item.moduleId === query.moduleId && item.collectionId === query.collectionId);
+        if (!access) throw new Error(`Context processor ${processor.id} has no narrative-node access to ${query.moduleId}/${query.collectionId}.`);
+        dataQueries[query.id] = await queryData(store, query, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+      }
     }
-    const variableModule = activeVariableModule(target);
-    const variableRecord = variableModule ? await currentVariableRecord(target, variableModule) : null;
-    const variableState = variableRecord?.data?.state ?? null;
     const available = {
       card: { id: target.cardId, name: target.cardName },
       turn: target.turn,
@@ -1232,8 +759,7 @@ export default function (pi: ExtensionAPI) {
       openingId: target.openingId,
       player: { name: target.playerName, description: target.playerDescription },
       messages: target.messages.filter(record => record.sequence < run.submittedSequence),
-      variables: variableState,
-      modules: moduleData,
+      dataQueries,
       settings: { common: target.commonSettings, card: target.cardSettings },
     };
     const sections: string[] = [];
@@ -1249,10 +775,7 @@ export default function (pi: ExtensionAPI) {
         const content = [];
         for (const fragment of included) {
           const source = await readFile(fragment.path, "utf8");
-          const rendered = variableModule?.variable && variableRecord
-            ? renderVariableTemplates(source, variableRecord.data.state, variableModule.variable.bindings)
-            : source;
-          content.push(`## ${fragment.title}\n${rendered.trim()}`);
+          content.push(`## ${fragment.title}\n${source.trim()}`);
         }
         sections.push([
           `# Dynamic card context: ${processor.id}`,
@@ -1272,56 +795,27 @@ export default function (pi: ExtensionAPI) {
 
   async function buildAutomaticContext(target: ActiveBridge, run: RpRun) {
     const sections: string[] = [];
-    const sources = ["messages", ...target.featureModules.map(module => `module:${module.id}`)];
+    const sources = ["messages"];
     for (const source of sources) {
       const records = await readSourceRecords(target, source, run);
       const policy = sourcePolicy(target, source);
-      const featureModule = source.startsWith("module:")
-        ? target.featureModules.find(module => `module:${module.id}` === source)
-        : null;
-      if (featureModule?.variable) {
-        const snapshot = records.at(-1);
-        const projection = snapshot
-          ? projectVariableState(snapshot.data.state, { bindings: featureModule.variable.alwaysForNarrative }, featureModule.variable.bindings)
-          : { selected: {}, missing: [] };
-        run.automaticSelections[source] = snapshot ? [snapshot.id] : [];
-        sections.push([
-          `# Fixed narrative variable references: ${source}`,
-          JSON.stringify(projection.selected, null, 2),
-          projection.missing.length ? `Missing authored references: ${JSON.stringify(projection.missing)}` : "",
-        ].filter(Boolean).join("\n"));
-        if (policy.agent.mode !== "disabled") {
-          run.agentSources.push(source);
-          sections.push([
-            `# Variable reference catalog: ${source}`,
-            `Agent selection mode: ${policy.agent.mode}. Resolve this source once with rp_context_query. Use decision=select with exact projection.bindings or projection.paths when variables are relevant, or not_triggered when the module skill's authored activation condition did not occur.`,
-            Object.entries(featureModule.variable.bindings).map(([id, definition]) => `${id}: ${JSON.stringify(definition)}`).join("\n") || "No named bindings are defined.",
-          ].join("\n"));
-        }
-        continue;
-      }
       const catalog = await refreshSourceCatalog(target, source, records);
       if (policy.agent.mode !== "override") {
         const selected = selectRecords(records, policy.code.selector).records as RecordEnvelope[];
         run.automaticSelections[source] = selected.map(record => record.id);
-        sections.push(source === "messages"
-          ? `# Authoritative editable Web RP history\n${authoritativeTranscript(target, selected)}`
-          : `# Automatically selected records: ${source}\n${formatRecords(selected)}`);
+        sections.push(`# Authoritative editable Web RP history\n${authoritativeTranscript(target, selected)}`);
       } else {
         run.automaticSelections[source] = [];
       }
-      if (policy.agent.mode !== "disabled" || policy.catalog.agentMode !== "disabled") {
+      if (policy.agent.mode !== "disabled") {
         if (policy.agent.mode !== "disabled") run.agentSources.push(source);
         sections.push([
           `# Record catalog: ${source}`,
-          policy.agent.mode === "disabled" ? "Agent record selection is disabled; use only the automatically selected full records." : `Agent selection mode: ${policy.agent.mode}. You must resolve this source once with rp_context_query before completing this node response. Use decision=select with a deterministic selector, decision=success_empty when no record is required after inspection, or decision=not_triggered when the authored activation condition did not occur.`,
-          policy.catalog.agentMode === "disabled" ? "" : `Catalog enrichment: ${policy.catalog.agentMode}. After reading exact records, follow the source's owning skill and use rp_catalog_update only when its authored catalog guidance applies.`,
+          policy.agent.mode === "disabled" ? "Agent message selection is disabled; use only the automatically selected history." : `Agent selection mode: ${policy.agent.mode}. You must resolve message history once with rp_message_query before completing this node response. Use decision=select, success_empty, or not_triggered as authored.`,
           formatCatalog(catalog),
         ].join("\n"));
       }
     }
-    const continuity = await readContinuityContext(target.sessionDirectory);
-    if (continuity) sections.push(`# Persisted continuity records\n${continuity}`);
     return sections.join("\n\n");
   }
 
@@ -1379,75 +873,6 @@ export default function (pi: ExtensionAPI) {
     if (!model) throw new Error(`Pi model was not found: ${profile.provider}/${profile.model}`);
     return { profile, model };
   }
-
-  async function prepareLifecycleNodeModel(target: ActiveBridge, run: RpRun, nodeType: "module-output" | "variable-update", modelOverride?: string) {
-    const workflows = await target.configStore.listWorkflows();
-    const workflow = workflows.find((item: any) => item.source === "card" && item.kind === "turn-background" && item.nodes?.some((node: any) => node.type === nodeType));
-    const node = workflow?.nodes.find((item: any) => item.type === nodeType);
-    let agent = null;
-    let modelId = "pi:current";
-    if (workflow && node) {
-      const candidateAgentId = node.agentId || workflow.defaults?.agentId;
-      agent = candidateAgentId ? (await target.configStore.getAgent(candidateAgentId)).effective : null;
-      modelId = resolveNodeProfiles({ node, workflow, agent }).modelId;
-    } else {
-      const fallbackAgentId = nodeType === "module-output" ? "module-updater" : "variable-updater";
-      agent = await target.configStore.getAgent(fallbackAgentId).then((value: any) => value.effective).catch(() => null);
-      modelId = agent?.defaultModelId || "pi:current";
-    }
-    if (modelOverride) modelId = modelOverride;
-    const configured = await resolveConfiguredModel(target, modelId, run.baseModel);
-    if (!configured.model) throw new Error(`No model is available for ${nodeType}.`);
-    if (target.context.model?.provider !== configured.model.provider || target.context.model?.id !== configured.model.id) {
-      const selected = await pi.setModel(configured.model);
-      if (!selected) throw new Error(`Pi could not select the ${nodeType} model: ${modelId}`);
-    }
-    run.phaseModelHeadPrompt = configured.profile?.headPrompt || null;
-    run.phaseModelTailPrompt = configured.profile?.tailPrompt || null;
-    run.phaseAgentPrompt = agent?.prompt || null;
-  }
-
-  async function preparePendingLifecycleRetry(target: ActiveBridge, nodeType: "module-output" | "variable-update", runId: string, modelId?: string) {
-    if (!target.sessionDirectory || !target.recordId) throw new Error("The active RP chat has no saved session.");
-    const draftPath = nodeType === "module-output" ? outputDraftPath(target) : variableDraftPath(target);
-    const draft = await readFile(draftPath, "utf8").then(JSON.parse).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    });
-    if (!draft || draft.status !== "pending") throw new Error(`There is no pending ${nodeType} draft to recover.`);
-    const assistantIndex = target.messages.findIndex(message => message.id === draft.assistantMessageId);
-    if (assistantIndex === -1) throw new Error("The pending lifecycle draft's AI message no longer exists.");
-    const userRecord = [...target.messages.slice(0, assistantIndex)].reverse().find(message => message.data.role === "user");
-    const recovered: RpRun = {
-      cardId: target.cardId,
-      recordId: target.recordId,
-      submittedText: draft.userMessage,
-      submittedSequence: userRecord?.sequence ?? Math.max(0, assistantIndex - 1),
-      assistantContent: draft.assistantMessage,
-      automaticSelections: {}, agentQueries: [], catalogUpdates: [], agentSources: [], processorSelections: [], outputUpdates: [], contextContent: null,
-      phase: nodeType === "module-output" ? "output-update" : "variable-update",
-      assistantMessageId: draft.assistantMessageId,
-      outputModuleIds: nodeType === "module-output" ? [...draft.moduleIds] : [],
-      outputFinalized: nodeType !== "module-output",
-      variableModuleId: nodeType === "variable-update" ? draft.moduleId : null,
-      variableFinalized: false,
-      workflowRunId: runId,
-      baseModel: target.context.model,
-      phaseStartedAt: Date.now(),
-    };
-    await prepareLifecycleNodeModel(target, recovered, nodeType, modelId);
-    target.pending = true;
-    rpRun = recovered;
-    return () => pi.sendMessage({
-      customType: nodeType === "module-output" ? "pi-rp-output-update-task" : "pi-rp-variable-update-task",
-      content: nodeType === "module-output"
-        ? "Resume the pending auxiliary-output workflow node."
-        : "Resume the pending variable-update workflow node.",
-      display: false,
-      details: { recovered: true, runId, draftId: draft.id },
-    }, { deliverAs: "followUp", triggerTurn: true });
-  }
-
   async function executeWorkflowNode(task: any) {
     if (!active?.recordId || !active.sessionDirectory) throw new Error("The workflow has no active RP chat.");
     const { workflow, run, node, agent, binding } = task;
@@ -1461,19 +886,31 @@ export default function (pi: ExtensionAPI) {
       const loaded: any = await import(`${pathToFileURL(entryPath).href}?run=${Date.now()}-${randomUUID()}`);
       const execute = loaded.execute || loaded.default;
       if (typeof execute !== "function") throw new Error(`${entryPath} must export execute().`);
-      const output = await execute(Object.freeze({ run: structuredClone(run), node: structuredClone(node), card: { id: active.cardId, name: active.cardName } }));
-      return { output };
-    }
-
-    if (node.type === "module-output" && rpRun?.workflowRunId) {
-      if (rpRun.phase !== "output-update" || rpRun.outputModuleIds.length === 0) return { output: { updated: [], notTriggered: true } };
-      rpRun.workflowRunId = run.id;
-      return new Promise(resolve => { rpRun!.resolveOutputWorkflow = resolve; });
-    }
-    if (node.type === "variable-update" && rpRun?.workflowRunId) {
-      if (rpRun.phase !== "variable-update" || !rpRun.variableModuleId) return { output: { updated: [], notTriggered: true } };
-      rpRun.workflowRunId = run.id;
-      return new Promise(resolve => { rpRun!.resolveVariableWorkflow = resolve; });
+      const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+      await mkdir(nodeWorkspace, { recursive: true });
+      const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
+      const accessFor = (moduleId: string, collectionId: string) => {
+        const access = node.moduleAccess?.find((item: any) => item.moduleId === moduleId && item.collectionId === collectionId);
+        if (!access) throw new Error(`Code node ${node.id} has no access to ${moduleId}/${collectionId}.`);
+        return access;
+      };
+      const data = Object.freeze({
+        query: (request: any) => {
+          const access = accessFor(request.moduleId, request.collectionId);
+          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+        },
+        get: (request: any) => {
+          const access = accessFor(request.moduleId, request.collectionId);
+          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views });
+        },
+        resolve: async (value: string) => (await store.resolveIdentity(value)).filter((entry: any) => {
+          const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
+          return access && capabilityAllows(store.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
+        }),
+        submit: (batch: any) => executeDataBatch(store, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: "code", initiatorId: node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null } } }),
+      });
+      const output = await execute(Object.freeze({ run: structuredClone(run), node: structuredClone(node), card: { id: active.cardId, name: active.cardName }, workspace: nodeWorkspace, data }));
+      return { output, assistantMessageId: rpRun?.assistantMessageId || null };
     }
 
     if (node.type === "narrative") {
@@ -1507,6 +944,8 @@ export default function (pi: ExtensionAPI) {
     const { profile, model } = await resolveConfiguredModel(active, binding.modelId);
     if (!model) throw new Error("No model is available for this workflow node.");
     const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
+    const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+    await mkdir(nodeWorkspace, { recursive: true });
     const upstreamIds = node.context.fromNodes.length ? node.context.fromNodes : node.dependsOn;
     const upstream = node.context.mode === "fixed"
       ? []
@@ -1515,6 +954,16 @@ export default function (pi: ExtensionAPI) {
           output: run.nodes[id]?.output,
           ...(node.context.mode === "inherit" ? { inheritedContext: run.nodes[id]?.context } : {}),
         })).filter((item: any) => item.output !== null || item.inheritedContext);
+    const upstreamArtifacts = node.context.mode === "fixed" ? [] : await readVisibleArtifacts({
+      sessionDirectory: active.sessionDirectory,
+      target: { workflowRunId: run.id, nodeId: node.id, turn: run.turn },
+      fromNodeIds: upstreamIds,
+    });
+    const upstreamArtifactContent = [];
+    for (const artifact of upstreamArtifacts) {
+      const content = await readFile(artifact.path, "utf8");
+      upstreamArtifactContent.push({ id: artifact.id, nodeId: artifact.nodeId, format: artifact.format, content: content.slice(0, 50000), truncated: content.length > 50000 });
+    }
     let customContext = "";
     if (node.context.mode === "custom") {
       if (!node.context.processor) throw new Error(`Custom context node ${node.id} must name a processor.`);
@@ -1539,15 +988,80 @@ export default function (pi: ExtensionAPI) {
       modelHead: profile?.headPrompt,
       agentPrompt: agent?.prompt,
       fixedContext: await fixedRpContext(active),
-      dynamicContext: [Number.isSafeInteger(run.turn) ? `Turn: ${run.turn}` : "", run.payload?.frozenContext ? `Frozen completed-turn context:\n${run.payload.frozenContext}` : "", await publicLongTermContext(active, run.visibleThroughTurn ?? run.turn ?? latestCompletedTurn(active)), customContext].filter(Boolean).join("\n\n"),
-      upstreamArtifacts: upstream.length ? `Upstream node outputs:\n${JSON.stringify(upstream, null, 2)}` : "",
+      dynamicContext: [Number.isSafeInteger(run.turn) ? `Turn: ${run.turn}` : "", run.payload?.frozenContext ? `Frozen completed-turn context:\n${run.payload.frozenContext}` : "", customContext].filter(Boolean).join("\n\n"),
+      upstreamArtifacts: upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "",
       currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
       nodePrompt: node.prompt || node.description,
       modelTail: null,
     });
     const sdk: any = await import("@earendil-works/pi-coding-agent");
+    const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
+    const dataToolFactory = {
+      name: "rp-unified-data",
+      hidden: true,
+      factory(workerPi: any) {
+        if (agent?.tools?.includes("rp_data_query")) {
+        workerPi.registerTool({
+          name: "rp_data_query",
+          label: "Query RP data",
+          description: "Query authorized indexed RP data with a named return view.",
+          parameters: Type.Any(),
+          async execute(_id: string, parameters: any) {
+            const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
+            if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
+            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+            return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+          },
+        });
+        }
+        if (agent?.tools?.includes("rp_data_get")) {
+        workerPi.registerTool({
+          name: "rp_data_get",
+          label: "Read one RP record",
+          description: "Read one exact authorized RP record through a named view.",
+          parameters: Type.Any(),
+          async execute(_id: string, parameters: any) {
+            const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
+            if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
+            const result = await getDataRecord(dataStore, parameters, { capabilities: access.capabilities, views: access.views });
+            return { content: [{ type: "text", text: result ? JSON.stringify(result, null, 2) : "Record not found." }], details: result };
+          },
+        });
+        }
+        if (agent?.tools?.includes("rp_data_resolve")) {
+        workerPi.registerTool({
+          name: "rp_data_resolve",
+          label: "Resolve RP data identity",
+          description: "Resolve one registered ID, display name, or alias within this node's authorized collections.",
+          parameters: Type.Object({ value: Type.String() }),
+          async execute(_id: string, parameters: any) {
+            const matches = (await dataStore.resolveIdentity(parameters.value)).filter((entry: any) => {
+              const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
+              return access && capabilityAllows(dataStore.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
+            });
+            return { content: [{ type: "text", text: JSON.stringify(matches, null, 2) }], details: matches };
+          },
+        });
+        }
+        if (agent?.tools?.includes("rp_data_submit")) {
+        workerPi.registerTool({
+          name: "rp_data_submit",
+          label: "Submit RP data output",
+          description: "Submit one declared unified-change-batch output before node end.",
+          parameters: Type.Object({ output: Type.String() }),
+          async execute(_id: string, parameters: any) {
+            const output = node.outputs?.[parameters.output];
+            if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
+            const batch = JSON.parse(await readFile(resolve(nodeWorkspace, output.path), "utf8"));
+            const receipt = await executeDataBatch(dataStore, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: node.type === "code" ? "code" : "agent", initiatorId: agent?.id || node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null } } });
+            return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
+          },
+        });
+        }
+      },
+    };
     const loader = new sdk.DefaultResourceLoader({
-      cwd: paths.privateRun,
+      cwd: nodeWorkspace,
       agentDir: sdk.getAgentDir(),
       noExtensions: true,
       noSkills: true,
@@ -1555,7 +1069,7 @@ export default function (pi: ExtensionAPI) {
       noThemes: true,
       noContextFiles: true,
       systemPrompt: prompt.systemPrompt,
-      extensionFactories: profile?.tailPrompt ? [{
+      extensionFactories: [...(profile?.tailPrompt ? [{
         name: "rp-model-tail",
         hidden: true,
         factory(workerPi: any) {
@@ -1563,19 +1077,20 @@ export default function (pi: ExtensionAPI) {
             messages: [...event.messages, { role: "user", content: profile.tailPrompt, timestamp: Date.now() }],
           }));
         },
-      }] : [],
+      }] : []), dataToolFactory],
     });
     await loader.reload();
     const permittedBuiltins = new Set(["read", "write", "edit", "bash", "grep", "find", "ls", "powershell"]);
-    const tools = (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name));
+    const permittedDataTools = new Set(["rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"]);
+    const tools = (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedDataTools.has(name));
     const { session } = await sdk.createAgentSession({
-      cwd: paths.privateRun,
+      cwd: nodeWorkspace,
       modelRuntime: (active.context.modelRegistry as any).runtime,
       model,
       ...(profile?.thinking && profile.thinking !== "off" ? { thinkingLevel: profile.thinking } : {}),
       ...(tools.length ? { tools } : { noTools: "all" }),
       resourceLoader: loader,
-      sessionManager: sdk.SessionManager.inMemory(paths.privateRun),
+      sessionManager: sdk.SessionManager.inMemory(nodeWorkspace),
     });
     try {
       const userPrompt = prompt.contextMessages.join("\n\n") || "Execute this workflow node and return its result.";
@@ -1591,6 +1106,7 @@ export default function (pi: ExtensionAPI) {
       }
       return {
         output,
+        assistantMessageId: rpRun?.assistantMessageId || null,
         usage: tokenUsageFromMessages(session.messages),
         processRecord: lastAgentExchange(session.messages),
         context: {
@@ -1703,7 +1219,6 @@ export default function (pi: ExtensionAPI) {
     };
 
     const deliveredWorkflowEvents = new Set<string>();
-    const publishedWorkflowRuns = new Set<string>();
     let workflowWriteQueue: Promise<unknown> = Promise.resolve();
     const serializeWorkflowWrite = async <T>(operation: () => Promise<T>) => {
       const result = workflowWriteQueue.then(operation, operation);
@@ -1753,6 +1268,11 @@ export default function (pi: ExtensionAPI) {
       resolveAgent: async (agentId: string | null) => agentId ? (await configStore.getAgent(agentId)).effective : null,
       resolveModel: async (modelId: string) => (await configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId) || null,
       executor: executeWorkflowNode,
+      beforeNodeComplete: async ({ workflow, run, node, result }: any) => {
+        if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow data commit has no active RP chat.");
+        const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
+        return finalizeNodeData({ sessionDirectory: active.sessionDirectory, store, workflow, run, node, result });
+      },
       nodeHistory: (workflowId: string, nodeId: string) => nodeCompletionTurns.get(`${workflowId}:${nodeId}`) ?? null,
       onNodeComplete: async ({ workflow, run, node, agent, binding, result }: any) => {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow process record has no active RP chat.");
@@ -1776,6 +1296,7 @@ export default function (pi: ExtensionAPI) {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) return;
         const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
         await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, run));
+        if (["completed", "failed", "cancelled"].includes(run.status)) await cleanupArtifacts(active.sessionDirectory, { type: "run", workflowRunId: run.id });
         for (const state of Object.values(run.nodes) as any[]) {
           const eventKey = `${run.id}:node:${state.id}:completed`;
           if (state.status === "completed" && !deliveredWorkflowEvents.has(eventKey)) {
@@ -1792,15 +1313,6 @@ export default function (pi: ExtensionAPI) {
         const completeKey = `${run.id}:workflow:completed`;
         if (run.status === "completed" && !deliveredWorkflowEvents.has(completeKey)) {
           deliveredWorkflowEvents.add(completeKey);
-          if (workflow.kind === "global-background" && !publishedWorkflowRuns.has(run.id)) {
-            publishedWorkflowRuns.add(run.id);
-            const selectedIds = workflow.publication?.nodeIds?.length ? new Set(workflow.publication.nodeIds) : null;
-            const outputs = Object.fromEntries(Object.values(run.nodes).filter((state: any) => state.status === "completed" && (!selectedIds || selectedIds.has(state.id))).map((state: any) => [state.id, state.output]));
-            await serializeWorkflowWrite(() => publishLongTermRecord(paths.publicLongTerm, workflow.publication?.namespace || workflow.id, {
-              binding: { messageIds: [], throughTurn: run.visibleThroughTurn },
-              data: { workflowId: workflow.id, runId: run.id, outputs },
-            }, workflow.publication?.schema || { type: "object" }));
-          }
           await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
         }
       },
@@ -1829,8 +1341,8 @@ export default function (pi: ExtensionAPI) {
               submittedText: run.payload.currentInput,
               submittedSequence: Number.isSafeInteger(run.payload.userSequence) ? run.payload.userSequence : active.messages.at(-1)?.sequence || 0,
               assistantContent: "",
-              automaticSelections: {}, agentQueries: [], catalogUpdates: [], agentSources: [], processorSelections: [], outputUpdates: [],
-              contextContent: null, phase: "narrative", assistantMessageId: null, outputModuleIds: [], outputFinalized: false, variableModuleId: null, variableFinalized: false,
+              automaticSelections: {}, agentQueries: [], agentSources: [], processorSelections: [],
+              contextContent: null, phase: "narrative", assistantMessageId: null,
               workflowRunId: run.id, workflowNarrativeNodeId: workflow.nodes.find((node: any) => node.type === "narrative")?.id || null,
               resolveNarrative: null, rejectNarrative: null,
               baseModel: active.context.model,
@@ -1999,11 +1511,7 @@ export default function (pi: ExtensionAPI) {
               node.modelId = value.modelId;
               await configStore.saveCardWorkflow(workflow);
             }
-            const dispatch = ["module-output", "variable-update"].includes(node.type)
-              ? await preparePendingLifecycleRetry(active, node.type, runId, value.modelId)
-              : null;
             const retried = await active.workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true });
-            dispatch?.();
             return retried;
           },
           cancelWorkflowRun: async (runId: string) => {
@@ -2028,15 +1536,11 @@ export default function (pi: ExtensionAPI) {
               let available = false;
               let dataError = "";
               if (active.sessionDirectory) {
-                const moduleSessionDirectory = resolve(active.sessionDirectory, "modules", module.id);
                 try {
-                  const records = module.storage.records
-                    ? parseRecordLines(await readFile(resolve(moduleSessionDirectory, module.storage.records.file), "utf8"))
-                    : [];
-                  const snapshot = module.storage.snapshot
-                    ? validateRecordEnvelope(JSON.parse(await readFile(resolve(moduleSessionDirectory, module.storage.snapshot.file), "utf8")))
-                    : null;
-                  data = { records, snapshot };
+                  const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+                  const collections: Record<string, unknown> = {};
+                  for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
+                  data = { collections };
                   available = true;
                 } catch (error) {
                   if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -2065,13 +1569,16 @@ export default function (pi: ExtensionAPI) {
             if (!module) throw httpError(404, "Feature module was not found in the Web interface.");
             let documentPath: string;
             if (target === "definition") {
-              documentPath = resolve(module.moduleDirectory, "module.json");
+              documentPath = resolve(module.moduleDirectory, "data-contract.json");
             } else {
               if (!active.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening module data.");
               await ensureFeatureModuleRecords(active);
-              const stream = module.storage[module.storage.contextSource];
-              if (!stream) throw httpError(409, "This module has no data document for its display source.");
-              documentPath = resolve(active.sessionDirectory, "modules", module.id, stream.file);
+              const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+              const collections: Record<string, unknown> = {};
+              for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
+              documentPath = resolve(active.sessionDirectory, "workspace", "public", "module-views", `${module.id}.json`);
+              await mkdir(resolve(documentPath, ".."), { recursive: true });
+              await writeFile(documentPath, `${JSON.stringify({ generated: true, moduleId: module.id, collections }, null, 2)}\n`, "utf8");
             }
             await readFile(documentPath, "utf8");
             try {
@@ -2328,7 +1835,6 @@ export default function (pi: ExtensionAPI) {
             content: opening.content,
             createdAt,
           });
-          if (openingRecord) await initializeVariableModulesForOpening(active, openingRecord);
           await updateMetadata();
           return {
             sessionId: active.recordId,
@@ -2348,7 +1854,7 @@ export default function (pi: ExtensionAPI) {
             if (blocking) throw httpError(409, `Background workflow ${workflow.title} must finish before the next player turn.`);
           }
           await ensureActiveRecord();
-          await resetPublicDraftDirectory(active);
+          await cleanupArtifacts(active.sessionDirectory!, { type: "turn", turn: active.turn + 1 });
           active.turn += 1;
           active.pending = true;
           await appendMessage({
@@ -2368,17 +1874,11 @@ export default function (pi: ExtensionAPI) {
             assistantContent: "",
             automaticSelections: {},
             agentQueries: [],
-            catalogUpdates: [],
             agentSources: [],
             processorSelections: [],
-            outputUpdates: [],
             contextContent: null,
             phase: "narrative",
             assistantMessageId: null,
-            outputModuleIds: [],
-            outputFinalized: false,
-            variableModuleId: null,
-            variableFinalized: false,
             workflowRunId: null,
             workflowNarrativeNodeId: null,
             resolveNarrative: null,
@@ -2489,26 +1989,148 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  function currentDataNode() {
+    if (!active?.sessionDirectory || !rpRun?.workflowRunId) throw new Error("RP data tools require an active workflow node.");
+    const entry = (active.workflowEngine as any).runs.get(rpRun.workflowRunId);
+    const nodeId = rpRun.workflowNarrativeNodeId;
+    const node = entry?.workflow?.nodes?.find((item: any) => item.id === nodeId);
+    if (!entry || !node) throw new Error("The active RP workflow node is unavailable.");
+    return { entry, node, store: new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) }) };
+  }
+
+  function nodeDataAccess(node: any, moduleId: string, collectionId: string) {
+    const access = node.moduleAccess?.find((item: any) => item.moduleId === moduleId && item.collectionId === collectionId);
+    if (!access) throw new Error(`The current node has no access to ${moduleId}/${collectionId}.`);
+    return access;
+  }
+
+  async function requireCurrentAgentTool(entry: any, node: any, toolName: string) {
+    const agentId = node.agentId || entry.workflow.defaults?.agentId;
+    if (!agentId) throw new Error(`The current workflow node has no Agent authorized for ${toolName}.`);
+    const agent = (await active!.configStore.getAgent(agentId)).effective;
+    if (!agent?.tools?.includes(toolName)) throw new Error(`Agent ${agentId} is not authorized to use ${toolName}.`);
+    return agent;
+  }
+
   pi.registerTool({
-    name: "rp_context_query",
-    label: "Query RP context records",
-    description: "Select exact RP message or module records from a runtime catalog. The agent decides what is needed; deterministic code performs the extraction and records a receipt.",
+    name: "rp_data_query",
+    label: "Query RP data",
+    description: "Query one module collection through declared indexes/content search and return only an authorized named view under the node's query budget.",
     parameters: Type.Object({
-      source: Type.String({ description: "Record source: messages or module:<module-id>." }),
-      decision: Type.Union([
-        Type.Literal("select"),
-        Type.Literal("success_empty"),
-        Type.Literal("not_triggered"),
-      ]),
+      moduleId: Type.String(),
+      collectionId: Type.String(),
+      recordTypes: Type.Optional(Type.Array(Type.String())),
+      where: Type.Optional(Type.Record(Type.String(), Type.Any())),
+      search: Type.Optional(Type.Object({ query: Type.String(), fields: Type.Optional(Type.Array(Type.String())) })),
+      sort: Type.Optional(Type.Array(Type.Object({ field: Type.String(), order: Type.Optional(Type.Union([Type.Literal("asc"), Type.Literal("desc")])) }))),
+      view: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1 })),
+      maxCharacters: Type.Optional(Type.Integer({ minimum: 1 })),
+      cursor: Type.Optional(Type.String()),
+      includeInactive: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, parameters) {
+      const { entry, node, store } = currentDataNode();
+      await requireCurrentAgentTool(entry, node, "rp_data_query");
+      const access = nodeDataAccess(node, parameters.moduleId, parameters.collectionId);
+      const result = await queryData(store, parameters, {
+        capabilities: access.capabilities,
+        views: access.views,
+        runtimeLimit: 20,
+        runtimeCharacters: 6000,
+        nodeLimit: access.queryBudget?.maxRecords || 20,
+        nodeCharacters: access.queryBudget?.maxCharacters || 6000,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_data_get",
+    label: "Read one RP data record",
+    description: "Read one exact RP data record through an authorized named view.",
+    parameters: Type.Object({ moduleId: Type.String(), collectionId: Type.String(), id: Type.String(), view: Type.Optional(Type.String()) }),
+    async execute(_toolCallId, parameters) {
+      const { entry, node, store } = currentDataNode();
+      await requireCurrentAgentTool(entry, node, "rp_data_get");
+      const access = nodeDataAccess(node, parameters.moduleId, parameters.collectionId);
+      const result = await getDataRecord(store, parameters, { capabilities: access.capabilities, views: access.views });
+      return { content: [{ type: "text", text: result ? JSON.stringify(result, null, 2) : "Record not found." }], details: result };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_data_resolve",
+    label: "Resolve RP data identity",
+    description: "Resolve one registered ID, display name, or alias within the current node's authorized collections.",
+    parameters: Type.Object({ value: Type.String() }),
+    async execute(_toolCallId, parameters) {
+      const { entry, node, store } = currentDataNode();
+      await requireCurrentAgentTool(entry, node, "rp_data_resolve");
+      const matches = (await store.resolveIdentity(parameters.value)).filter((entry: any) => {
+        const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
+        return access && capabilityAllows(store.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
+      });
+      return { content: [{ type: "text", text: JSON.stringify(matches, null, 2) }], details: matches };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_data_change",
+    label: "Update an RP data draft",
+    description: "Add, replace, or cancel idempotent operations in one explicitly declared node output change draft. This does not commit authoritative data.",
+    parameters: Type.Object({
+      output: Type.String(),
+      commitPolicy: Type.Optional(Type.Union([Type.Literal("atomic"), Type.Literal("grouped"), Type.Literal("best-effort")])),
+      changes: Type.Array(Type.Object({ action: Type.Union([Type.Literal("add"), Type.Literal("replace"), Type.Literal("cancel")]), operationId: Type.String(), operation: Type.Optional(Type.Any()) }), { minItems: 1, maxItems: 100 }),
+    }),
+    async execute(_toolCallId, parameters) {
+      const { entry, node } = currentDataNode();
+      await requireCurrentAgentTool(entry, node, "rp_data_change");
+      const output = node.outputs?.[parameters.output];
+      if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
+      const root = workflowNodeWorkspace(active!.sessionDirectory!, entry.workflow.id, entry.run.id, node.id);
+      const path = resolve(root, output.path);
+      await mkdir(resolve(path, ".."), { recursive: true });
+      const current = await readFile(path, "utf8").then(JSON.parse).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return createDataBatchDraft({ batchId: `${entry.run.id}-${node.id}-${parameters.output}`, commitPolicy: parameters.commitPolicy || "atomic" });
+      });
+      const next = updateDataBatchDraft(current, parameters.changes);
+      await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      return { content: [{ type: "text", text: `Data draft ${parameters.output} now contains ${next.operations.length} operation(s).` }], details: { output: parameters.output, batchId: next.batchId, operationCount: next.operations.length } };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_data_submit",
+    label: "Submit an RP data draft",
+    description: "Validate and submit one explicitly declared node output change draft now. Node-end handling will recognize the receipt and not duplicate it.",
+    parameters: Type.Object({ output: Type.String() }),
+    async execute(_toolCallId, parameters) {
+      const { entry, node, store } = currentDataNode();
+      await requireCurrentAgentTool(entry, node, "rp_data_submit");
+      const output = node.outputs?.[parameters.output];
+      if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
+      const path = resolve(workflowNodeWorkspace(active!.sessionDirectory!, entry.workflow.id, entry.run.id, node.id), output.path);
+      const batch = JSON.parse(await readFile(path, "utf8"));
+      const receipt = await executeDataBatch(store, batch, {
+        access: node.moduleAccess,
+        allowBestEffort: node.dataCommit?.allowBestEffort === true,
+        context: { initiatorKind: "agent", initiatorId: node.agentId || node.id, workflowId: entry.workflow.id, workflowRunId: entry.run.id, nodeId: node.id, binding: { turn: entry.run.turn || 0, messageId: rpRun?.assistantMessageId || null } },
+      });
+      return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
+    },
+  });
+
+  pi.registerTool({
+    name: "rp_message_query",
+    label: "Query RP message history",
+    description: "Select exact prior Web RP messages when the card's message policy enables Agent selection.",
+    parameters: Type.Object({
+      decision: Type.Union([Type.Literal("select"), Type.Literal("success_empty"), Type.Literal("not_triggered")]),
       selector: Type.Optional(Type.Object({
-        type: Type.Union([
-          Type.Literal("all"),
-          Type.Literal("latest"),
-          Type.Literal("ids"),
-          Type.Literal("range"),
-          Type.Literal("around"),
-          Type.Literal("latest_per_key"),
-        ]),
+        type: Type.Union([Type.Literal("all"), Type.Literal("latest"), Type.Literal("ids"), Type.Literal("range"), Type.Literal("around")]),
         limit: Type.Optional(Type.Integer({ minimum: 1 })),
         ids: Type.Optional(Type.Array(Type.String())),
         fromSequence: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -2516,345 +2138,47 @@ export default function (pi: ExtensionAPI) {
         id: Type.Optional(Type.String()),
         before: Type.Optional(Type.Integer({ minimum: 0 })),
         after: Type.Optional(Type.Integer({ minimum: 0 })),
-        path: Type.Optional(Type.String()),
-        values: Type.Optional(Type.Array(Type.String())),
-        limitPerKey: Type.Optional(Type.Integer({ minimum: 1 })),
-      })),
-      projection: Type.Optional(Type.Object({
-        kind: Type.Literal("json-pointer"),
-        paths: Type.Optional(Type.Array(Type.String())),
-        bindings: Type.Optional(Type.Array(Type.String())),
       })),
     }),
     async execute(_toolCallId, parameters) {
-      if (!active?.pending || !rpRun || active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) {
-        throw new Error("rp_context_query is only available during an active Web RP turn.");
-      }
-      const source = parameters.source;
-      const policy = sourcePolicy(active, source);
-      const variableModule = source.startsWith("module:")
-        ? active.featureModules.find(module => `module:${module.id}` === source && module.variable)
-        : null;
-      if (policy.agent.mode === "disabled") throw new Error(`Agent retrieval is disabled for ${source}.`);
-      if (rpRun.agentQueries.some(query => query.source === source)) throw new Error(`rp_context_query already resolved ${source} for this turn.`);
-      const records = await readSourceRecords(active, source, rpRun);
-      const codeFallback = () => variableModule ? [] : selectRecords(records, policy.code.selector).records as RecordEnvelope[];
+      if (!active?.pending || !rpRun || active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) throw new Error("rp_message_query requires an active Web RP narrative turn.");
+      const source = "messages";
+      const policy = active.messagePolicy;
+      if (policy.agent.mode === "disabled") throw new Error("Agent message retrieval is disabled for this card.");
+      if (rpRun.agentQueries.some(query => query.source === source)) throw new Error("rp_message_query already resolved message history for this turn.");
+      const records = active.messages.filter(record => record.sequence < rpRun!.submittedSequence);
+      const fallback = () => selectRecords(records, policy.code.selector).records as RecordEnvelope[];
       let selected: RecordEnvelope[] = [];
       let status = "success";
       let error = "";
       try {
         if (parameters.decision === "not_triggered") {
-          selected = policy.agent.onNotTriggered === "code" ? codeFallback() : [];
+          selected = policy.agent.onNotTriggered === "code" ? fallback() : [];
           status = policy.agent.onNotTriggered === "code" ? "not-triggered-code-fallback" : "not-triggered-empty";
         } else if (parameters.decision === "success_empty") {
-          selected = [];
           status = "success-empty";
         } else {
-          if (variableModule) {
-            if (!parameters.projection || (!(parameters.projection.paths?.length) && !(parameters.projection.bindings?.length))) {
-              throw new Error("Variable selection requires exact projection.paths or projection.bindings.");
-            }
-            const snapshot = records.at(-1);
-            if (!snapshot) throw new Error("The variable module has no effective snapshot.");
-            selected = [snapshot];
-          } else {
-            if (!parameters.selector) throw new Error("decision=select requires selector.");
-            const result = selectRecords(records, parameters.selector, policy.agent.maxRecords);
-            if (result.missing.length) throw new Error(`Requested record IDs were not found: ${result.missing.join(", ")}`);
-            if (result.records.length === 0) throw new Error("The selector returned no records; use success_empty if an empty result is intentional.");
-            selected = result.records as RecordEnvelope[];
-          }
+          if (!parameters.selector) throw new Error("decision=select requires selector.");
+          const result = selectRecords(records, parameters.selector, policy.agent.maxRecords);
+          if (result.missing.length) throw new Error(`Requested message IDs were not found: ${result.missing.join(", ")}`);
+          if (!result.records.length) throw new Error("The selector returned no messages; use success_empty when intentional.");
+          selected = result.records as RecordEnvelope[];
         }
       } catch (queryError) {
-        selected = codeFallback();
+        selected = fallback();
         status = "failed-code-fallback";
         error = (queryError as Error).message;
       }
-      if (policy.agent.mode === "append" && !variableModule) {
+      if (policy.agent.mode === "append") {
         const automatic = new Set(rpRun.automaticSelections[source] || []);
         selected = selected.filter(record => !automatic.has(record.id));
       }
-      const queryReceipt = {
-        source,
-        mode: policy.agent.mode,
-        decision: parameters.decision,
-        selector: parameters.selector || null,
-        projection: parameters.projection || null,
-        status,
-        error: error || null,
-        selectedRecordIds: selected.map(record => record.id),
-        queriedAt: new Date().toISOString(),
-      };
-      rpRun.agentQueries.push(queryReceipt);
+      const receipt = { source, mode: policy.agent.mode, decision: parameters.decision, selector: parameters.selector || null, status, error: error || null, selectedRecordIds: selected.map(record => record.id), queriedAt: new Date().toISOString() };
+      rpRun.agentQueries.push(receipt);
       await writeContextReceipt(active, rpRun);
-      const formatted = variableModule && selected.length
-        ? JSON.stringify(projectVariableState(selected[0].data.state, parameters.projection || {}, variableModule.variable!.bindings), null, 2)
-        : source === "messages" ? authoritativeTranscript(active, selected) : formatRecords(selected);
-      return {
-        content: [{ type: "text", text: [`RP context query: ${status}`, error ? `Reason: ${error}` : "", formatted].filter(Boolean).join("\n\n") }],
-        details: queryReceipt,
-      };
+      return { content: [{ type: "text", text: [`RP message query: ${status}`, error ? `Reason: ${error}` : "", authoritativeTranscript(active, selected)].filter(Boolean).join("\n\n") }], details: receipt };
     },
   });
-
-  pi.registerTool({
-    name: "rp_output_update",
-    label: "Resolve RP auxiliary outputs",
-    description: "Set or replace emitted/not-triggered decisions for card-authored output modules in the current hidden post-narrative task. Nothing is committed until rp_output_finalize succeeds.",
-    parameters: Type.Object({
-      updates: Type.Array(Type.Object({
-        moduleId: Type.String(),
-        decision: Type.Union([Type.Literal("emit"), Type.Literal("not_triggered")]),
-        content: Type.Optional(Type.String()),
-      }), { minItems: 1, maxItems: 50 }),
-    }),
-    async execute(_toolCallId, parameters) {
-      if (!active?.pending || !rpRun || rpRun.phase !== "output-update" || active.recordId !== rpRun.recordId) {
-        throw new Error("rp_output_update is only available during an active post-narrative output task.");
-      }
-      const path = outputDraftPath(active);
-      const draft = JSON.parse(await readFile(path, "utf8"));
-      const next = updateOutputDraft(draft, parameters.updates);
-      await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-      return {
-        content: [{ type: "text", text: `Resolved ${Object.keys(next.decisions).length}/${rpRun.outputModuleIds.length} auxiliary output module(s). Resolve every module, then call rp_output_finalize.` }],
-        details: { resolvedModuleIds: Object.keys(next.decisions), pendingModuleIds: unresolvedOutputModuleIds(next) },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "rp_output_finalize",
-    label: "Validate and commit RP auxiliary outputs",
-    description: "Validate every auxiliary-output decision and atomically replace each affected module record log before variable maintenance begins.",
-    parameters: Type.Object({}),
-    async execute() {
-      if (!active?.pending || !rpRun || rpRun.phase !== "output-update" || active.recordId !== rpRun.recordId || !active.sessionDirectory) {
-        throw new Error("rp_output_finalize is only available during an active post-narrative output task.");
-      }
-      const path = outputDraftPath(active);
-      const draft = JSON.parse(await readFile(path, "utf8"));
-      const missing = unresolvedOutputModuleIds(draft);
-      if (missing.length) {
-        return { content: [{ type: "text", text: `Auxiliary outputs still need decisions: ${missing.join(", ")}` }], details: { status: "needs_revision", missingModuleIds: missing } };
-      }
-      const prepared: Array<{ module: FeatureModule; records: RecordEnvelope[]; record: RecordEnvelope }> = [];
-      const validationErrors: Array<{ moduleId: string; errors: unknown[] }> = [];
-      for (const moduleId of rpRun.outputModuleIds) {
-        const decision = draft.decisions[moduleId];
-        if (decision.decision === "not_triggered") continue;
-        const module = active.featureModules.find(item => item.id === moduleId && item.postNarrativeOutput);
-        if (!module?.storage.records) throw new Error(`Active output module is unavailable: ${moduleId}`);
-        const data = { content: decision.content };
-        const schemaPath = resolveFeatureModuleChild(module.moduleDirectory, module.storage.records.schemaFile, `${module.id}.records.schemaFile`);
-        const schema = JSON.parse(await readFile(schemaPath, "utf8"));
-        const errors = [...Value.Errors(schema as any, data)].map((error: any) => ({ path: error.instancePath || "", message: error.message }));
-        if (errors.length) {
-          validationErrors.push({ moduleId, errors });
-          continue;
-        }
-        const recordsPath = resolve(active.sessionDirectory, "modules", module.id, module.storage.records.file);
-        const records = parseRecordLines(await readFile(recordsPath, "utf8")) as RecordEnvelope[];
-        const record = createRecordEnvelope({
-          id: `output-${module.id}-${randomUUID()}`,
-          source: `module:${module.id}`,
-          sequence: records.length ? Math.max(...records.map(item => item.sequence)) + 1 : 0,
-          binding: { messageId: draft.assistantMessageId, turn: active.turn },
-          metadata: { recordType: "auxiliary-output", entityIds: [], tags: ["post-narrative"] },
-          data,
-        }) as RecordEnvelope;
-        prepared.push({ module, records, record });
-      }
-      if (validationErrors.length) {
-        return {
-          content: [{ type: "text", text: `Auxiliary output validation needs revision:\n${JSON.stringify(validationErrors, null, 2)}` }],
-          details: { status: "needs_revision", errors: validationErrors },
-        };
-      }
-      for (const item of prepared) {
-        const recordsPath = resolve(active.sessionDirectory, "modules", item.module.id, item.module.storage.records!.file);
-        const temporaryPath = resolve(recordsPath, `..`, `.output-records-${Date.now()}-${process.pid}-${randomUUID()}.tmp`);
-        const nextRecords = [...item.records, item.record];
-        await writeFile(temporaryPath, toRecordLines(nextRecords), "utf8");
-        await rename(temporaryPath, recordsPath);
-        await refreshSourceCatalog(active, `module:${item.module.id}`, nextRecords);
-      }
-      await rm(path, { force: true });
-      rpRun.outputFinalized = true;
-      rpRun.outputUpdates = rpRun.outputModuleIds.map(moduleId => {
-        const committed = prepared.find(item => item.module.id === moduleId);
-        return {
-          moduleId,
-          decision: draft.decisions[moduleId].decision,
-          recordId: committed?.record.id || null,
-          assistantMessageId: draft.assistantMessageId,
-        };
-      });
-      return {
-        content: [{ type: "text", text: `Auxiliary outputs finalized: ${prepared.length} emitted, ${rpRun.outputModuleIds.length - prepared.length} not triggered.` }],
-        details: { status: "committed", recordIds: prepared.map(item => item.record.id) },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "rp_variable_update",
-    label: "Update RP variable draft",
-    description: "Add, replace, or cancel exact variable operations in the current post-narrative draft. Calls are idempotent by operationId and do not change effective state until rp_variable_finalize succeeds.",
-    parameters: Type.Object({
-      moduleId: Type.String(),
-      changes: Type.Array(Type.Object({
-        action: Type.Union([Type.Literal("add"), Type.Literal("replace"), Type.Literal("cancel")]),
-        operationId: Type.String(),
-        operation: Type.Optional(Type.Union([Type.Literal("set"), Type.Literal("delta"), Type.Literal("merge"), Type.Literal("append"), Type.Literal("remove")])),
-        path: Type.Optional(Type.String()),
-        value: Type.Optional(Type.Any()),
-        reason: Type.Optional(Type.String()),
-      }), { minItems: 1, maxItems: 100 }),
-    }),
-    async execute(_toolCallId, parameters) {
-      if (!active?.pending || !rpRun || rpRun.phase !== "variable-update" || active.recordId !== rpRun.recordId) {
-        throw new Error("rp_variable_update is only available during an active post-narrative variable update task.");
-      }
-      if (parameters.moduleId !== rpRun.variableModuleId) throw new Error(`The active variable module is ${rpRun.variableModuleId}.`);
-      const path = variableDraftPath(active);
-      const draft = JSON.parse(await readFile(path, "utf8"));
-      const next = updateVariableDraft(draft, parameters.changes);
-      await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-      return {
-        content: [{ type: "text", text: `Variable draft now contains ${next.operations.length} operation(s). Continue the authored update workflow or call rp_variable_finalize when complete.` }],
-        details: { draftId: next.id, operationCount: next.operations.length },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "rp_variable_finalize",
-    label: "Validate and commit RP variables",
-    description: "Concentrated code validation for the current variable draft. Failed variables remain pending for Agent correction; a successful result commits one complete snapshot bound to the saved AI message.",
-    parameters: Type.Object({ moduleId: Type.String() }),
-    async execute(_toolCallId, parameters) {
-      if (!active?.pending || !rpRun || rpRun.phase !== "variable-update" || active.recordId !== rpRun.recordId || !active.sessionDirectory) {
-        throw new Error("rp_variable_finalize is only available during an active post-narrative variable update task.");
-      }
-      const module = active.featureModules.find(item => item.id === parameters.moduleId && item.variable);
-      if (!module || module.id !== rpRun.variableModuleId) throw new Error(`The active variable module is ${rpRun.variableModuleId}.`);
-      const path = variableDraftPath(active);
-      const draft = JSON.parse(await readFile(path, "utf8"));
-      const current = await currentVariableRecord(active, module);
-      if (!current) throw new Error("The variable module has no effective snapshot.");
-      if (draft.baseRecordId !== current.id) throw new Error("The effective variable snapshot changed after this draft began. Restart the variable update task.");
-      const applied = applyVariableOperations(current.data.state, draft.operations);
-      if (applied.errors.length) {
-        return {
-          content: [{ type: "text", text: `Variable validation needs revision:\n${JSON.stringify(applied.errors, null, 2)}\nCorrect only the failed operations, then call rp_variable_finalize again.` }],
-          details: { status: "needs_revision", errors: applied.errors },
-        };
-      }
-      let state = applied.state;
-      const context = { phase: "finalize", turn: active.turn, assistantMessageId: draft.assistantMessageId };
-      const firstNormalize = await runVariableHook(module.variable!.normalizePath, "normalize", [state, context]);
-      state = firstNormalize.state;
-      const afterUpdate = await runVariableHook(module.variable!.afterUpdatePath, "afterUpdate", [current.data.state, state, context]);
-      state = afterUpdate.state;
-      const secondNormalize = await runVariableHook(module.variable!.normalizePath, "normalize", [state, context]);
-      state = secondNormalize.state;
-      const rawErrors = [...firstNormalize.errors, ...afterUpdate.errors, ...secondNormalize.errors, ...await schemaErrors(module, state)];
-      const errors = rawErrors.map((error: any) => {
-        const pointer = typeof error.path === "string" ? error.path : "";
-        const operation = [...draft.operations].reverse().find((item: any) => item.path === pointer || (pointer && pointer.startsWith(`${item.path}/`)));
-        return {
-          ...(operation ? { operationId: operation.operationId } : {}),
-          path: pointer,
-          attemptedValue: variableValueAt(state, pointer),
-          currentValue: variableValueAt(current.data.state, pointer),
-          code: error.code || "hook_validation_failed",
-          message: error.message || String(error),
-        };
-      });
-      if (errors.length) {
-        return {
-          content: [{ type: "text", text: `Variable validation needs revision:\n${JSON.stringify(errors, null, 2)}\nUse the complete state and module skill to infer relationships. Correct only the failed operations, then finalize again.` }],
-          details: { status: "needs_revision", errors },
-        };
-      }
-      if (sameVariableState(current.data.state, state)) {
-        await rm(path, { force: true });
-        rpRun.variableFinalized = true;
-        return { content: [{ type: "text", text: "Variable update finalized successfully; no effective values changed." }], details: { status: "no_changes" } };
-      }
-      const moduleDirectory = resolve(active.sessionDirectory, "modules", module.id);
-      const recordsPath = resolve(moduleDirectory, module.storage.records!.file);
-      const records = parseRecordLines(await readFile(recordsPath, "utf8")) as RecordEnvelope[];
-      const changedPaths = [...new Set(draft.operations.map((item: any) => item.path))];
-      const reasons = draft.operations.filter((item: any) => item.reason).map((item: any) => ({ operationId: item.operationId, path: item.path, reason: item.reason }));
-      const record = createRecordEnvelope({
-        id: `variable-${randomUUID()}`,
-        source: `module:${module.id}`,
-        sequence: records.length ? Math.max(...records.map(item => item.sequence)) + 1 : 0,
-        binding: { messageId: draft.assistantMessageId, turn: active.turn },
-        metadata: { recordType: "variable-snapshot", entityIds: [], tags: ["turn-update"] },
-        data: { state, changedPaths, reasons, previousSnapshotId: current.id },
-      }) as RecordEnvelope;
-      await appendFile(recordsPath, `${JSON.stringify(record)}\n`, "utf8");
-      const snapshotPath = resolve(moduleDirectory, module.storage.snapshot!.file);
-      const temporaryPath = resolve(moduleDirectory, `.variable-snapshot-${Date.now()}-${process.pid}.tmp`);
-      await writeFile(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-      await rename(temporaryPath, snapshotPath);
-      await refreshSourceCatalog(active, `module:${module.id}`, [record]);
-      await rm(path, { force: true });
-      rpRun.variableFinalized = true;
-      return {
-        content: [{ type: "text", text: `Variable update committed as one complete snapshot (${record.id}) bound to ${draft.assistantMessageId}.` }],
-        details: { status: "committed", recordId: record.id, changedPaths },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "rp_catalog_update",
-    label: "Update RP record catalog",
-    description: "Add module-skill-guided Agent navigation metadata to exact RP catalog entries. Deterministic IDs, revisions, hashes, and fallback titles remain code-owned.",
-    parameters: Type.Object({
-      source: Type.String({ description: "Record source: messages or module:<module-id>." }),
-      updates: Type.Array(Type.Object({
-        recordId: Type.String(),
-        title: Type.Optional(Type.String()),
-        tags: Type.Optional(Type.Array(Type.String())),
-        summary: Type.Optional(Type.String()),
-      }), { minItems: 1, maxItems: 50 }),
-    }),
-    async execute(_toolCallId, parameters) {
-      if (!active?.pending || !rpRun || active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) {
-        throw new Error("rp_catalog_update is only available during an active Web RP turn.");
-      }
-      const policy = sourcePolicy(active, parameters.source);
-      if (policy.catalog.agentMode === "disabled") throw new Error(`Agent catalog updates are disabled for ${parameters.source}.`);
-      const records = await readSourceRecords(active, parameters.source, rpRun);
-      const catalog = await refreshSourceCatalog(active, parameters.source, records);
-      const entries = new Map(catalog.entries.map((entry: any) => [entry.recordId, entry]));
-      const applied: string[] = [];
-      for (const update of parameters.updates) {
-        const entry: any = entries.get(update.recordId);
-        if (!entry) throw new Error(`Catalog record was not found: ${update.recordId}`);
-        const generated: Record<string, unknown> = policy.catalog.agentMode === "append" && entry.generated
-          ? { ...entry.generated }
-          : {};
-        if (typeof update.title === "string" && update.title.trim()) generated.title = update.title.trim().slice(0, 160);
-        if (Array.isArray(update.tags)) generated.tags = [...new Set(update.tags.map(tag => tag.trim()).filter(Boolean))].slice(0, 20);
-        if (typeof update.summary === "string" && update.summary.trim()) generated.summary = update.summary.trim().slice(0, 500);
-        if (Object.keys(generated).length === 0) throw new Error(`Catalog update for ${update.recordId} contains no usable generated fields.`);
-        entry.generated = generated;
-        applied.push(update.recordId);
-      }
-      await writeFile(sourceCatalogPath(active, parameters.source), `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
-      const receipt = { source: parameters.source, mode: policy.catalog.agentMode, recordIds: applied, updatedAt: new Date().toISOString() };
-      rpRun.catalogUpdates.push(receipt);
-      await writeContextReceipt(active, rpRun);
-      return { content: [{ type: "text", text: `Updated catalog navigation metadata for ${applied.length} record(s): ${applied.join(", ")}` }], details: receipt };
-    },
-  });
-
   pi.registerCommand("rp-web", {
     description: "Open a card Web UI bound to this Pi session",
     handler: async (argumentsText, context) => {
@@ -2884,128 +2208,9 @@ export default function (pi: ExtensionAPI) {
       if (result.cancelled) context.ui.notify("Web RP chat selection was cancelled.", "warning");
     },
   });
-
-  pi.registerCommand("rp-vars-resume", {
-    description: "Resume the active Web RP chat's interrupted variable-update draft",
-    handler: async (_argumentsText, context) => {
-      if (!active?.recordId || !active.sessionDirectory) {
-        context.ui.notify("No active saved Web RP chat is available.", "warning");
-        return;
-      }
-      await context.waitForIdle();
-      const draft = await readFile(variableDraftPath(active), "utf8").then(JSON.parse).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      });
-      if (!draft || draft.status !== "pending") {
-        context.ui.notify("This chat has no pending variable-update draft.", "info");
-        return;
-      }
-      const assistantIndex = active.messages.findIndex(message => message.id === draft.assistantMessageId);
-      if (assistantIndex === -1) throw new Error("The pending variable draft's AI message no longer exists.");
-      const userRecord = [...active.messages.slice(0, assistantIndex)].reverse().find(message => message.data.role === "user");
-      active.pending = true;
-      rpRun = {
-        cardId: active.cardId,
-        recordId: active.recordId,
-        submittedText: draft.userMessage,
-        submittedSequence: userRecord?.sequence ?? Math.max(0, assistantIndex - 1),
-        assistantContent: draft.assistantMessage,
-        automaticSelections: {},
-        agentQueries: [],
-        catalogUpdates: [],
-        agentSources: [],
-        processorSelections: [],
-        outputUpdates: [],
-        contextContent: null,
-        phase: "variable-update",
-        assistantMessageId: draft.assistantMessageId,
-        outputModuleIds: [],
-        outputFinalized: true,
-        variableModuleId: draft.moduleId,
-        variableFinalized: false,
-      };
-      pi.sendMessage({
-        customType: "pi-rp-variable-update-task",
-        content: "Resume the pending post-narrative variable update.",
-        display: false,
-        details: { resumed: true, draftId: draft.id, moduleId: draft.moduleId },
-      }, { deliverAs: "followUp", triggerTurn: true });
-      context.ui.notify("Resuming the pending variable update.", "info");
-    },
-  });
-
-  pi.registerCommand("rp-outputs-resume", {
-    description: "Resume the active Web RP chat's interrupted auxiliary-output draft",
-    handler: async (_argumentsText, context) => {
-      if (!active?.recordId || !active.sessionDirectory) {
-        context.ui.notify("No active saved Web RP chat is available.", "warning");
-        return;
-      }
-      await context.waitForIdle();
-      const draft = await readFile(outputDraftPath(active), "utf8").then(JSON.parse).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      });
-      if (!draft || draft.status !== "pending") {
-        context.ui.notify("This chat has no pending auxiliary-output draft.", "info");
-        return;
-      }
-      const assistantIndex = active.messages.findIndex(message => message.id === draft.assistantMessageId);
-      if (assistantIndex === -1) throw new Error("The pending output draft's AI message no longer exists.");
-      const userRecord = [...active.messages.slice(0, assistantIndex)].reverse().find(message => message.data.role === "user");
-      active.pending = true;
-      rpRun = {
-        cardId: active.cardId,
-        recordId: active.recordId,
-        submittedText: draft.userMessage,
-        submittedSequence: userRecord?.sequence ?? Math.max(0, assistantIndex - 1),
-        assistantContent: draft.assistantMessage,
-        automaticSelections: {},
-        agentQueries: [],
-        catalogUpdates: [],
-        agentSources: [],
-        processorSelections: [],
-        outputUpdates: [],
-        contextContent: null,
-        phase: "output-update",
-        assistantMessageId: draft.assistantMessageId,
-        outputModuleIds: [...draft.moduleIds],
-        outputFinalized: false,
-        variableModuleId: null,
-        variableFinalized: false,
-      };
-      pi.sendMessage({
-        customType: "pi-rp-output-update-task",
-        content: "Resume the pending post-narrative auxiliary-output task.",
-        display: false,
-        details: { resumed: true, draftId: draft.id, moduleIds: draft.moduleIds },
-      }, { deliverAs: "followUp", triggerTurn: true });
-      context.ui.notify("Resuming the pending auxiliary-output update.", "info");
-    },
-  });
-
   pi.on("before_agent_start", async event => {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
-    if (rpRun.phase === "output-update") {
-      return {
-        systemPrompt: [
-          event.systemPrompt,
-          rpRun.phaseModelHeadPrompt,
-          rpRun.phaseAgentPrompt,
-        ].filter(Boolean).join("\n\n"),
-      };
-    }
-    if (rpRun.phase === "variable-update") {
-      return {
-        systemPrompt: [
-          event.systemPrompt,
-          rpRun.phaseModelHeadPrompt,
-          rpRun.phaseAgentPrompt,
-        ].filter(Boolean).join("\n\n"),
-      };
-    }
     if (rpRun.phase !== "narrative" || event.prompt.trim() !== rpRun.submittedText.trim()) return;
     return {
       systemPrompt: [
@@ -3015,9 +2220,7 @@ export default function (pi: ExtensionAPI) {
         await fixedRpContext(active),
         messageRetrievalFixedContext(active),
         featureModuleFixedContext(active),
-        await publicLongTermContext(active, Math.max(0, active.turn - 1)),
         rpRun.workflowNodePrompt,
-        active.sessionDirectory ? `# Public turn workspace\n${relative(active.context.cwd, publicDraftDirectory(active)).replaceAll("\\", "/")}\nUse this shared workspace for drafts, intermediate results, and files that coordinate tasks in the current turn.` : "",
       ].join("\n\n"),
     };
   });
@@ -3026,30 +2229,6 @@ export default function (pi: ExtensionAPI) {
     if (!active?.pending || !rpRun) return;
     if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
 
-    if (rpRun.phase === "output-update") {
-      const boundary = event.messages.findIndex((message: any) => message.customType === "pi-rp-output-update-task");
-      const authoritativeContext = {
-        role: "custom" as const,
-        customType: "pi-rp-output-update-context",
-        content: await outputUpdateContext(active, rpRun),
-        display: false,
-        details: { cardId: active.cardId, sessionId: active.recordId, turn: active.turn, moduleIds: rpRun.outputModuleIds },
-        timestamp: Date.now(),
-      };
-      return { messages: [authoritativeContext, ...(boundary === -1 ? [] : event.messages.slice(boundary)), ...(rpRun.phaseModelTailPrompt ? [{ role: "custom" as const, customType: "pi-rp-model-tail", content: rpRun.phaseModelTailPrompt, display: false, details: { phase: rpRun.phase }, timestamp: Date.now() }] : [])] };
-    }
-    if (rpRun.phase === "variable-update") {
-      const boundary = event.messages.findIndex((message: any) => message.customType === "pi-rp-variable-update-task");
-      const authoritativeContext = {
-        role: "custom" as const,
-        customType: "pi-rp-variable-update-context",
-        content: await variableUpdateContext(active, rpRun),
-        display: false,
-        details: { cardId: active.cardId, sessionId: active.recordId, turn: active.turn, moduleId: rpRun.variableModuleId },
-        timestamp: Date.now(),
-      };
-      return { messages: [authoritativeContext, ...(boundary === -1 ? [] : event.messages.slice(boundary)), ...(rpRun.phaseModelTailPrompt ? [{ role: "custom" as const, customType: "pi-rp-model-tail", content: rpRun.phaseModelTailPrompt, display: false, details: { phase: rpRun.phase }, timestamp: Date.now() }] : [])] };
-    }
     if (rpRun.phase !== "narrative") return;
 
     let boundary = -1;
@@ -3118,23 +2297,6 @@ export default function (pi: ExtensionAPI) {
     if ((event as any).willRetry) return;
     const nodeUsage = tokenUsageFromMessages(event.messages, rpRun.phaseStartedAt || 0);
     const nodeProcessRecord = lastAgentExchange(event.messages, rpRun.phaseStartedAt || 0);
-    if (rpRun.phase === "output-update") {
-      if (!rpRun.outputFinalized) return;
-      const assistantRecord = active.messages.find(message => message.id === rpRun!.assistantMessageId);
-      if (!assistantRecord) throw new Error("The saved AI message for the output task no longer exists.");
-      if (!await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
-      rpRun.resolveOutputWorkflow?.({ output: { updated: [...rpRun.outputModuleIds] }, usage: nodeUsage, processRecord: nodeProcessRecord });
-      rpRun.resolveOutputWorkflow = null;
-      return;
-    }
-    if (rpRun.phase === "variable-update") {
-      if (rpRun.variableFinalized) {
-        rpRun.resolveVariableWorkflow?.({ output: { updated: rpRun.variableModuleId ? [rpRun.variableModuleId] : [] }, usage: nodeUsage, processRecord: nodeProcessRecord });
-        rpRun.resolveVariableWorkflow = null;
-        rpRun.phase = "done";
-      }
-      return;
-    }
     if (rpRun.phase !== "narrative") return;
     const assistant = [...event.messages].reverse().find((message: any) => message.role === "assistant");
     const content = messageText(assistant);
@@ -3155,7 +2317,7 @@ export default function (pi: ExtensionAPI) {
     rpRun.resolveNarrative = null;
     rpRun.rejectNarrative = null;
     resolveNarrative?.({ output: content, usage: nodeUsage, processRecord: nodeProcessRecord });
-    if (!await beginOutputUpdate(active, rpRun, assistantRecord) && !await beginVariableUpdate(active, rpRun, assistantRecord)) rpRun.phase = "done";
+    rpRun.phase = "done";
   });
 
   pi.on("agent_settled", async () => {

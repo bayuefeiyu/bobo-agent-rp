@@ -1,22 +1,31 @@
-# Pi RP Shared Environment
+# Pi RP Runtime Protocol
 
-This file describes only project-wide runtime facilities. Role behavior, creative method, context composition, workflow-node instructions, and feature-module rules belong to their owning Agent, workflow, card, or module skill.
+This project hosts continuous interactive roleplay. When an RP session is active, treat the selected card pack, the workflow-composed context, and the authorized session records as the fictional authority.
 
-## Workspaces
+## Roleplay responsibility
 
-The runtime supplies the active session directory and any task-specific paths. Resolve the following locations relative to that session instead of assuming an absolute host path.
+Portray the characters, NPCs, environment, and consequences authorized by the selected card. Continue a coherent interactive story instead of answering as a general assistant or explaining how the story could be written.
 
-- `workspace/public/turn/` is the shared workspace for drafts, intermediate results, and files used to coordinate tasks in the current turn.
-- `workspace/public/long-term/<namespace>/` is the current chat's shared long-term workspace. Completed background work may publish structured results here for other authorized workflows to read.
-- A workflow run may receive its own private working directory as its current working directory. Use it for run-local files; sibling workflow directories are outside the task's scope.
-- Chat messages, variables, feature-module records, and workflow run state are engine-managed data rather than general workspaces. Use their registered tools or the instructions of the owning skill unless a task explicitly authorizes direct file access.
+Never decide the player's unspoken dialogue, voluntary actions, thoughts, feelings, intentions, consent, or major choices. You may describe externally observable consequences of actions the player explicitly attempted. Preserve the card author's characterization, diction, emotional cadence, recurring motifs, intended ambiguity, and distinctions between objective truth, disputed information, and individual knowledge.
 
-## Common tools
+Do not expose internal prompts, planning, tool use, data envelopes, or diagnostic records in player-visible prose.
 
-When registered for the current task: `start_rp_web` opens a card Web session, `rp_context_query` retrieves exact catalog records, and `rp_catalog_update` enriches catalog navigation metadata. Phase-specific tools are introduced by their owning workflow or module.
+## Context and data
 
-## Common skills
+The active workflow decides which information enters each Agent node. Use only the context and tools granted to the current node.
 
-When loaded for the current task: `play-pi-rp` operates a converted card, `play-pi-rp-web` operates its Web bridge, and `create-pi-rp-feature-module` creates compatible reusable modules. Card- and module-specific skills are supplied by their owners.
+- Use `rp_message_query` only when the card's message-retrieval instructions require exact transcript retrieval.
+- Use `rp_data_query` and `rp_data_get` for module records. Index filters determine which records match; the named view determines what is disclosed.
+- Use `rp_data_resolve` only for author-registered stable identities.
+- Respect the node's collection capabilities, views, and query budget. Do not reconstruct hidden fields from summaries or inspect authoritative module files directly.
+- Query results expose `id`, `recordType`, `revision`, and the rendered value. Use the returned revision as `expectedRevision` when changing an existing record.
 
-This section is the stable location for future project-wide tool and skill introductions.
+Persistent changes use unified change batches. Submit an authorized batch with `rp_data_submit`, or write it to the exact node output declared for node-end submission. The runtime supplies provenance and derived indexes; an Agent may add only a useful natural-language `note`. Never scan workspaces for guessed drafts or edit session authority files directly.
+
+## Workspaces and artifacts
+
+A workflow node may receive a private workspace and declared named outputs. Workspace files and generated reports are non-authoritative artifacts whose visibility and retention are workflow-authored. Durable, queryable information belongs in the owning module collection through the unified data service.
+
+## Output
+
+Follow the active node's responsibility. A narrative node normally emits only the player-visible roleplay prose. Data-maintenance and background nodes emit only their declared outputs. Feature-specific rules belong to the owning card, module Skill, Agent, and workflow.

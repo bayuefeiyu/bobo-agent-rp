@@ -52,7 +52,7 @@ The shared `.pi/extensions/pi-rp-web.ts` extension starts the card's server, ope
 
 Browser and tool callbacks receive ordinary extension context, which cannot replace Pi sessions. For chat reselection or card switching, dispatch the registered `/rp-web-reset <card-id>` extension command with `pi.sendUserMessage(..., { expandPromptTemplates: true })`. Its command context owns `newSession()` and re-dispatches `/rp-web` from the replacement session. Do not cast a tool/event context and call `newSession()` directly.
 
-Each saved chat owns `workspace/public/turn/`. The bridge clears it before accepting every new player turn; RP tasks may create arbitrary temporary documents there, but nothing in it is authoritative session state. A native variable update uses a pending draft there and runs as a hidden Pi follow-up after the player-visible prose has been saved. Interrupted variable drafts remain pending and block a new turn until completed; finalized data lives only in the module's complete snapshot records.
+Each workflow node owns `workspace/private/<workflow-id>/<run-id>/<node-id>/`. Nodes declare named outputs, scopes, and retention; the runtime registers only those exact files. Nothing in a workspace is authoritative session state. Durable/queryable information is committed through unified change batches to module collections, either explicitly or by exact node-end declarations.
 
 Editing any saved message revises only that message text. It deliberately leaves all later messages and module records untouched. Deleting a saved message truncates that message and the complete suffix, deletes every bound module record, and restores snapshot modules from their latest surviving record where supported.
 
@@ -66,13 +66,13 @@ Editing any saved message revises only that message text. It deliberately leaves
 6. In user settings, select, edit, and delete saved player profiles by name. Keep at least one saved profile. Deleting the active profile selects the first remaining profile, updates current-session metadata and fixed player context immediately, and removes its avatar file when no remaining profile references it. Allow one PNG, JPEG, or WebP avatar of at most 5 MB per saved nickname. Store image bytes under `settings/avatars/` and only the safe relative avatar reference in that profile's `settings/common.json` entry. Validate both declared MIME type and file signature. Use the current card cover as the assistant avatar and the nickname-specific image as the player avatar, with initial-letter fallbacks. Persist the active profile in current session metadata. Inject the active profile as fixed RP context before the card's primary-character profile; avatars are presentation-only and a description must never override player agency.
 7. In system settings, adjust the story font size and persist it in `settings/common.json`. Also list every frontend feature module with a visibility checkbox and accessible up/down controls. Persist module visual order and hidden IDs in `cards/<card-id>/settings.json` under `settings.featureModules`; apply them only to the Web rail. Background modules never appear in this list. Presentation preferences do not enter Pi context, alter transcripts, rewrite module definitions, or change author-controlled `contextOrder`.
 8. Poll or subscribe to bridge state and display the completed Pi response.
-9. Render frontend card feature modules from `GET /api/modules` inside `#card-module-list`. Use card-local `settings.featureModules` when present; otherwise use authored `displayOrder`. Each module is an independent titled disclosure section, collapsed by default. Keep its expanded state only in current page memory so it survives polling updates but resets on F5; do not persist disclosure state in common settings. Read each module's declarative `view.json` to map regions to its current chat's data. Render `json` regions as recursive key/value fields—nested groups and numbered array items—not as raw JSON source, braces, quoted keys, or monospace code. Give every visible module `修改数据` and `修改模块` actions: the bridge opens the current session file selected by `storage.contextSource` or the card-local `module.json` with the operating system's default editor; the browser never edits either file. The endpoint must omit background modules, and visible selection or sorting remains frontend-only. Do not hard-code a placeholder module in the generic frontend.
+9. Render frontend card modules from `GET /api/modules` inside `#card-module-list`. Use card-local display settings when present; otherwise use authored `displayOrder`. Each module is an independent titled disclosure section whose regions read the collection data exposed by its card-local `frontend-view.json`. Render JSON regions as recursive fields, not raw source. `查看数据` opens a generated, user-only collection summary; `修改模块` opens `module.json`. The browser never edits authority files directly. Omit background modules and keep display selection/order frontend-only.
 10. In API/models, edit local model profiles, load an OpenAI-compatible `/models` list or type a name manually, set common model limits/thinking and optional head/tail prompts, and run an explicit 64-token `hello` smoke test without card context, history, tools, Agent prompt, or wrappers. Keep shareable model configuration in `play/settings/model-profiles.json`, but store API keys only in the project-hashed operating-system cache described in `workflow-system.md`; automatically migrate and erase legacy project-file keys. Never echo a saved API key back to the browser.
 11. In Agents, show effective base/card layers, save card overrides by default, require an explicit global-overwrite action, and provide restore. Agent default model has lower precedence than a node or workflow default.
 12. In workflows, reread definitions, show the active foreground workflow, node scope/CD/bindings and live status, highlight running/failed states, and provide activation, retry-with-model, save-binding, and cancel actions. For every node whose completed run state reports an available process record, show an `打开过程记录` action beside that run node; the bridge opens the matching Markdown file with the operating system's default editor. The browser must not fetch or render the diagnostic content, and the runtime must not expose arbitrary paths. Do not add a drag editor. Active instances retain their start snapshot.
 13. In Token statistics, aggregate the current chat's recorded attempts, show each completed workflow's persisted total, and list each successful node's input, output, cache-read, cache-write, and total token usage. Also show a completed workflow's total on its workflow-run card. Successful deterministic nodes without a model call record zero usage. Older records without usage data must be marked as unrecorded, and incomplete attempt coverage must be disclosed instead of presenting the subtotal as exact.
 
-After saving the player-visible assistant prose, run one hidden post-narrative task for every module whose storage engine is `post-narrative-output`. It must resolve each module as emitted or `not_triggered`, validate all emitted data before committing, bind records to the saved assistant message, and never add auxiliary content to the main transcript. Only after that task succeeds may the variable post-narrative task run. Interrupted post-narrative drafts remain pending and block a new player turn until resumed or completed.
+Auxiliary outputs and state updates are ordinary workflow nodes. Their dependencies define ordering; their `moduleAccess` defines authority; and their declared unified-change-batch outputs commit before downstream nodes run. Bind turn-derived records to the saved assistant message where required, and never append auxiliary output to the main transcript.
 
 After the bridge accepts a chat reselection or card-switch handoff, permanently make the initiating browser page inert and show that a new page is opening. Never restore its controls with a timeout: the old page belongs to the retired Pi session, so any later request from it is invalid. If an already-stale page receives the bridge's closed-session response, replace its controls with the same inert handoff notice. The player should only continue in the newest Web RP page.
 
@@ -117,8 +117,6 @@ The extension mirrors Web-visible interaction to a card group keyed first by car
 sessions/<card-id>/<pi-session-id>/
 ├── session.json
 ├── messages.jsonl
-├── catalog/
-│   └── messages.json
 ├── context/
 │   └── receipts/
 ├── workflow/
@@ -126,18 +124,17 @@ sessions/<card-id>/<pi-session-id>/
 │   ├── artifacts/
 │   └── process-records/<run-id>/<node-id>.md
 ├── workspace/
-│   ├── public/turn/
-│   ├── public/long-term/
-│   └── private/
+│   ├── artifacts.jsonl
+│   ├── transactions/
+│   ├── receipts/
+│   └── private/<workflow-id>/<run-id>/<node-id>/
 └── modules/
-    └── <module-id>/
-        ├── binding.json
-        ├── records.jsonl
-        ├── snapshot.json
-        └── catalog.json
+    └── <module-id>/collections/<collection-id>/
+        ├── records*.jsonl
+        └── snapshot*.json
 ```
 
-The card ID is a filesystem-safe manifest ID and forms the first grouping level. Every message is a common version 1 record envelope. The selected opening is sequence `0`, turn `0`, with message role/kind/content in `data`. Each later player message and completed Pi reply share a positive bound turn and receive consecutive sequence values. Pi's native session remains an operational log; before every Web RP model call its older conversation and tool messages are replaced by fresh fixed context plus policy-selected records.
+The card ID is a filesystem-safe manifest ID and forms the first grouping level. The selected opening is sequence `0`, turn `0`; later player messages and completed Pi replies share a positive turn and receive consecutive sequence values. Pi's native session remains an operational log; module records use unified envelope v2 and are queried only through authorized views.
 
 When resuming a saved chat from a newly started Pi session, bind directly to its transcript, continuity files, and feature-module records. Before each new Web turn, rebuild model context from those files and append subsequent Web turns to the selected saved-chat directory. Do not rewrite the existing transcript merely to resume it.
 
@@ -145,9 +142,7 @@ Every displayed assistant or player message may expose local edit and delete con
 
 ## Feature modules
 
-Read [feature-modules.md](feature-modules.md) for module v3. The extension supplies module routing in author-controlled `contextOrder` regardless of surface. Every detailed prompt stays in the module skill. The Web endpoint exposes `{records, snapshot}` only for frontend modules and uses `displayOrder`; browser preferences never alter Agent context.
-
-For each source, the runtime executes its default/custom code selector. Agent-enabled sources also expose a compact catalog and require `rp_context_query`; code resolves exact requested records and falls back to the code selector on failure. Each turn writes a context receipt containing automatic IDs, Agent decisions, selected IDs, errors/fallbacks, and any unresolved source.
+Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md) and [feature-modules.md](feature-modules.md) for module v4. The extension supplies module routing in author-controlled `contextOrder`. Detailed prompts stay in the module skill. Nodes use `rp_data_query` and `rp_data_get` with their exact capabilities, views, and budgets. The Web endpoint exposes collection data only for frontend modules and uses `displayOrder`; browser preferences never alter Agent context or access.
 
 ## Starting Web mode
 

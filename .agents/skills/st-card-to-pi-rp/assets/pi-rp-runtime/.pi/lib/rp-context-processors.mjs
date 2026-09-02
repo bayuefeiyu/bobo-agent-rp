@@ -30,9 +30,9 @@ export function validateContextProcessorDefinition(value) {
     "failure",
   ];
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== fields.length || fields.some(field => !(field in value))) {
-    throw new Error("Context processor must use the exact schemaVersion 1 field set.");
+    throw new Error("Context processor must use the exact schemaVersion 2 field set.");
   }
-  if (value.schemaVersion !== 1) throw new Error("Context processor schemaVersion must be 1.");
+  if (value.schemaVersion !== 2) throw new Error("Context processor schemaVersion must be 2.");
   if (typeof value.id !== "string" || !SAFE_ID.test(value.id)) throw new Error("Context processor id is invalid.");
   if (typeof value.description !== "string") throw new Error(`Context processor ${value.id} description must be a string.`);
   if (value.phase !== "before-narrative") throw new Error(`Context processor ${value.id} phase must be before-narrative.`);
@@ -41,21 +41,25 @@ export function validateContextProcessorDefinition(value) {
   if (!value.dependencies || typeof value.dependencies !== "object" || Array.isArray(value.dependencies)) {
     throw new Error(`Context processor ${value.id} dependencies must be an object.`);
   }
-  const dependencyFields = ["currentInput", "opening", "player", "messages", "variables", "modules", "settings"];
+  const dependencyFields = ["currentInput", "opening", "player", "messages", "dataQueries", "settings"];
   if (Object.keys(value.dependencies).length !== dependencyFields.length || dependencyFields.some(field => !(field in value.dependencies))) {
-    throw new Error(`Context processor ${value.id} dependencies must use the exact version 1 field set.`);
+    throw new Error(`Context processor ${value.id} dependencies must use the exact version 2 field set.`);
   }
   for (const field of ["currentInput", "opening", "player", "settings"]) {
     if (typeof value.dependencies[field] !== "boolean") throw new Error(`Context processor ${value.id} dependencies.${field} must be boolean.`);
   }
-  for (const field of ["messages", "variables"]) {
-    if (!['none', 'all'].includes(value.dependencies[field])) throw new Error(`Context processor ${value.id} dependencies.${field} must be none or all.`);
-  }
-  if (!Array.isArray(value.dependencies.modules) || value.dependencies.modules.some(moduleId => typeof moduleId !== "string" || !SAFE_ID.test(moduleId))) {
-    throw new Error(`Context processor ${value.id} dependencies.modules must contain safe module IDs.`);
-  }
-  if (new Set(value.dependencies.modules).size !== value.dependencies.modules.length) {
-    throw new Error(`Context processor ${value.id} dependencies.modules must not contain duplicates.`);
+  if (!['none', 'all'].includes(value.dependencies.messages)) throw new Error(`Context processor ${value.id} dependencies.messages must be none or all.`);
+  if (!Array.isArray(value.dependencies.dataQueries)) throw new Error(`Context processor ${value.id} dependencies.dataQueries must be an array.`);
+  const queryIds = new Set();
+  for (const query of value.dependencies.dataQueries) {
+    if (!query || typeof query !== "object" || Array.isArray(query)) throw new Error(`Context processor ${value.id} data query must be an object.`);
+    for (const field of ["id", "moduleId", "collectionId", "view"]) {
+      if (typeof query[field] !== "string" || !SAFE_ID.test(query[field])) throw new Error(`Context processor ${value.id} data query ${field} is invalid.`);
+    }
+    if (queryIds.has(query.id)) throw new Error(`Context processor ${value.id} has duplicate data query ${query.id}.`);
+    queryIds.add(query.id);
+    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1)) throw new Error(`Context processor ${value.id} data query ${query.id} limit is invalid.`);
+    if (query.recordTypes !== undefined && (!Array.isArray(query.recordTypes) || query.recordTypes.some(type => typeof type !== "string" || !SAFE_ID.test(type)))) throw new Error(`Context processor ${value.id} data query ${query.id} recordTypes is invalid.`);
   }
   if (!Array.isArray(value.fragments) || value.fragments.length === 0) {
     throw new Error(`Context processor ${value.id} fragments must be a non-empty array.`);
@@ -78,21 +82,20 @@ export function validateContextProcessorDefinition(value) {
 
 export function buildContextProcessorInput(definition, available) {
   const dependencies = definition.dependencies;
-  const selectedModules = {};
-  for (const moduleId of dependencies.modules) {
-    if (!(moduleId in available.modules)) throw new Error(`Context processor ${definition.id} requires unknown module ${moduleId}.`);
-    selectedModules[moduleId] = clone(available.modules[moduleId]);
+  const selectedQueries = {};
+  for (const query of dependencies.dataQueries) {
+    if (!(query.id in available.dataQueries)) throw new Error(`Context processor ${definition.id} is missing data query ${query.id}.`);
+    selectedQueries[query.id] = clone(available.dataQueries[query.id]);
   }
   return deepFreeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     card: clone(available.card),
     turn: available.turn,
     currentInput: dependencies.currentInput ? available.currentInput : null,
     openingId: dependencies.opening ? available.openingId : null,
     player: dependencies.player ? clone(available.player) : null,
     messages: dependencies.messages === "all" ? clone(available.messages) : [],
-    variables: dependencies.variables === "all" ? clone(available.variables) : null,
-    modules: selectedModules,
+    data: selectedQueries,
     settings: dependencies.settings ? clone(available.settings) : null,
   });
 }
