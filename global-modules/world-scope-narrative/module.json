@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 6,
+  "id": "world-scope-narrative",
+  "moduleKind": "hybrid",
+  "basedOn": null,
+  "title": "广域叙事模块",
+  "description": "创作遍及卡片世界、通常远离主线现场且值得传播的完整故事。",
+  "surface": "frontend",
+  "contextOrder": 530,
+  "displayOrder": 530,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": "catalog.json",
+  "frontendViewFile": "frontend-view.json",
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/prepare-story-context/workflow.json",
+    "workflows/create-story-candidate/workflow.json",
+    "workflows/publish-reviewed-story/workflow.json",
+    "workflows/export-recent-stories/workflow.json"
+  ]
+}

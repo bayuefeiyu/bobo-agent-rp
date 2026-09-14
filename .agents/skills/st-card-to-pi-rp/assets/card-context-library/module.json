@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 6,
+  "id": "card-context-library",
+  "moduleKind": "resource",
+  "basedOn": null,
+  "title": "卡片创作资料库",
+  "description": "按工作流指定的类别，把卡片静态设定和创作资料作为独立文档快照送入调用节点工作区。",
+  "surface": "background",
+  "contextOrder": 100,
+  "displayOrder": 100,
+  "dataContractFile": null,
+  "resourceCatalogFile": "catalog.json",
+  "frontendViewFile": null,
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/export-context/workflow.json"
+  ]
+}

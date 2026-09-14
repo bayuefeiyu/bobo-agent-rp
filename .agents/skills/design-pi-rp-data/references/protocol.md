@@ -7,7 +7,8 @@ This document is the authoritative data contract for Pi RP cards and feature mod
 ```text
 features/<module-id>/
 ├── module.json
-├── data-contract.json
+├── data-contract.json       # data/hybrid only
+├── catalog.json             # resource/hybrid only
 ├── collections/<collection-id>/initial/
 ├── frontend-view.json
 ├── runtime/
@@ -24,12 +25,13 @@ sessions/<card-id>/<chat-id>/
 
 `data-contract.json` is the only machine-readable module data declaration. A module owns one or more collections; a collection owns one or more record types. JSON/JSONL collection files are authoritative. Indexes, catalogs, and generated documents are derived and rebuildable.
 
-## Module v4
+## Module v6
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 6,
   "id": "rumor-system",
+  "moduleKind": "data",
   "basedOn": null,
   "title": "传闻",
   "description": "记录和传播传闻。",
@@ -37,12 +39,39 @@ sessions/<card-id>/<chat-id>/
   "contextOrder": 100,
   "displayOrder": 10,
   "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": null,
   "frontendViewFile": "frontend-view.json",
-  "skillFile": "skill/SKILL.md"
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/query-rumors/workflow.json",
+    "workflows/update-rumors/workflow.json"
+  ]
 }
 ```
 
-Substantial card-specific changes use a distinct module ID. `basedOn` may name the source module but never implies data compatibility, synchronization, or permission to change its source package.
+The exact v6 manifest additionally distinguishes three module kinds:
+
+- `data`: owns session collections; `dataContractFile` is required and `resourceCatalogFile` is null;
+- `resource`: owns static authored resources; `resourceCatalogFile` is required and `dataContractFile` is null;
+- `hybrid`: owns both and requires both files.
+
+Resource-only modules use `surface: "background"` and `frontendViewFile: null`; a frontend requires authoritative data and a frontend view. Background data/hybrid modules also use `frontendViewFile: null`. This avoids fake collections and prevents static authored Markdown from being copied into session authority merely to satisfy a package shape.
+
+Every module owns only complete Workflow v3 definitions listed by `workflowFiles`; it does not publish naked nodes or internal tools. Each listed workflow is `module-external` or `module-internal`, declares the same `ownerModuleId`, has no trigger, and ends in exactly one `workflow-return` node. Substantial card-specific changes use a distinct module ID. `basedOn` may name the source module but never implies data compatibility, synchronization, or permission to change its source package.
+
+Internal workflows default to a whole-owner-module execution lock. A module with deliberately independent collection write domains may declare non-empty collection `writeLocks`; all writable node capabilities must be covered, and locks remain separate from capabilities, transactions, and expected revisions.
+
+## Resource catalog v1
+
+A resource/hybrid module's catalog uses the exact fields `schemaVersion`, `moduleId`, `categories`, `selectionGroups`, and `documents`. Each document is one indivisible delivery unit below `documents/` and declares:
+
+- stable ID, safe Markdown path, title, summary, categories, and optional subcategory;
+- `readPolicy`: `required`, `conditional`, `choice`, or `optional`;
+- `authority`: `binding`, `canonical`, `advisory`, or `exploratory`;
+- applicable phases from `analysis`, `retrieval`, `planning`, `writing`, `checking`, and `archiving`;
+- integer priority, optional selection group, `readWhen`, perspective, aliases, related document IDs, and source references.
+
+Choice documents must name a selection group. A group uses `one`, `at-most-one`, `one-or-more`, or `any`, supplies a selection instruction, and may name a fallback member. Catalog metadata routes work but never replaces the authoritative document body.
 
 ## Data contract v1
 
@@ -135,6 +164,8 @@ A custom record action declares `processors.<action> = {file, export}` inside it
 
 The runtime fills provenance automatically. Ordinary Agents neither supply nor see technical provenance. They may provide the optional natural-language `note` only.
 
+Transcript messages and workflow artifacts use a separate runtime-owned `narrativeSource` value. It records technical producer (`unknown`, `user`, `card`, `agent`, `code`, or `runtime`), narrative layer (`unspecified`, `in-world`, `story`, or `authorial`), and optional stable producer/character IDs. These fields describe semantic origin, not data permission or factual truth. In particular, player input is `in-world`, a story container can contain uncertain character claims, and only a workflow/card author's static declaration can mark generated output as `authorial`. Missing legacy metadata remains `unspecified`.
+
 Stable IDs are used for cross-module references. Module and card authors decide which record types register identities by declaring `identity: {"namePath":"/data/name","aliasesPath":"/data/aliases"}`; omit it for unregistered types. The derived session registry enforces globally unique registered IDs. `rp_data_resolve` resolves an ID, display name, or alias but returns only entries in collections for which the current node has query authority.
 
 ## Retrieval and views
@@ -173,13 +204,17 @@ A turn may produce any number of batches. An Agent may submit one explicitly, or
 
 Commit policies are `atomic`, `grouped`, and `best-effort`. `best-effort` is rejected unless the owning workflow node explicitly declares `dataCommit.allowBestEffort: true`. Batch and operation IDs are idempotency keys. Every operation against an existing record must carry `expectedRevision`; missing or mismatched revisions produce conflict receipts and never silently overwrite data. Commits for one session are serialized.
 
-## Workflow v2 integration
+Runtime transaction context may include normalized `sourceReferences` for every actually used message revision and retained artifact. This set is copied into record provenance and the durable receipt; it is distinct from the single story-position `binding`. Ordinary Agents cannot author it. A trusted code node may select exact visible message IDs for delayed batching, after which the runtime resolves their current revisions. Impact inspection reads receipts only and never changes record validity; in-place message edits require an explicit, scoped maintenance workflow if the user wants derived data repaired.
 
-Modules define capabilities. Workflows grant a subset to concrete nodes. Skills explain how to use capabilities but never grant them. Agent tools, code nodes, and node-end submission all inherit the node's effective capabilities.
+Session-wide integrity inspection can report that a currently visible message revision differs from a revision used by an authorized module transaction. It is diagnostic only. Modules that support user-selected review ranges may persist their own coverage acknowledgements through normal guarded changes; these acknowledgements do not rewrite transcript history or grant cross-module repair authority.
 
-Node outputs are registered by logical name with `node`, `workflow`, `turn`, `session`, or `public` scope. Change drafts remain node-owned. Node-end commits occur before the node is marked successful and before downstream nodes run.
+## Workflow v3 integration
 
-Normal workflow context assembly is the primary information-routing mechanism. Query access control is a fallback boundary against autonomous over-querying or configuration mistakes.
+Modules define capabilities and own complete internal/external workflows. Top-level workflow nodes invoke them through the common call-and-wait boundary; module nodes may invoke external workflows only. Workflows grant a subset of data capabilities to concrete nodes. Skills explain semantics but never grant access. Agent tools, code nodes, and node-end submission all inherit the node's effective capabilities.
+
+Node outputs are registered by logical name with file/directory kind and `node`, `workflow`, `turn`, `session`, or `public` scope. `workspaceHandoff.include` is the only node-to-node filesystem allowlist: every entry references one declared output. Its destination defaults to the declared output path below `handoff/<producer-node-id>/`, preserving an allowlisted mirror in which transferred knowledge maps retain their relative references. Optional `as` deliberately overrides that path and may invalidate such references. The runtime never scans or transfers a whole node workspace, and it supports no wildcard or exclusion-list form. Missing or mismatched included outputs fail before downstream release. Change drafts remain node-owned. Node-end commits occur before the node is marked successful and before downstream nodes run.
+
+Module results cross the boundary only as declared file or directory exports placed at caller-selected safe paths. A caller must redeclare and explicitly include a returned path before another node receives it; nested results never bubble automatically. Normal workflow context assembly, explicit workspace handoff, and workspace-document indexes are the primary information-routing mechanisms. Top-level trigger events do not implicitly transfer workspaces, and durable cross-turn authority remains module data. Query access control remains a fallback boundary against autonomous over-querying or configuration mistakes.
 
 ## Documents and maintenance
 

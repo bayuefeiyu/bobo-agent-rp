@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.generic",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "generic",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "实体的稳定身份、类别、称谓与外部识别信息。", "recommendedFields": ["名称", "类别", "其他称谓", "知名度"] },
+    { "key": "特征与性质", "description": "能够持续影响剧情的性质、特征与能力边界。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "已经形成长期影响的历史和状态变化；短期经过留在事件中。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前有效且值得跨回合记忆的状态。", "recommendedFields": [] },
+    { "key": "关联", "description": "与其他稳定实体或记录的关系。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决且持续影响后续创作的事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": []
+}

@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "required": ["name", "claim", "catalogSummary", "templateMode", "templateId", "templateVersion", "subjectRecordIds", "relatedRecordIds", "knowerScope", "propagation", "source", "precedingCognitionIds", "sections", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "claim": { "type": "string", "minLength": 1 },
+    "catalogSummary": { "type": "string" },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "subjectRecordIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "relatedRecordIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "knowerScope": {
+      "type": "object",
+      "required": ["mode", "knowerIds"],
+      "properties": { "mode": { "enum": ["common", "restricted", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "propagation": {
+      "type": "object",
+      "required": ["stage", "description"],
+      "properties": { "stage": { "enum": ["sealed", "selective", "incidental", "active", "broadcast", "unclassified"] }, "description": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["entityIds", "recordIds", "description"],
+      "properties": { "entityIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "recordIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "description": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "precedingCognitionIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "sections": { "type": "object", "additionalProperties": true },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "templateId": "cognition.default",
+  "templateVersion": 1,
+  "recordType": "memory.cognition",
+  "summaryLimit": 40,
+  "sections": [
+    { "key": "认知内容", "description": "一条原子化主张，不预先判定其为事实或误解。", "recommendedFields": ["主张"] },
+    { "key": "知情范围", "description": "当前知情者或知情群体。", "recommendedFields": [] },
+    { "key": "传播状态", "description": "具体传播阶段和客观描述。", "recommendedFields": [] },
+    { "key": "来源", "description": "消息来源和相关记录。", "recommendedFields": [] },
+    { "key": "关联", "description": "相关实体、事件或前置认知。", "recommendedFields": [] }
+  ]
+}

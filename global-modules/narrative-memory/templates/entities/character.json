@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.character",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "character",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "身份、称谓、外貌识别、出身与总体知名度。", "recommendedFields": ["姓名", "其他称谓", "性别", "年龄", "身份", "所属势力", "知名度"] },
+    { "key": "性格与行为", "description": "稳定性格、价值取向和行为方式；创作者原有核心扮演指导不得随意缩减。", "recommendedFields": ["核心性格", "行为倾向", "底线", "习惯"] },
+    { "key": "立场与目标", "description": "较稳定的立场、欲望、顾虑和目标。", "recommendedFields": ["当前立场", "长期目标", "当前目标", "顾虑"] },
+    { "key": "能力与资源", "description": "能力、装备、资源、限制与伤势。", "recommendedFields": ["能力", "装备", "资源", "限制"] },
+    { "key": "关系与归属", "description": "稳定关系和群体归属；临时合作只留在事件。", "recommendedFields": ["所属群体", "重要关系"] },
+    { "key": "特殊态度", "description": "只记录设定或扮演中明显、稳定表现出的特殊态度，避免根据一次表现定性。", "recommendedFields": [] },
+    { "key": "经历与变化", "description": "已经对长期选择产生影响的经历和变化；具体经过引用事件。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前持续状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的个人事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "gender", "path": "/sections/基本信息/性别", "valueType": "string" },
+    { "facetId": "affiliation", "path": "/sections/基本信息/所属势力", "valueType": "string-or-list" },
+    { "facetId": "identity", "path": "/sections/基本信息/身份", "valueType": "string-or-list" }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-entity-selection",
+  "title": "叙事记忆实体数量与随机选择",
+  "description": "供作者层工作流复用的确定性实体count/sample入口；不返回实体完整内容。",
+  "kind": "module-external",
+  "revision": "1",
+  "defaults": {
+    "agentId": "background-worker",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4,
+    "dedupeKey": "$.request.selectionKey"
+  },
+  "nodes": [
+    {
+      "id": "select-entities",
+      "title": "统计或随机选择实体",
+      "description": "按结构化筛选执行count或使用稳定种子无放回sample。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.entities.select"
+          ],
+          "views": [
+            "selection"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/entity-select.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "select-entities"
+      ],
+      "exports": {
+        "selection": {
+          "fromNode": "select-entities",
+          "output": null
+        }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {
+      "selection": {
+        "format": "json",
+        "description": "Deterministic entity selection result."
+      }
+    }
+  }
+}

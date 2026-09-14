@@ -1,0 +1,4 @@
+{
+  "type": "object", "required": ["initialized", "openingId", "initializedTurn"],
+  "properties": { "initialized": { "type": "boolean" }, "openingId": { "type": ["string", "null"] }, "initializedTurn": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false
+}

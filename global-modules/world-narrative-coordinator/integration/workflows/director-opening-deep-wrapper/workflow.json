@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 3,
+  "id": "director-opening-deep-wrapper",
+  "title": "开场后按需启动深度导演",
+  "description": "开场导演初始化完成后读取其启动建议；需要时在后台运行深度推演。",
+  "kind": "global-background",
+  "revision": "1",
+  "defaults": { "agentId": "world-narrative-deep-director", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "after-workflow", "workflowId": "director-opening-bootstrap" },
+  "nodes": [{
+    "id": "start-if-needed",
+    "type": "code",
+    "outputs": {},
+    "moduleAccess": [
+      { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.read"], "views": ["director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-status"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["runtime"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } }
+    ],
+    "workflowCalls": ["world-narrative-coordinator/deep-director-planning"],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-deep-if-needed.mjs", "historyCompleteTurns": 20 }
+  }]
+}

@@ -1,0 +1,280 @@
+{
+  "508": {
+    "inputs": {
+      "action": "append",
+      "tidy_tags": "yes",
+      "text_a": "",
+      "text_b": "",
+      "text_c": ""
+    },
+    "class_type": "StringFunction|pysssss",
+    "_meta": {
+      "title": "String Function 🐍"
+    }
+  },
+  "702": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "913:739",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "720": {
+    "inputs": {
+      "seed": -1
+    },
+    "class_type": "Seed (rgthree)",
+    "_meta": {
+      "title": "Seed (rgthree)"
+    }
+  },
+  "736": {
+    "inputs": {
+      "seed": [
+        "720",
+        0
+      ],
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "905",
+        0
+      ],
+      "positive": [
+        "749",
+        0
+      ],
+      "negative": [
+        "768",
+        0
+      ],
+      "latent_image": [
+        "743",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "740": {
+    "inputs": {
+      "model_name": "4xUltrasharp_4xUltrasharpV10.pt"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "加载放大模型"
+    }
+  },
+  "743": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent图像"
+    }
+  },
+  "749": {
+    "inputs": {
+      "text": [
+        "508",
+        0
+      ],
+      "clip": [
+        "905",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码"
+    }
+  },
+  "751": {
+    "inputs": {
+      "samples": [
+        "736",
+        0
+      ],
+      "vae": [
+        "909",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "752": {
+    "inputs": {
+      "images": [
+        "751",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "预览图像"
+    }
+  },
+  "768": {
+    "inputs": {
+      "text": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, lowres, censor",
+      "clip": [
+        "905",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码"
+    }
+  },
+  "905": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "anima\\anima-base-1-masterpiece-v51.safetensors",
+        "strength": 0.8
+      },
+      "lora_2": {
+        "on": true,
+        "lora": "anima\\anima-highres-aesthetic-boost.safetensors",
+        "strength": 0.8
+      },
+      "lora_3": {
+        "on": true,
+        "lora": "anima\\Anima_colorfix_v1_by_Volnovik.safetensors",
+        "strength": 0.8
+      },
+      "lora_4": {
+        "on": true,
+        "lora": "anima\\gpt-image-2_anima-base1_v1.safetensors",
+        "strength": 0.8
+      },
+      "lora_5": {
+        "on": true,
+        "lora": "anima\\f1f_v1_epoch30.safetensors",
+        "strength": 0.8
+      },
+      "lora_6": {
+        "on": false,
+        "lora": "anima\\anima_p3_rdbt_v0.29.b.122.safetensors",
+        "strength": 0.8
+      },
+      "lora_7": {
+        "on": false,
+        "lora": "anima\\weishuang_anima_lora_v1.safetensors",
+        "strength": 0.8
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "915",
+        0
+      ],
+      "clip": [
+        "908",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "908": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "909": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "915": {
+    "inputs": {
+      "unet_name": "oneObsessionAnima_v20.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "913:738": {
+    "inputs": {
+      "pixels": [
+        "913:748",
+        0
+      ],
+      "vae": [
+        "909",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "913:739": {
+    "inputs": {
+      "samples": [
+        "913:738",
+        0
+      ],
+      "vae": [
+        "909",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "913:748": {
+    "inputs": {
+      "samples": [
+        "736",
+        0
+      ],
+      "vae": [
+        "909",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  }
+}

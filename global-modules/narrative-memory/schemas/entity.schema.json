@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "required": ["name", "aliases", "entityKind", "templateMode", "templateId", "templateVersion", "catalogSummary", "sections", "informationBlocks", "derivedFacets", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "entityKind": { "enum": ["generic", "character", "location", "faction", "item", "ability", "species", "concept"] },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "catalogSummary": { "type": "string" },
+    "sections": { "type": "object", "additionalProperties": true },
+    "informationBlocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "mode", "knowerIds", "content"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1 },
+          "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] },
+          "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "content": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "derivedFacets": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean", "array", "null"] } },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

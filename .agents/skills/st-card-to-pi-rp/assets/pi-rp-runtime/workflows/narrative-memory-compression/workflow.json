@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-compression",
+  "title": "叙事记忆压缩入口",
+  "description": "顶层手动入口；同步调用叙事记忆内部压缩工作流。",
+  "kind": "global-background",
+  "revision": "2",
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual" },
+  "nodes": [{
+    "id": "compress",
+    "type": "call",
+    "target": "narrative-memory/narrative-memory-compression",
+    "arguments": {},
+    "documents": {},
+    "outputPaths": {},
+    "outputs": {},
+    "moduleAccess": [],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "argumentSources": { "request": "$" } }
+  }]
+}

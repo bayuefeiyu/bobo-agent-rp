@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "templateId": "event-summary.default",
+  "templateVersion": 1,
+  "recordType": "memory.event-summary",
+  "summaryLimit": 50,
+  "sections": [
+    { "key": "摘要概况", "description": "覆盖的一段已完成且语义相关的剧情。", "recommendedFields": [] },
+    { "key": "主要经过", "description": "只保留目录级重要经过，不加入来源记录没有的信息。", "recommendedFields": [] },
+    { "key": "结果与影响", "description": "这段剧情留下的主要结果和长期影响。", "recommendedFields": [] }
+  ]
+}

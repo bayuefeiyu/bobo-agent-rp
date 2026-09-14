@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["selectedProfileIds", "quickMode", "inputPolicy"],
+  "properties": {
+    "selectedProfileIds": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }, "maxItems": 20 },
+    "quickMode": { "type": "boolean" },
+    "inputPolicy": {
+      "type": "object",
+      "required": ["kind", "turnCount", "target"],
+      "properties": {
+        "kind": { "enum": ["recent-turns", "selected-messages", "workflow-output", "custom-brief"] },
+        "turnCount": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "target": { "enum": ["latest", "all", "custom"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

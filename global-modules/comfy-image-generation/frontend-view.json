@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "regions": [
+    {
+      "type": "image-generation",
+      "title": "剧情生图",
+      "settingsPath": "collections.settings.records",
+      "requestsPath": "collections.requests.records",
+      "rendersPath": "collections.renders.records",
+      "empty": "尚未配置 ComfyUI 生图工作流。请在项目根目录使用 adapt-comfyui-workflow Skill 完成适配。"
+    }
+  ]
+}

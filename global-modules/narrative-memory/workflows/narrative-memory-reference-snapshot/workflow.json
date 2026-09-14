@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-reference-snapshot",
+  "ownerModuleId": "narrative-memory",
+  "title": "叙事记忆目录与时间线快照",
+  "description": "按参数确定性导出记忆目录、有效事件时间线或两者，不修改权威数据。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "catalog": { "type": "parameter", "required": false, "valueType": "object", "description": "可选目录请求；支持collections、recordIds、recordTypes、filters、entityIds与entityMode(entry-only|related-records)。" },
+      "timeline": { "type": "parameter", "required": false, "valueType": "object", "description": "可选有效时间线请求；支持mode=effective、recordIds与filters。catalog与timeline至少提供一个。" }
+    },
+    "exports": {
+      "snapshot": { "format": "document-set", "description": "含DOCUMENTS.md及本次消费者所需的Markdown目录或时间线文档。" }
+    }
+  },
+  "revision": "1",
+  "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 8 },
+  "nodes": [
+    {
+      "id": "build-snapshot",
+      "title": "组装参考快照",
+      "type": "code",
+      "context": { "mode": "fixed" },
+      "outputs": {
+        "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" }
+      },
+      "moduleAccess": [
+        { "moduleId": "narrative-memory", "collectionId": "entities", "capabilities": ["memory.catalog.query"], "views": ["catalog"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
+        { "moduleId": "narrative-memory", "collectionId": "relationships", "capabilities": ["memory.catalog.query"], "views": ["catalog"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
+        { "moduleId": "narrative-memory", "collectionId": "events", "capabilities": ["memory.catalog.query"], "views": ["catalog"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
+        { "moduleId": "narrative-memory", "collectionId": "cognitions", "capabilities": ["memory.catalog.query"], "views": ["catalog"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
+        { "moduleId": "narrative-memory", "collectionId": "knower-groups", "capabilities": ["memory.catalog.query"], "views": ["catalog"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } }
+      ],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/narrative-memory/runtime/workflow/build-reference-snapshot.mjs" }
+    },
+    {
+      "id": "return",
+      "title": "返回参考快照",
+      "type": "workflow-return",
+      "dependsOn": ["build-snapshot"],
+      "exports": { "snapshot": { "fromNode": "build-snapshot", "output": "snapshot" } },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] }
+    }
+  ]
+}

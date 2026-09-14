@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": ["name", "aliases", "catalogSummary", "templateMode", "templateId", "templateVersion", "membershipMode", "membershipDefinition", "fixedBasis", "includeIds", "excludeIds", "resolvedMemberIds", "sections", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "catalogSummary": { "type": "string" },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "membershipMode": { "enum": ["dynamic", "fixed"] },
+    "membershipDefinition": { "type": "string", "minLength": 1 },
+    "fixedBasis": { "type": ["string", "null"] },
+    "includeIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "excludeIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "resolvedMemberIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "sections": { "type": "object", "additionalProperties": true },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

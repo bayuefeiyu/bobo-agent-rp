@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 3,
+  "id": "export-context",
+  "ownerModuleId": "card-context-library",
+  "title": "导出卡片创作资料",
+  "description": "按调用方指定类别生成独立文档快照和本次文档说明。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "categories": { "type": "parameter", "required": true, "valueType": "string-array", "description": "需要导出的资料类别。" }
+    },
+    "exports": {
+      "context": { "format": "document-set", "description": "包含 DOCUMENTS.md 和所选独立资料文档的目录快照。" }
+    }
+  },
+  "revision": "1",
+  "defaults": { "agentId": null, "modelId": null, "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 10 },
+  "nodes": [
+    {
+      "id": "export-context",
+      "title": "生成资料快照",
+      "type": "code",
+      "retry": { "maxAttempts": 1 },
+      "context": { "mode": "fixed" },
+      "outputs": {
+        "context": { "path": "context", "format": "document-set", "scope": "workflow", "retain": "run" }
+      },
+      "moduleAccess": [],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/card-context-library/runtime/export-context.mjs" }
+    },
+    {
+      "id": "return",
+      "title": "返回资料快照",
+      "type": "workflow-return",
+      "dependsOn": ["export-context"],
+      "exports": {
+        "context": { "fromNode": "export-context", "output": "context" }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] }
+    }
+  ]
+}

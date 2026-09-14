@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-retrieve",
+  "ownerModuleId": "narrative-memory",
+  "title": "叙事记忆检索",
+  "description": "从调用方提供的自然语言Markdown查询清单开始，匹配记录并确定性组装记忆文档；不替调用方完成情景分析或剧情推理。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "request": { "type": "text", "required": true, "description": "自然语言Markdown查询清单；应列实体、关系、事件、认知、知情范围等简单资料目标，不提交需要检索Agent推理结论的问题。" },
+      "documents": { "type": "document", "required": false, "formats": ["markdown"], "description": "调用方选择提供的查询补充文档。" },
+      "budget": { "type": "parameter", "required": false, "valueType": "object", "description": "可选检索预算；必须处于调用节点静态上限内。" }
+    },
+    "exports": {
+      "memory-context": { "format": "document-set", "description": "含通用记忆文档及可选限制视角文档的动态文档集。" }
+    }
+  },
+  "revision": "1",
+  "defaults": { "agentId": "narrative-memory-retriever", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4 },
+  "nodes": [
+    {
+      "id": "prepare-reference-snapshot",
+      "title": "准备完整记忆目录",
+      "type": "call",
+      "target": "narrative-memory/narrative-memory-reference-snapshot",
+      "arguments": { "catalog": {} },
+      "documents": {},
+      "outputPaths": { "snapshot": "reference-snapshot" },
+      "outputs": {
+        "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" }
+      },
+      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "documentIndex": {
+          "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "retrieval", "perspective": "general", "priority": 100, "description": "本次检索使用的完整记忆目录；先读其中DOCUMENTS.md。" }
+        }
+      }
+    },
+    {
+      "id": "prepare-retrieval",
+      "title": "解析本次有效检索预算",
+      "type": "code",
+      "context": { "mode": "fixed" },
+      "outputs": {},
+      "moduleAccess": [
+        { "moduleId": "narrative-memory", "collectionId": "support", "capabilities": ["memory.support.read"], "views": ["maintenance"], "queryBudget": { "maxRecords": 1, "maxCharacters": 10000 } }
+      ],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/narrative-memory/runtime/workflow/prepare-retrieval.mjs" }
+    },
+    {
+      "id": "materialize-retrieval-task",
+      "title": "生成有效检索参数资料",
+      "type": "code",
+      "dependsOn": ["prepare-retrieval"],
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-retrieval"] },
+      "outputs": { "task": { "path": "retrieval-task", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "task" }] },
+      "moduleAccess": [],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/materialize-retrieval-task.mjs",
+        "documentIndex": { "task": { "readPolicy": "required", "authority": "binding", "appliesAt": "retrieval", "priority": 110, "description": "代码解析出的本次唯一有效检索预算。" } }
+      }
+    },
+    {
+      "id": "memory-retrieval",
+      "title": "解析请求并匹配记录",
+      "type": "agent",
+      "agentId": "narrative-memory-retriever",
+      "dependsOn": ["prepare-reference-snapshot", "materialize-retrieval-task"],
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-reference-snapshot", "materialize-retrieval-task"] },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md及目录快照，把调用方的自然语言Markdown查询清单解析为内部结构，并完成候选匹配。不要回答需要调用方自行推理的结论。最终严格按Agent约定输出JSON。",
+      "outputs": {},
+      "moduleAccess": [
+        { "moduleId": "narrative-memory", "collectionId": "entities", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
+        { "moduleId": "narrative-memory", "collectionId": "relationships", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
+        { "moduleId": "narrative-memory", "collectionId": "events", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
+        { "moduleId": "narrative-memory", "collectionId": "cognitions", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
+        { "moduleId": "narrative-memory", "collectionId": "knower-groups", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } }
+      ],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "documentWorkspace": true, "callInputs": ["documents"] }
+    },
+    {
+      "id": "compose-memory",
+      "title": "组装记忆文档集",
+      "type": "code",
+      "dependsOn": ["memory-retrieval", "prepare-retrieval"],
+      "context": { "mode": "previous-output", "fromNodes": ["memory-retrieval", "prepare-retrieval"] },
+      "outputs": {
+        "memory-context": { "path": "memory-context", "format": "document-set", "scope": "workflow", "retain": "run" }
+      },
+      "moduleAccess": [
+        { "moduleId": "narrative-memory", "collectionId": "entities", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 500000 } },
+        { "moduleId": "narrative-memory", "collectionId": "relationships", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 500000 } },
+        { "moduleId": "narrative-memory", "collectionId": "events", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 500000 } },
+        { "moduleId": "narrative-memory", "collectionId": "cognitions", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 500000 } },
+        { "moduleId": "narrative-memory", "collectionId": "knower-groups", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 500000 } }
+      ],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/narrative-memory/runtime/workflow/compose-memory.mjs" }
+    },
+    {
+      "id": "return",
+      "title": "返回记忆文档集",
+      "type": "workflow-return",
+      "dependsOn": ["compose-memory"],
+      "exports": { "memory-context": { "fromNode": "compose-memory", "output": "memory-context" } },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] }
+    }
+  ]
+}

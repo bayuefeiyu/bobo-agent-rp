@@ -13,29 +13,15 @@ play/cards/<card-id>/
 │   ├── extracted.json
 │   └── unsupported/
 ├── core/
-│   ├── story.md
-│   ├── world.md
-│   ├── active-cast.md
-│   └── knowledge-map.md
-├── characters/
-│   └── primary/
-├── world/
-│   ├── domains/
-│   └── entities/
-│       ├── factions/
-│       ├── locations/
-│       ├── characters/
-│       ├── items/
-│       ├── abilities/
-│       ├── species/
-│       ├── events/
-│       └── concepts/
-├── rules/
-│   ├── core.md
-│   ├── scenes/
-│   └── outputs/
+│   └── foundation.md
 ├── features/
-│   └── <module-id>/
+│   ├── card-context-library/
+│   │   ├── catalog.json
+│   │   ├── documents/
+│   │   ├── runtime/
+│   │   ├── skill/
+│   │   └── workflows/
+│   └── <other-module-id>/
 ├── context/
 │   ├── retrieval-policy.json
 │   └── skill/SKILL.md          # required only for Agent-enabled message retrieval
@@ -75,7 +61,7 @@ Use UTF-8 JSON so the validation script can parse it without additional dependen
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "card-id",
   "name": "角色显示名",
   "cover": "source/original.png",
@@ -84,34 +70,25 @@ Use UTF-8 JSON so the validation script can parse it without additional dependen
     "artifact": "source/original.json",
     "sha256": "..."
   },
-  "fixed_context": [
-    "core/story.md",
-    "core/world.md",
-    "core/active-cast.md",
-    "rules/core.md",
-    "core/knowledge-map.md"
-  ],
-  "knowledge_map": "core/knowledge-map.md",
-  "primary_characters": [
-    "characters/primary/character-name.md"
-  ],
+  "fixed_context": "core/foundation.md",
   "context_policy": "context/retrieval-policy.json",
   "context_processors": [],
-  "feature_modules": [],
+  "feature_modules": [
+    "features/card-context-library/module.json"
+  ],
   "openings": [
     {
       "id": "opening-00",
       "title": "默认开场",
       "file": "openings/00.md",
-      "source": "first_mes",
-      "recommended_context": []
+      "source": "first_mes"
     }
   ],
   "default_opening": "opening-00"
 }
 ```
 
-Remove nonexistent optional fixed-context paths from the actual manifest. A world card may use an empty `primary_characters` array.
+`fixed_context` is exactly one card-level foundation document. Do not place a knowledge map, complete character dossier, detailed rule set, style guide, or format guide in this field. Every converted card includes the card-owned `card-context-library` resource module, even when its catalog is initially empty; the standard foreground workflow depends on its export workflow.
 Use a filesystem-safe `id` containing only letters, digits, dots, underscores, and hyphens; it is also the card's grouping directory under `sessions/`.
 When an authored image is available, `cover` is required and points to its card-relative preserved copy. A PNG/APNG packaged card always has an available cover because the input image is the cover. Preserve and reuse the original bytes rather than generating a replacement. Omit `cover` only when the supplied JSON, CHARX, or Tavern Sync source genuinely contains no usable local character image; record that disposition in the conversion report.
 
@@ -135,33 +112,39 @@ The baseline `context/retrieval-policy.json` is:
 
 When the message policy enables Agent retrieval, add `"context_skill": "context/skill/SKILL.md"` to the manifest. That skill owns the author's activation, `rp_message_query` selection, and non-activation guidance. A code-only card does not need it. Message catalogs are derived runtime aids and are never Agent-authored data.
 
-`feature_modules` is required and contains card-relative `module.json` paths. Keep it empty only when the source has no persistent structured feature, side panel, or auxiliary output. Every source-required output outside the main narrative is a frontend module record type produced by an ordinary workflow node. Modules use strict version 4 and data-contract version 1; read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one. A module may own multiple collections and record types. It declares optional indexes, named RP/custom views, capabilities, storage, and its card-local skill; workflows grant each node only a subset. `contextOrder` is authored Agent behavior, while `displayOrder` affects only the frontend. Background modules persist identically but never appear in the Web UI.
+`feature_modules` is required and always includes `card-context-library`. Module v6 distinguishes `data`, `resource`, and `hybrid` packages. Resource-only modules own static authored files and workflows without inventing session collections; data and hybrid modules use data-contract v1. Every source-required output outside the main narrative remains a frontend data-module record type produced by an ordinary workflow node. Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one.
 
 `context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved message history and upstream workflow output. Module data enters only through the processor's declared `dataQueries` or the active node's authorized data tools. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 2 contract.
 
-## Fixed files
+## Fixed foundation
 
-### `core/story.md`
+### `core/foundation.md`
 
-Contain only the stable premise, themes, player position, long-running conflict, and viewpoint needed to understand the intended story. Use original passages where they already express these points. Generated connective text must be minimal and mapped as `bridge`.
+Contain only a compact, source-supported overview of the world and premise plus the story's long-term tone, principles, and direction when the source provides them. Add only the minimum identity or relationship anchors needed to understand the card. It is reused in many prompt assemblies, so stage-specific writing, formatting, scene, and style instructions do not belong here even when every creative turn eventually needs them.
 
-### `core/world.md`
+Do not invent a broad overview when the source does not provide one. Preserve source wording where possible and map every generated bridge or summary anchor in provenance.
 
-Contain foundational facts required for most ordinary turns. Detailed systems and named entities remain in on-demand modules. Include short anchors such as “灵木界以灵石作为修士社会的主要货币” only when necessary to make the world intelligible.
+## Card context library
 
-### `core/active-cast.md`
+Copy `assets/card-context-library/` into `features/card-context-library/`, then fill its `catalog.json` and `documents/`. Every document is one indivisible delivery unit: the export workflow may deliver the whole file but never a subsection. Preserve original passages through splitting, sorting, and regrouping before deciding these boundaries.
 
-List primary characters and short authored or faithfully derived identity anchors. Full primary-character text lives in `characters/primary/` and is also listed in the manifest.
+The standard categories are:
 
-### `rules/core.md`
+- `world`: static world facts, systems, history, places, factions, objects, and concepts;
+- `character`: complete character, relationship, knowledge, secret, speech, and behavior material;
+- `narrative-guidance`: plot, pacing, theme, conflict, scene, and long-term development guidance;
+- `rule`: binding or conditional author rules and prohibitions;
+- `style`: narrative voice, viewpoint, language, description methods, and style examples;
+- `format`: response structure, paragraphing, markup, length, and special formatting;
+- `reference`: exploratory examples, glossaries, inspiration, and completeness aids.
 
-Contain only card-specific rules that apply to nearly every response. Do not duplicate the universal runtime protocol.
+Each catalog entry declares path, title, summary, categories, optional subcategory, `readPolicy`, `authority`, `appliesAt`, priority, optional selection group, `readWhen`, perspective, aliases, related IDs, and sources. `readPolicy` is `required`, `conditional`, `choice`, or `optional`; authority is independently `binding`, `canonical`, `advisory`, or `exploratory`.
 
-### `core/knowledge-map.md`
+Choice documents reference a catalog-level selection group. A group declares `one`, `at-most-one`, `one-or-more`, or `any`, an explicit selection instruction, and an optional fallback member. This lets an Agent choose among multiple authored styles or guides without treating every delivered candidate as simultaneously active.
 
-Route the Agent to domain documents, important entity dossiers, category indexes, and conditional scene rules. Feature-module routing is supplied by the runtime and each module skill; do not duplicate module prompts here.
+`card-context-library/export-context` deterministically exports all documents matching the caller's categories as one `document-set`. The set contains `DOCUMENTS.md` plus each independent document. The caller normally uses a fixed `call` node or code call; dynamic Agent calls are an extension point. More selective cards may customize or replace this workflow.
 
-## On-demand module frontmatter
+## Optional document frontmatter
 
 Use a consistent Markdown frontmatter schema:
 
@@ -183,11 +166,9 @@ sources:
 ---
 ```
 
-The body after frontmatter is authoritative authored detail. Preserve original passages under helpful headings. Frontmatter summaries and `read_when` lines are generated routing aids, not new canon.
+The body after frontmatter is authoritative authored detail. Catalog metadata is the machine-readable routing authority; frontmatter may mirror useful fields for human maintenance but must not contradict the catalog.
 
-Category indexes use the same principle and list one faithful anchor plus the target path for each contained entity.
-
-## Primary-character files
+## Character documents
 
 Use only sections supported by source material. Typical headings include identity and appearance, stable personality, desires and fears, abilities and limits, initial relationship, other relationships, speech and behavior, known information, mistaken beliefs, and secrets.
 
@@ -204,13 +185,13 @@ title: 山门初遇
 participants:
   - "{{char}}"
 location: 玄天宗山门
-recommended_context:
-  - world/entities/factions/xuantian.md
-  - world/entities/locations/xuantian-gate.md
+recommended_resources:
+  - world-faction-xuantian
+  - world-location-xuantian-gate
 ---
 ```
 
-Metadata may be generated only from facts explicit in the opening. Preserve the visible greeting verbatim except for necessary macro or formatting normalization.
+Opening Markdown may contain human-facing resource hints using catalog document IDs, but the manifest no longer has a runtime `recommended_context` field. The resource snapshot and its index are prepared by workflow calls. Preserve the visible greeting verbatim except for necessary macro or formatting normalization.
 
 ## Provenance
 
@@ -227,7 +208,7 @@ Metadata may be generated only from facts explicit in the opening. Preserve the 
       "status": "mapped",
       "targets": [
         {
-          "file": "world/domains/economy.md",
+          "file": "features/card-context-library/documents/world/economy.md",
           "section": "基础货币",
           "transform": "verbatim"
         },

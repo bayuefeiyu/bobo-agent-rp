@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 3,
+  "id": "director-post-with-narratives",
+  "title": "后置导演与非正文叙事统筹",
+  "description": "正文后阻塞下一轮：导演复盘并决定委托，近场与广域并行创作，统一审核后并行发布和来源捕获。",
+  "kind": "turn-background",
+  "revision": "1",
+  "defaults": { "agentId": "world-narrative-daily-director", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": {
+    "type": "after-workflow",
+    "workflowId": "DIRECTOR_ENABLED_FOREGROUND_ID",
+    "blockNextTurnUntilReady": true,
+    "documents": { "turn-context": { "fromNode": "write-narrative", "output": "post-turn-context" } }
+  },
+  "nodes": [
+    {
+      "id": "post-director", "type": "call", "target": "world-narrative-coordinator/post-director-update",
+      "arguments": { "phase": "turn" }, "documents": { "context": "trigger/turn-context" }, "outputPaths": { "delegations": "delegations" },
+      "outputs": { "delegations": { "path": "delegations", "format": "director-delegation-plan", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "delegations" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "triggerInputs": ["turn-context"] }
+    },
+    {
+      "id": "dispatch-local", "type": "code", "dependsOn": ["post-director"],
+      "outputs": { "candidate-set": { "path": "candidate-set", "format": "candidate-dispatch-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "candidate-set" }] }, "moduleAccess": [],
+      "workflowCalls": ["world-narrative-coordinator/materialize-guidance", "local-scene-narrative/create-story-candidate"], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "local" }
+    },
+    {
+      "id": "dispatch-world", "type": "code", "dependsOn": ["post-director"],
+      "outputs": { "candidate-set": { "path": "candidate-set", "format": "candidate-dispatch-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "candidate-set" }] }, "moduleAccess": [],
+      "workflowCalls": ["world-narrative-coordinator/materialize-guidance", "world-scope-narrative/create-story-candidate"], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "world" }
+    },
+    {
+      "id": "review-candidates", "type": "code", "dependsOn": ["dispatch-local", "dispatch-world"],
+      "outputs": {
+        "reviewed-local": { "path": "reviewed/local", "format": "reviewed-story-package", "kind": "directory", "scope": "workflow", "retain": "run" },
+        "reviewed-world": { "path": "reviewed/world", "format": "reviewed-story-package", "kind": "directory", "scope": "workflow", "retain": "run" }
+      },
+      "workspaceHandoff": { "include": [{ "output": "reviewed-local", "as": "reviewed-local" }, { "output": "reviewed-world", "as": "reviewed-world" }] }, "moduleAccess": [],
+      "workflowCalls": ["world-narrative-coordinator/review-story-candidates"], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-story-review.mjs" }
+    },
+    {
+      "id": "publish-local", "type": "code", "dependsOn": ["review-candidates"], "outputs": {}, "moduleAccess": [],
+      "workflowCalls": ["local-scene-narrative/publish-reviewed-story", "narrative-memory/narrative-memory-source-capture"], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/publish-reviewed-story.mjs", "storyKind": "local", "handoffInputs": [{ "nodeId": "review-candidates", "output": "reviewed-local" }] }
+    },
+    {
+      "id": "publish-world", "type": "code", "dependsOn": ["review-candidates"], "outputs": {}, "moduleAccess": [],
+      "workflowCalls": ["world-scope-narrative/publish-reviewed-story", "narrative-memory/narrative-memory-source-capture"], "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/publish-reviewed-story.mjs", "storyKind": "world", "handoffInputs": [{ "nodeId": "review-candidates", "output": "reviewed-world" }] }
+    },
+    { "id": "complete", "type": "join", "dependsOn": ["publish-local", "publish-world"], "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

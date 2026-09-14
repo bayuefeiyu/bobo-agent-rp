@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-range-repair",
+  "title": "叙事记忆范围修复入口",
+  "description": "顶层手动入口；同步调用叙事记忆内部范围修复工作流。",
+  "kind": "turn-background",
+  "revision": "2",
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual", "blockNextTurnUntilReady": true },
+  "nodes": [{
+    "id": "repair",
+    "type": "call",
+    "target": "narrative-memory/narrative-memory-range-repair",
+    "arguments": {},
+    "documents": {},
+    "outputPaths": {},
+    "outputs": {},
+    "moduleAccess": [],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "argumentSources": { "request": "$" } }
+  }]
+}

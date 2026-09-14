@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "world-scope-narrative",
+  "collections": {
+    "story-publications": {
+      "storage": { "kind": "record-log", "partition": { "mode": "index", "index": "seriesId", "fallback": "independent" }, "initialRecordsFile": "collections/story-publications/initial/records.json" },
+      "recordTypes": {
+        "world-narrative.story": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/story.schema.json",
+          "indexes": {
+            "seriesId": { "path": "/data/seriesId", "type": "id", "operators": ["eq", "in"] },
+            "storySequence": { "path": "/data/sequence", "type": "number", "operators": ["eq", "gte", "lte"] },
+            "sourceTurn": { "path": "/data/sourceTurn", "type": "number", "operators": ["eq", "gte", "lte"] },
+            "characters": { "path": "/data/characters", "type": "string-list", "operators": ["contains"] },
+            "locations": { "path": "/data/locations", "type": "string-list", "operators": ["contains"] },
+            "candidateId": { "path": "/data/candidateId", "type": "id", "operators": ["eq"] }
+          },
+          "searchableFields": ["/data/summary", "/data/content", "/data/characters", "/data/locations"],
+          "views": {
+            "rp": { "format": "object", "fields": [{ "path": "/data/seriesId", "label": "seriesId" }, { "path": "/data/sequence", "label": "sequence" }, { "path": "/data/summary", "label": "summary" }, { "path": "/data/content", "label": "content" }] },
+            "creative-index": { "format": "object", "fields": [{ "path": "/data/seriesId", "label": "seriesId" }, { "path": "/data/sequence", "label": "sequence" }, { "path": "/data/sourceTurn", "label": "sourceTurn" }, { "path": "/data/timeRange", "label": "timeRange" }, { "path": "/data/locations", "label": "locations" }, { "path": "/data/characters", "label": "characters" }, { "path": "/data/importantEntities", "label": "importantEntities" }, { "path": "/data/summary", "label": "summary" }] },
+            "creative-full": { "format": "object", "fields": [{ "path": "/data/seriesId", "label": "seriesId" }, { "path": "/data/sequence", "label": "sequence" }, { "path": "/data/timeRange", "label": "timeRange" }, { "path": "/data/locations", "label": "locations" }, { "path": "/data/characters", "label": "characters" }, { "path": "/data/importantEntities", "label": "importantEntities" }, { "path": "/data/content", "label": "content" }] },
+            "frontend-index": { "format": "object", "fields": [{ "path": "/data/seriesId", "label": "seriesId" }, { "path": "/data/sequence", "label": "sequence" }, { "path": "/data/sourceTurn", "label": "sourceTurn" }, { "path": "/data/timeRange", "label": "timeRange" }, { "path": "/data/locations", "label": "locations" }, { "path": "/data/characters", "label": "characters" }, { "path": "/data/importantEntities", "label": "importantEntities" }, { "path": "/data/summary", "label": "summary" }] },
+            "frontend-full": { "format": "object", "fields": [{ "path": "/data/timeRange", "label": "timeRange" }, { "path": "/data/locations", "label": "locations" }, { "path": "/data/content", "label": "content" }] },
+            "archive-source": { "format": "object", "fields": [{ "path": "/data/sourceTurn", "label": "sourceTurn" }, { "path": "/data/timeRange", "label": "timeRange" }, { "path": "/data/locations", "label": "locations" }, { "path": "/data/characters", "label": "characters" }, { "path": "/data/importantEntities", "label": "importantEntities" }, { "path": "/data/content", "label": "content" }] },
+            "publish": { "format": "object", "fields": [{ "path": "/data/candidateId", "label": "candidateId" }, { "path": "/data/seriesId", "label": "seriesId" }, { "path": "/data/sequence", "label": "sequence" }] }
+          },
+          "actions": ["create"]
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "world-story.creative.read": { "collections": ["story-publications"], "actions": ["query"], "views": ["creative-index", "creative-full"] },
+    "world-story.publish": { "collections": ["story-publications"], "actions": ["query", "create"], "views": ["publish"] },
+    "world-story.frontend.read": { "collections": ["story-publications"], "actions": ["query"], "views": ["frontend-index", "frontend-full"] },
+    "world-story.archive.read": { "collections": ["story-publications"], "actions": ["query"], "views": ["archive-source"] }
+  }
+}

@@ -177,11 +177,14 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async getAgent(agentId) {
       assertId(agentId, "agentId");
-      const basePath = resolve(paths.agents, agentId, "agent.json");
+      const cardBasePath = resolve(paths.cardAgents, agentId, "agent.json");
+      const globalBasePath = resolve(paths.agents, agentId, "agent.json");
+      const cardBase = await readJson(cardBasePath, null);
+      const basePath = cardBase ? cardBasePath : globalBasePath;
       const overridePath = resolve(paths.cardAgents, agentId, "override.json");
       const base = await readJson(basePath);
       const override = await readJson(overridePath, null);
-      return { effective: normalizeAgentProfile(mergeDefined(base, override)), base: normalizeAgentProfile(base), override, overridden: Boolean(override) };
+      return { effective: normalizeAgentProfile(mergeDefined(base, override)), base: normalizeAgentProfile(base), override, overridden: Boolean(override), source: cardBase ? "card" : "global" };
     },
     async saveAgent(value, { scope = "card" } = {}) {
       const profile = normalizeAgentProfile(value);
@@ -190,7 +193,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
         await rm(resolve(paths.cardAgents, profile.id, "override.json"), { force: true });
         return this.getAgent(profile.id);
       }
-      const base = await readJson(resolve(paths.agents, profile.id, "agent.json"));
+      const base = await readJson(resolve(paths.cardAgents, profile.id, "agent.json"), null) || await readJson(resolve(paths.agents, profile.id, "agent.json"));
       const override = {};
       for (const key of Object.keys(profile)) {
         if (JSON.stringify(profile[key]) !== JSON.stringify(normalizeAgentProfile(base)[key])) override[key] = profile[key];
@@ -226,7 +229,9 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
       const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
       const raw = await readJson(cardPath, null) || await readJson(globalPath);
-      return normalizeWorkflowDefinition(raw);
+      const workflow = normalizeWorkflowDefinition(raw);
+      if (workflow.kind.startsWith("module-")) throw new Error("Module workflows must be registered through module.json.workflowFiles, not the top-level workflow store.");
+      return workflow;
     },
     async copyWorkflowToCard(workflowId) {
       const workflow = await this.getWorkflow(workflowId);
@@ -235,6 +240,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async saveCardWorkflow(value) {
       const workflow = normalizeWorkflowDefinition(value);
+      if (workflow.kind.startsWith("module-")) throw new Error("Module workflows cannot be saved as top-level card workflows.");
       await atomicJson(resolve(paths.cardWorkflows, workflow.id, "workflow.json"), workflow);
       return workflow;
     },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { appendWorkflowRunRecord, clearPublicTurnWorkspace, ensureWorkflowWorkspace, pruneWorkflowState, workflowProcessRecordPath, workflowWorkspacePaths, writeWorkflowProcessRecord } from "./rp-workspace.mjs";
@@ -29,11 +29,15 @@ test("prunes workflow runs and their registered files bound to a deleted suffix"
       workflowId: "memory", runId: "run-5", nodeId: "summarize", nodeType: "agent", agentId: "worker", modelId: "pi:current",
       exchange: { received: { role: "user", content: "input with ``` fence" }, sent: { role: "assistant", content: "output" } },
     });
+    const randomRecord = join(root, "workflow", "random", "run-5", "summarize", "check.json");
+    await mkdir(dirname(randomRecord), { recursive: true });
+    await writeFile(randomRecord, "{}\n", "utf8");
     const result = await pruneWorkflowState(root, 4);
     assert.deepEqual(result.removedRunIds, ["run-5"]);
     assert.match(await readFile(first.workflowRuns, "utf8"), /run-3/);
     assert.doesNotMatch(await readFile(first.workflowRuns, "utf8"), /run-5/);
     await assert.rejects(readFile(workflowProcessRecordPath(first.workflowProcessRecords, "run-5", "summarize"), "utf8"), error => error.code === "ENOENT");
+    await assert.rejects(readFile(randomRecord, "utf8"), error => error.code === "ENOENT");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

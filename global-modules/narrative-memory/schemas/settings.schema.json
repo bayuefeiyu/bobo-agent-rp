@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "required": ["archive", "retrieval", "compression", "maintenance"],
+  "properties": {
+    "archive": {
+      "type": "object",
+      "required": ["enabled", "archiveEveryTurns", "protectRecentTurns", "referenceEarlierTurns"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "archiveEveryTurns": { "type": "integer", "minimum": 1 },
+        "protectRecentTurns": { "type": "integer", "minimum": 0 },
+        "referenceEarlierTurns": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "retrieval": {
+      "type": "object",
+      "required": ["entityQueryLimit", "initialInspectLimit", "supplementalInspectLimit", "informationLimit", "elasticInformationLimit", "possiblePerQueryLimit", "customBudgetInterfaceEnabled"],
+      "properties": {
+        "entityQueryLimit": { "type": "integer", "minimum": 1 },
+        "initialInspectLimit": { "type": "integer", "minimum": 1 },
+        "supplementalInspectLimit": { "type": "integer", "minimum": 0 },
+        "informationLimit": { "type": "integer", "minimum": 1 },
+        "elasticInformationLimit": { "type": "integer", "minimum": 0 },
+        "possiblePerQueryLimit": { "type": "integer", "minimum": 0 },
+        "customBudgetInterfaceEnabled": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "compression": {
+      "type": "object",
+      "required": ["enabled", "initialTriggerEntryCount", "initialTargetEntryCount", "growthPerSuccessfulCycle", "allowManualTrigger"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "initialTriggerEntryCount": { "type": "integer", "minimum": 2 },
+        "initialTargetEntryCount": { "type": "integer", "minimum": 1 },
+        "growthPerSuccessfulCycle": { "type": "integer", "minimum": 0 },
+        "allowManualTrigger": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "maintenance": {
+      "type": "object",
+      "required": ["deterministicAfterCommit", "injectOverLimitRepairsIntoArchive", "automaticSemanticAudit", "manualWorkflowEnabled"],
+      "properties": {
+        "deterministicAfterCommit": { "type": "boolean" },
+        "injectOverLimitRepairsIntoArchive": { "type": "boolean" },
+        "automaticSemanticAudit": { "type": "boolean" },
+        "manualWorkflowEnabled": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

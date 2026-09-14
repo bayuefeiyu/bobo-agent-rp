@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["startTurn", "endTurn", "operation", "workflowRunId", "batchId", "coveredMessageIds", "completedAt"],
+  "properties": {
+    "startTurn": { "type": "integer", "minimum": 1 },
+    "endTurn": { "type": "integer", "minimum": 1 },
+    "operation": { "enum": ["automatic", "repair", "supplement"] },
+    "workflowRunId": { "type": "string", "minLength": 1 },
+    "batchId": { "type": "string", "minLength": 1 },
+    "coveredMessageIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "completedAt": { "type": "string", "minLength": 1 },
+    "userInstruction": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

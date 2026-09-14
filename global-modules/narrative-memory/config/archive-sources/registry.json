@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "world-narrative-coordinator-outbox",
+      "sourceModuleId": "world-narrative-coordinator",
+      "collectionId": "archive-outbox",
+      "recordType": "director.archive-handoff",
+      "view": "archive-source",
+      "statusFilter": { "status": { "eq": "ready" } },
+      "historyMode": "per-turn",
+      "format": "json",
+      "guidanceFile": "config/archive-sources/world-narrative-coordinator.md",
+      "title": "【世界叙事统筹模块已确认归档交接】"
+    },
+    {
+      "id": "local-scene-narrative-story",
+      "sourceModuleId": "local-scene-narrative",
+      "collectionId": "story-publications",
+      "recordType": "local-narrative.story",
+      "view": "archive-source",
+      "statusFilter": {},
+      "historyMode": "per-turn",
+      "format": "json",
+      "guidanceFile": "config/archive-sources/local-scene-narrative.md",
+      "title": "【近场叙事已发布故事】"
+    },
+    {
+      "id": "world-scope-narrative-story",
+      "sourceModuleId": "world-scope-narrative",
+      "collectionId": "story-publications",
+      "recordType": "world-narrative.story",
+      "view": "archive-source",
+      "statusFilter": {},
+      "historyMode": "per-turn",
+      "format": "json",
+      "guidanceFile": "config/archive-sources/world-scope-narrative.md",
+      "title": "【广域叙事已发布故事】"
+    }
+  ]
+}

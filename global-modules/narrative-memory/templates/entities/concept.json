@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.concept",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "concept",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、概念类型、适用范围和知名度。", "recommendedFields": ["名称", "其他称谓", "概念类型", "适用范围", "知名度"] },
+    { "key": "定义与规则", "description": "概念的稳定定义、规则和边界。", "recommendedFields": ["定义", "规则", "边界"] },
+    { "key": "表现与影响", "description": "在世界中的表现和持续影响。", "recommendedFields": [] },
+    { "key": "相关实体", "description": "与其紧密关联的实体。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "概念解释或作用发生的重要变化。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前有效状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的概念事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "conceptType", "path": "/sections/基本信息/概念类型", "valueType": "string" }
+  ]
+}

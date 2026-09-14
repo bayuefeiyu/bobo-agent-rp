@@ -1,0 +1,4 @@
+{
+  "type": "object", "required": ["status", "currentRunId", "lastTriggerTurn", "lastTriggerWorldTime", "lastCompletedTurn", "lastCompletedWorldTime", "currentReportRevision", "triggerReasons", "failure"],
+  "properties": { "status": { "enum": ["idle", "running", "failed"] }, "currentRunId": { "type": ["string", "null"] }, "lastTriggerTurn": { "type": ["integer", "null"], "minimum": 0 }, "lastTriggerWorldTime": { "type": ["string", "null"] }, "lastCompletedTurn": { "type": ["integer", "null"], "minimum": 0 }, "lastCompletedWorldTime": { "type": ["string", "null"] }, "currentReportRevision": { "type": "integer", "minimum": 1 }, "triggerReasons": { "type": "array", "items": { "type": "string" } }, "failure": { "type": ["string", "null"] } }, "additionalProperties": false
+}

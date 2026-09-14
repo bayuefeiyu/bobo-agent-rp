@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "templateId": "event.default",
+  "templateVersion": 1,
+  "recordType": "memory.event",
+  "summaryLimit": 45,
+  "sections": [
+    { "key": "事件概况", "description": "事件性质、参与者、时间、地点和状态。", "recommendedFields": [] },
+    { "key": "起因与背景", "description": "理解事件所需的直接起因和背景。", "recommendedFields": [] },
+    { "key": "事件经过", "description": "按有意义的行动段落记录经过，不按创作轮数机械拆分。", "recommendedFields": [] },
+    { "key": "结果与变化", "description": "明确发生的结果和变化。", "recommendedFields": [] },
+    { "key": "持续影响", "description": "事件结束后仍持续的影响。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "事件留下的未决事项。", "recommendedFields": [] }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 2,
+  "regions": [{
+    "id": "stories", "type": "story-browser", "title": "一隅众生", "description": "主线镜头之外，近处众人的故事。", "collectionId": "story-publications", "recordTypes": ["local-narrative.story"], "indexView": "frontend-index", "fullView": "frontend-full", "readCapability": "local-story.frontend.read", "pageSize": 10, "indexMaxCharacters": 50000, "fullMaxCharacters": 300000, "allowSeriesGrouping": true, "allowOpenAuthoritySource": true, "empty": "这一隅暂时没有新故事。"
+  }]
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 6,
+  "id": "local-scene-narrative",
+  "moduleKind": "hybrid",
+  "basedOn": null,
+  "title": "近场叙事模块",
+  "description": "创作主线当前地点及周边、暂时位于玩家角色视野之外的完整故事。",
+  "surface": "frontend",
+  "contextOrder": 520,
+  "displayOrder": 520,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": "catalog.json",
+  "frontendViewFile": "frontend-view.json",
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/prepare-story-context/workflow.json",
+    "workflows/create-story-candidate/workflow.json",
+    "workflows/publish-reviewed-story/workflow.json",
+    "workflows/export-recent-stories/workflow.json"
+  ]
+}

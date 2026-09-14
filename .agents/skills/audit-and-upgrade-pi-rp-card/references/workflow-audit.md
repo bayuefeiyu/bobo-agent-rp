@@ -7,9 +7,9 @@ Read this reference only for the workflow stage. Use the current converter [work
 - Validate schema, unique IDs, supported node types, acyclic dependencies, reachability, gate routes, join requirements, and required-node completion.
 - Check that every node receives the data its task prompt assumes. Verify `fixed`, `previous-output`, `inherit`, and `custom` context choices against actual producers and consumers.
 - Check upstream-output shape against downstream expectations, including named parallel sources rather than array-position assumptions.
-- Detect parallel writes to the same module collection, conflicting record revisions, undeclared workspace output, or transcript target.
+- Detect parallel writes to the same module collection, conflicting record revisions, undeclared workspace output, whole-workspace transfer, or transcript target. Every intended file/directory transfer must be an exact `workspaceHandoff.include` entry; flag wildcards, exclusion-based designs, missing paths, overlapping destinations, and implicit module-output bubbling.
 - Preserve exactly one foreground narrative. Verify every module read/write node, node-end commit, and turn-finalization dependency.
-- Evaluate retries, model-choice waits, cooldowns, conditions, `blockNextTurn`, instance keys, and silent fallback for deadlock, repetition, starvation, or hidden behavior.
+- Evaluate retries, model-choice waits, cooldowns, conditions, trigger-level `blockNextTurnUntilReady`, instance keys, nested module calls, and silent fallback for deadlock, repetition, starvation, or hidden behavior.
 
 ## Across workflows
 

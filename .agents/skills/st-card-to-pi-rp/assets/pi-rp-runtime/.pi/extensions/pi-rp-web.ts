@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -25,16 +25,27 @@ import {
 import { removeSavedUserProfile } from "../lib/rp-user-profiles.mjs";
 import { createRpConfigStore } from "../lib/rp-config-store.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
-import { composeNodePrompt, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
-import { workflowTriggerMatches } from "../lib/rp-workflows.mjs";
+import { composeNodePrompt, composeWorkflowNodeDynamicContext, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
+import { assertDocumentWorkspaceAgentTools, canonicalWorkflowRef, normalizeWorkflowDefinition, resolveCodeNodeRoute, resolveNodeQueryBudget, workflowTriggerMatches } from "../lib/rp-workflows.mjs";
+import { normalizeFeatureModuleManifest } from "../lib/rp-feature-modules.mjs";
+import { normalizeResourceCatalog } from "../lib/rp-resource-catalog.mjs";
+import { copyDocumentSet, copyWorkspaceEntry, writeCollisionSafeFile } from "../lib/rp-document-sets.mjs";
 import { tokenUsageFromMessages } from "../lib/rp-token-usage.mjs";
 import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, workflowProcessRecordPath, workflowWorkspacePaths, writeWorkflowProcessRecord } from "../lib/rp-workspace.mjs";
 import { capabilityAllows, normalizeDataContract } from "../lib/rp-data-contracts.mjs";
 import { RpDataStore } from "../lib/rp-data-store.mjs";
-import { getDataRecord, queryData } from "../lib/rp-data-query.mjs";
-import { createDataBatchDraft, executeDataBatch, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
-import { finalizeNodeData } from "../lib/rp-data-node-runtime.mjs";
-import { cleanupArtifacts, readVisibleArtifacts, workflowNodeWorkspace } from "../lib/rp-data-artifacts.mjs";
+import { getDataRecord, getDataRecordHistory, queryAllData, queryData, queryDataStable } from "../lib/rp-data-query.mjs";
+import { createDataBatchDraft, executeDataBatch, executeDataBatchOrThrow, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
+import { inspectDataImpact, inspectDataIntegrity } from "../lib/rp-data-transactions.mjs";
+import { dataValueAt } from "../lib/rp-data-index.mjs";
+import { finalizeNodeData, resolveCodeSubmissionBinding, resolveCodeSubmissionSourceReferences } from "../lib/rp-data-node-runtime.mjs";
+import { cleanupArtifacts, workflowNodeWorkspace } from "../lib/rp-data-artifacts.mjs";
+import { createComfyUiService } from "../lib/rp-comfyui.mjs";
+import { createRpRandomService } from "../lib/rp-random.mjs";
+import { artifactSourceReference, messageSourceReference, narrativeSourceLabel, normalizeNarrativeSource } from "../lib/rp-narrative-source.mjs";
+import { applyFrontendSettingsValues, frontendRegion, normalizeModuleFrontendView, validateFrontendWorkflowPayload } from "../lib/rp-module-frontend.mjs";
+import { stageWorkflowCallInputs, stageWorkspaceHandoffs } from "../lib/rp-workspace-handoff.mjs";
+import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "../lib/rp-workspace-snapshot.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -44,7 +55,10 @@ type WebMessage = {
   content: string;
   createdAt: string;
   editedAt?: string;
+  narrativeSource?: Record<string, unknown>;
 };
+
+const comfyImageExecutions = new Map<string, Promise<unknown>>();
 
 type RecordEnvelope = {
   schemaVersion: 1;
@@ -78,7 +92,6 @@ type ActiveBridge = {
   playerName: string;
   playerDescription: string;
   stableCardContext: string;
-  primaryCharacterContext: string;
   featureModules: FeatureModule[];
   commonSettings: CommonSettings;
   cardSettings: CardSettings;
@@ -90,6 +103,7 @@ type ActiveBridge = {
   pending: boolean;
   turn: number;
   configStore: any;
+  comfyUi: any;
   workflowEngine: RpWorkflowEngine;
   activeWorkflowId: string;
   close: () => Promise<void>;
@@ -119,23 +133,33 @@ type RpRun = {
   workflowNodePrompt?: string | null;
   baseModel?: any;
   phaseStartedAt?: number;
+  agentSettled?: boolean;
+  workflowCompleted?: boolean;
 };
 
 type FeatureModule = {
   id: string;
+  moduleKind: "data" | "resource" | "hybrid";
   title: string;
   description: string;
   surface: "frontend" | "background";
   contextOrder: number;
   displayOrder: number;
   basedOn: string | null;
-  contract: any;
-  view: { schemaVersion: 1; regions: unknown[] };
-  viewPath: string;
+  contract: any | null;
+  resourceCatalog: any | null;
+  resourceCatalogPath: string | null;
+  view: { schemaVersion: number; regions: any[] };
+  viewPath: string | null;
   moduleDirectory: string;
   skillPath: string;
   skillDescription: string;
+  workflows: any[];
 };
+
+function dataModuleBindings(modules: FeatureModule[]) {
+  return modules.filter(module => module.contract).map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory }));
+}
 
 type ContextProcessor = {
   id: string;
@@ -286,8 +310,6 @@ async function fixedRpContext(active: ActiveBridge) {
     active.stableCardContext,
     playerProfileContext(active.playerName, active.playerDescription),
   ];
-  const primaryCharacters = active.primaryCharacterContext.trim();
-  if (primaryCharacters) sections.push("# Primary card character profiles", primaryCharacters);
   return sections.filter(Boolean).join("\n\n");
 }
 
@@ -300,7 +322,9 @@ function featureModuleFixedContext(active: ActiveBridge) {
         `## ${module.title} (${module.id})`,
         module.skillDescription,
         `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
-        `Collections: ${Object.keys(module.contract.collections).join(", ")}. Use rp_data_query/rp_data_get only within the current workflow node's granted capabilities.`,
+        module.contract
+          ? `Collections: ${Object.keys(module.contract.collections).join(", ")}. Use rp_data_query/rp_data_get only within the current workflow node's granted capabilities.`
+          : `Static resource catalog: ${module.resourceCatalogPath ? relative(active.context.cwd, module.resourceCatalogPath).replaceAll("\\", "/") : "none"}. Access it only through the module's workflows.`,
       ].filter(Boolean).join("\n");
     }),
   ].join("\n\n");
@@ -322,20 +346,21 @@ function authoritativeTranscript(active: ActiveBridge, messages: RecordEnvelope[
     const message = recordToWebMessage(record);
     const speaker = message.role === "user" ? active.playerName : active.cardName;
     const kind = message.kind === "opening" ? "authored opening" : `turn ${message.turn}`;
-    return `[${record.id} | ${speaker} | ${kind}]\n${message.content}`;
+    return `[${record.id} | ${speaker} | ${kind} | ${narrativeSourceLabel(record.metadata?.narrativeSource)}]\n${message.content}`;
   }).join("\n\n");
 }
 
-async function readCardContextFiles(cardDirectory: string, paths: unknown, label: string) {
-  if (!Array.isArray(paths)) return "";
-  const sections = [];
-  for (const value of paths) {
-    if (typeof value !== "string") throw new Error(`${label} contains a non-string path.`);
-    const path = resolveCardChild(cardDirectory, value);
-    if (!path) throw new Error(`${label} path escapes the card directory: ${value}`);
-    sections.push(`## ${value}\n${(await readFile(path, "utf8")).trim()}`);
-  }
-  return sections.join("\n\n");
+function recentCompletedTurnContext(active: ActiveBridge, beforeTurn: number, limit = 5) {
+  const eligible = active.messages.filter(message => message.binding.turn < beforeTurn);
+  const completedTurns = [...new Set(eligible.filter(message => message.data.role === "assistant").map(message => message.binding.turn))].slice(-limit);
+  return authoritativeTranscript(active, eligible.filter(message => completedTurns.includes(message.binding.turn)));
+}
+
+async function readCardContextFile(cardDirectory: string, value: unknown, label: string) {
+  if (typeof value !== "string") throw new Error(`${label} must be one relative file path.`);
+  const path = resolveCardChild(cardDirectory, value);
+  if (!path) throw new Error(`${label} path escapes the card directory: ${value}`);
+  return `## ${value}\n${(await readFile(path, "utf8")).trim()}`;
 }
 
 function resolveFeatureModuleChild(moduleDirectory: string, path: unknown, label: string) {
@@ -347,6 +372,7 @@ function resolveFeatureModuleChild(moduleDirectory: string, path: unknown, label
   }
   return target;
 }
+
 
 function runtimeRetrievalPolicy(value: any, expectedSource: string, sourceKind: string): RetrievalPolicy {
   const fields = ["schemaVersion", "source", "code", "agent"];
@@ -373,50 +399,36 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     if (typeof value !== "string") throw new Error("feature_modules contains a non-string path.");
     const modulePath = resolveCardChild(cardDirectory, value);
     if (!modulePath) throw new Error(`Feature-module path escapes the card directory: ${value}`);
-    const record = JSON.parse(await readFile(modulePath, "utf8"));
-    const moduleFields = ["schemaVersion", "id", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "frontendViewFile", "skillFile"];
-    if (record === null || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error(`Feature module ${value} must be a JSON object.`);
-    }
-    const recordFields = Object.keys(record).sort();
-    if (moduleFields.length !== recordFields.length || moduleFields.some(field => !recordFields.includes(field))) {
-      throw new Error(`Feature module ${value} must use the exact schemaVersion 4 field set.`);
-    }
-    if (record.schemaVersion !== 4 || typeof record.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(record.id)) {
-      throw new Error(`Invalid feature-module definition: ${value}`);
-    }
+    const record = normalizeFeatureModuleManifest(JSON.parse(await readFile(modulePath, "utf8")), `Feature module ${value}`);
     if (ids.has(record.id)) throw new Error(`Duplicate feature-module id: ${record.id}`);
     ids.add(record.id);
     const moduleDirectory = resolve(modulePath, "..");
-    if (typeof record.title !== "string" || !record.title.trim()) {
-      throw new Error(`Feature module ${record.id} must declare a non-empty title.`);
-    }
-    if (typeof record.description !== "string") {
-      throw new Error(`Feature module ${record.id} must declare a description string.`);
-    }
-    if (record.surface !== "frontend" && record.surface !== "background") {
-      throw new Error(`Feature module ${record.id} surface must be frontend or background.`);
-    }
-    if (!Number.isSafeInteger(record.contextOrder) || !Number.isSafeInteger(record.displayOrder)) {
-      throw new Error(`Feature module ${record.id} must declare integer contextOrder and displayOrder values.`);
-    }
-    if (record.basedOn !== null && (typeof record.basedOn !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(record.basedOn))) {
-      throw new Error(`Feature module ${record.id}.basedOn must be null or a safe module ID.`);
-    }
-    const viewPath = resolveFeatureModuleChild(moduleDirectory, record.frontendViewFile, `${record.id}.frontendViewFile`);
-    const contractPath = resolveFeatureModuleChild(moduleDirectory, record.dataContractFile, `${record.id}.dataContractFile`);
+    const viewPath = record.frontendViewFile ? resolveFeatureModuleChild(moduleDirectory, record.frontendViewFile, `${record.id}.frontendViewFile`) : null;
+    const contractPath = record.dataContractFile ? resolveFeatureModuleChild(moduleDirectory, record.dataContractFile, `${record.id}.dataContractFile`) : null;
+    const resourceCatalogPath = record.resourceCatalogFile ? resolveFeatureModuleChild(moduleDirectory, record.resourceCatalogFile, `${record.id}.resourceCatalogFile`) : null;
     const skillPath = resolveFeatureModuleChild(moduleDirectory, record.skillFile, `${record.id}.skillFile`);
-    const [view, rawContract, skillText] = await Promise.all([
-      readFile(viewPath, "utf8").then(JSON.parse),
-      readFile(contractPath, "utf8").then(JSON.parse),
+    const workflowPaths = record.workflowFiles.map(path => resolveFeatureModuleChild(moduleDirectory, path, `${record.id}.workflowFiles`));
+    const [view, rawContract, rawResourceCatalog, skillText, rawWorkflows] = await Promise.all([
+      viewPath ? readFile(viewPath, "utf8").then(JSON.parse) : null,
+      contractPath ? readFile(contractPath, "utf8").then(JSON.parse) : null,
+      resourceCatalogPath ? readFile(resourceCatalogPath, "utf8").then(JSON.parse) : null,
       readFile(skillPath, "utf8"),
+      Promise.all(workflowPaths.map(path => readFile(path, "utf8").then(JSON.parse))),
     ]);
-    if (view?.schemaVersion !== 1 || !Array.isArray(view.regions)) {
-      throw new Error(`Feature module ${record.id} has an invalid view specification.`);
+    const contract = rawContract ? normalizeDataContract(rawContract, record.id) : null;
+    const resourceCatalog = rawResourceCatalog ? normalizeResourceCatalog(rawResourceCatalog, record.id) : null;
+    const normalizedView = view && contract ? normalizeModuleFrontendView(view, contract) : { schemaVersion: 1, regions: [] };
+    const workflows = rawWorkflows.map(raw => normalizeWorkflowDefinition(raw));
+    for (const workflow of workflows) {
+      if (!workflow.kind.startsWith("module-") || workflow.ownerModuleId !== record.id) {
+        throw new Error(`Feature module ${record.id} may own only module workflows whose ownerModuleId matches the module.`);
+      }
     }
-    const contract = normalizeDataContract(rawContract, record.id);
+    const refs = workflows.map(canonicalWorkflowRef);
+    if (new Set(refs).size !== refs.length) throw new Error(`Feature module ${record.id} declares duplicate workflow references.`);
     modules.push({
       id: record.id,
+      moduleKind: record.moduleKind,
       title: record.title.trim(),
       description: record.description.trim(),
       surface: record.surface,
@@ -424,11 +436,14 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
       displayOrder: record.displayOrder,
       basedOn: record.basedOn,
       contract,
-      view,
+      resourceCatalog,
+      resourceCatalogPath,
+      view: normalizedView,
       viewPath,
       moduleDirectory,
       skillPath,
       skillDescription: parseSkillDescription(skillText, `${record.id}.skillFile`),
+      workflows,
     });
   }
   return modules.sort((left, right) => left.contextOrder - right.contextOrder || left.id.localeCompare(right.id));
@@ -449,7 +464,7 @@ async function readContextProcessors(cardDirectory: string, paths: unknown, modu
     for (const query of definition.dependencies.dataQueries) {
       if (!moduleIds.has(query.moduleId)) throw new Error(`Context processor ${definition.id} requires unknown feature module ${query.moduleId}.`);
       const module = modules.find(item => item.id === query.moduleId)!;
-      if (!module.contract.collections[query.collectionId]) throw new Error(`Context processor ${definition.id} requires unknown collection ${query.moduleId}/${query.collectionId}.`);
+      if (!module.contract?.collections[query.collectionId]) throw new Error(`Context processor ${definition.id} requires unknown collection ${query.moduleId}/${query.collectionId}.`);
     }
     const entryPath = resolveFeatureModuleChild(cardDirectory, definition.entryFile, `${definition.id}.entryFile`);
     await readFile(entryPath, "utf8");
@@ -629,11 +644,22 @@ export default function (pi: ExtensionAPI) {
   function latestCompletedTurn(target: ActiveBridge) {
     return target.messages.reduce((maximum, message) => message.data.role === "assistant" ? Math.max(maximum, message.binding.turn) : maximum, 0);
   }
+  function blockingTurnWorkflows(target: ActiveBridge | null) {
+    return target?.workflowEngine?.blockingTurnRuns?.() || [];
+  }
+  function bridgeBusy(target: ActiveBridge) {
+    return target.pending || !target.context.isIdle() || target.workflowEngine?.hasBlockingTurnRun?.() === true;
+  }
+  function releaseCompletedRpTurn(runId: string) {
+    if (!active || !rpRun || rpRun.workflowRunId !== runId || !rpRun.agentSettled || !rpRun.workflowCompleted) return;
+    active.pending = false;
+    rpRun = null;
+  }
   async function ensureFeatureModuleRecords(target: ActiveBridge) {
     if (!target.recordId || !target.sessionDirectory) return;
     await new RpDataStore({
       sessionDirectory: target.sessionDirectory,
-      modules: target.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })),
+      modules: dataModuleBindings(target.featureModules),
     }).initialize();
   }
 
@@ -657,7 +683,7 @@ export default function (pi: ExtensionAPI) {
       sequence: message.sequence,
       createdAt: message.createdAt,
       binding: { messageId: id, turn: message.turn },
-      metadata: { recordType: message.kind, entityIds: [], tags: [message.role] },
+      metadata: { recordType: message.kind, entityIds: [], tags: [message.role], narrativeSource: message.narrativeSource },
       data: { role: message.role, kind: message.kind, content: message.content },
     }) as RecordEnvelope;
     active.messages.push(record);
@@ -677,14 +703,15 @@ export default function (pi: ExtensionAPI) {
     if (!target.sessionDirectory || deletedMessageIds.size === 0) return;
     await new RpDataStore({
       sessionDirectory: target.sessionDirectory,
-      modules: target.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })),
+      modules: dataModuleBindings(target.featureModules),
     }).pruneByMessageIds(deletedMessageIds);
   }
 
   async function readModuleProcessorData(target: ActiveBridge, module: FeatureModule) {
+    if (!module.contract) throw new Error(`Feature module ${module.id} has no unified data contract.`);
     if (!target.sessionDirectory) return { collections: {} };
     await ensureFeatureModuleRecords(target);
-    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: target.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: dataModuleBindings(target.featureModules) });
     const collections: Record<string, unknown> = {};
     for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
     return { collections };
@@ -738,7 +765,7 @@ export default function (pi: ExtensionAPI) {
     const workflowEntry = (target.workflowEngine as any).runs.get(run.workflowRunId);
     const narrativeNode = workflowEntry?.workflow?.nodes?.find((item: any) => item.id === run.workflowNarrativeNodeId);
     if (!narrativeNode) throw new Error("Context processors cannot resolve the active narrative node.");
-    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: target.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+    const store = new RpDataStore({ sessionDirectory: target.sessionDirectory, modules: dataModuleBindings(target.featureModules) });
     const dataQueries: Record<string, unknown> = {};
     const dataQuerySignatures: Record<string, string> = {};
     for (const processor of target.contextProcessors) {
@@ -749,7 +776,8 @@ export default function (pi: ExtensionAPI) {
         dataQuerySignatures[query.id] = signature;
         const access = narrativeNode.moduleAccess?.find((item: any) => item.moduleId === query.moduleId && item.collectionId === query.collectionId);
         if (!access) throw new Error(`Context processor ${processor.id} has no narrative-node access to ${query.moduleId}/${query.collectionId}.`);
-        dataQueries[query.id] = await queryData(store, query, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+        const budget = resolveNodeQueryBudget(access, workflowEntry.run.payload);
+        dataQueries[query.id] = await queryData(store, query, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
       }
     }
     const available = {
@@ -762,6 +790,7 @@ export default function (pi: ExtensionAPI) {
       dataQueries,
       settings: { common: target.commonSettings, card: target.cardSettings },
     };
+    await target.workflowEngine.addSourceReferences(run.workflowRunId, available.messages.map(messageSourceReference));
     const sections: string[] = [];
     for (const processor of target.contextProcessors) {
       try {
@@ -803,6 +832,7 @@ export default function (pi: ExtensionAPI) {
       if (policy.agent.mode !== "override") {
         const selected = selectRecords(records, policy.code.selector).records as RecordEnvelope[];
         run.automaticSelections[source] = selected.map(record => record.id);
+        if (run.workflowRunId) await target.workflowEngine.addSourceReferences(run.workflowRunId, selected.map(messageSourceReference));
         sections.push(`# Authoritative editable Web RP history\n${authoritativeTranscript(target, selected)}`);
       } else {
         run.automaticSelections[source] = [];
@@ -876,10 +906,139 @@ export default function (pi: ExtensionAPI) {
   async function executeWorkflowNode(task: any) {
     if (!active?.recordId || !active.sessionDirectory) throw new Error("The workflow has no active RP chat.");
     const { workflow, run, node, agent, binding } = task;
-    if (node.type === "turn-finalize") return { output: { committed: true, turn: run.turn } };
+    assertDocumentWorkspaceAgentTools(node, agent);
+    const usesWorkspace = ["agent", "code", "call"].includes(node.type);
+    if (usesWorkspace) await stageWorkflowCallInputs({ sessionDirectory: active.sessionDirectory, workflow, run, node });
+    const triggeredDocuments = usesWorkspace ? await stageTriggeredDocuments({ sessionDirectory: active.sessionDirectory, workflow, run, node }) : [];
+    const upstreamHandoffs = usesWorkspace ? [...triggeredDocuments, ...await stageWorkspaceHandoffs({ sessionDirectory: active.sessionDirectory, workflow, run, node })] : [];
+    if (upstreamHandoffs.length) await active.workflowEngine.addSourceReferences(run.id, upstreamHandoffs.map(artifactSourceReference));
+    if (node.type === "turn-finalize") {
+      if (!rpRun || rpRun.workflowRunId !== run.id) throw new Error("Turn finalization is not bound to the current RP turn.");
+      const sourceNode = workflow.nodes.find((candidate: any) => candidate.id === node.narrative.fromNode);
+      const sourceOutput = sourceNode?.outputs?.[node.narrative.output];
+      if (!sourceNode || !sourceOutput) throw new Error("Turn finalization narrative source is unavailable.");
+      const sourcePath = resolve(workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, sourceNode.id), sourceOutput.path);
+      const content = (await readFile(sourcePath, "utf8")).trim();
+      if (!content) throw new Error("The selected narrative output is empty.");
+      const narrativeSource = normalizeNarrativeSource(run.nodes[sourceNode.id]?.narrativeSource, { producerKind: "agent", layer: "story" });
+      const existing = active.messages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
+      if (existing && existing.data.content !== content) throw new Error("This turn already has a different persisted narrative.");
+      const assistantRecord = existing || await appendMessage({
+          sequence: active.messages.length,
+          turn: run.turn,
+          role: "assistant",
+          kind: "message",
+          content,
+          createdAt: new Date().toISOString(),
+          narrativeSource,
+        });
+      if (!assistantRecord) throw new Error("The narrative message could not be persisted.");
+      rpRun.assistantContent = content;
+      rpRun.assistantMessageId = assistantRecord.id;
+      rpRun.agentSettled = true;
+      await updateMetadata();
+      return { output: { committed: true, turn: run.turn, assistantMessageId: assistantRecord.id }, assistantMessageId: assistantRecord.id };
+    }
     if (node.type === "gate") return { route: run.payload?.route || node.metadata?.defaultRoute || null };
     if (node.type === "join") return { output: Object.fromEntries(node.dependsOn.map((id: string) => [id, run.nodes[id]?.output])) };
+    if (node.type === "call") {
+      const documents = { ...node.documents };
+      const argumentsForCall = structuredClone(node.arguments || {});
+      for (const [target, source] of Object.entries(node.metadata?.argumentSources || {}) as any[]) {
+        if (source === "$") argumentsForCall[target] = structuredClone(run.payload || {});
+        else if (typeof source === "string" && Object.hasOwn(run.payload || {}, source)) argumentsForCall[target] = structuredClone(run.payload[source]);
+      }
+      if (Number.isSafeInteger(node.metadata?.includeRecentTurns) && node.metadata.includeRecentTurns > 0 && Number.isSafeInteger(run.turn)) {
+        const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+        await mkdir(nodeWorkspace, { recursive: true });
+        await writeFile(resolve(nodeWorkspace, "recent-turns.md"), `# Recent complete turns\n\n${recentCompletedTurnContext(active, run.turn, node.metadata.includeRecentTurns)}\n`, "utf8");
+        documents["recent-turns"] = "recent-turns.md";
+      }
+      return { output: await task.invokeWorkflow({
+        workflow: node.target,
+        text: typeof node.metadata?.text === "string" ? node.metadata.text : run.payload?.currentInput || "",
+        arguments: argumentsForCall,
+        documents,
+        outputPaths: node.outputPaths,
+      }) };
+    }
+    if (node.type === "workflow-return") {
+      const outputPaths = run.outputPaths || {};
+      const parentWorkflowId = run.callContext?.parentWorkflowId;
+      const parentRunId = run.callContext?.parentRunId;
+      const parentNodeId = run.callContext?.parentNodeId;
+      if (!parentWorkflowId || !parentRunId || !parentNodeId) throw new Error("Module workflow return is missing its parent call context.");
+      const parentWorkspace = workflowNodeWorkspace(active.sessionDirectory, parentWorkflowId, parentRunId, parentNodeId);
+      const outputs: Record<string, string> = {};
+      for (const [exportId, source] of Object.entries(node.exports) as any[]) {
+        const requested = outputPaths[exportId];
+        if (typeof requested !== "string" || !requested) throw new Error(`Caller did not provide outputPaths.${exportId}.`);
+        const destination = resolve(parentWorkspace, requested);
+        const destinationRelative = relative(parentWorkspace, destination);
+        if (!destinationRelative || destinationRelative.startsWith("..") || destinationRelative.includes(`..${sep}`)) throw new Error(`Output path for ${exportId} escapes the caller workspace.`);
+        const sourceNode = workflow.nodes.find((candidate: any) => candidate.id === source.fromNode);
+        const outputDefinition = source.output ? sourceNode?.outputs?.[source.output] : null;
+        if (outputDefinition?.format === "document-set") {
+          await copyDocumentSet(
+            resolve(workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, sourceNode.id), outputDefinition.path),
+            destination,
+            `${workflow.id}/${exportId}`,
+          );
+          outputs[exportId] = destinationRelative.replaceAll("\\", "/");
+          continue;
+        }
+        if (outputDefinition?.kind === "directory") {
+          await copyWorkspaceEntry(
+            resolve(workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, sourceNode.id), outputDefinition.path),
+            destination,
+            `${workflow.id}/${exportId}`,
+          );
+          outputs[exportId] = destinationRelative.replaceAll("\\", "/");
+          continue;
+        }
+        const content = outputDefinition
+          ? await readFile(resolve(workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, sourceNode.id), outputDefinition.path), "utf8")
+          : typeof run.nodes[source.fromNode]?.output === "string"
+            ? run.nodes[source.fromNode].output
+            : `${JSON.stringify(run.nodes[source.fromNode]?.output ?? null, null, 2)}\n`;
+        await writeCollisionSafeFile(destination, String(content), `${exportId}: ${destinationRelative}`);
+        outputs[exportId] = destinationRelative.replaceAll("\\", "/");
+      }
+      return { output: { outputs } };
+    }
     if (node.type === "code") {
+      if (node.metadata?.builtin === "prepare-document-workspace") {
+        const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+        await mkdir(nodeWorkspace, { recursive: true });
+        const path = resolve(nodeWorkspace, "workspace-overview.md");
+        await writeFile(path, [
+          "# Node document workspace overview",
+          "",
+          `- workflow: \`${workflow.id}\``,
+          `- run: \`${run.id}\``,
+          `- turn: \`${run.turn ?? "unknown"}\``,
+          "- purpose: collect explicitly prepared upstream documents before a downstream Agent starts",
+          "",
+          "Additional module call nodes may be inserted after this node. Their returned documents are staged into any downstream Agent whose document workspace is enabled and listed in WORKSPACE-DOCUMENTS.md.",
+          "",
+        ].join("\n"), "utf8");
+        const preparedContext = rpRun?.workflowRunId === run.id ? await buildDynamicProcessorContext(active, rpRun) : "";
+        await writeFile(resolve(nodeWorkspace, "upstream-context.md"), preparedContext.trim()
+          ? `${preparedContext.trim()}\n`
+          : "# Prepared upstream context\n\nNo configured upstream context processor produced content for this turn.\n", "utf8");
+        if (node.outputs?.["recent-turns"]) {
+          const recentTurns = Number.isSafeInteger(workflow.turnContext?.recentCompleteTurns) ? workflow.turnContext.recentCompleteTurns : 5;
+          await writeFile(resolve(nodeWorkspace, node.outputs["recent-turns"].path), [
+            "# Recent complete turns",
+            "",
+            "This file is the frozen recent-chat input selected once for this foreground run. Later snapshots reuse this registered document.",
+            "",
+            recentCompletedTurnContext(active, run.turn, recentTurns) || "No earlier complete turns are in the configured window.",
+            "",
+          ].join("\n"), "utf8");
+        }
+        return { output: { prepared: true, upstreamContext: Boolean(preparedContext.trim()) } };
+      }
       if (!node.metadata?.entryFile) return { output: { acknowledged: true } };
       const entryPath = resolve(active.cardDirectory, node.metadata.entryFile);
       if (relative(active.cardDirectory, entryPath).startsWith("..")) throw new Error(`Code node ${node.id} entryFile escapes the card directory.`);
@@ -888,7 +1047,7 @@ export default function (pi: ExtensionAPI) {
       if (typeof execute !== "function") throw new Error(`${entryPath} must export execute().`);
       const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
       await mkdir(nodeWorkspace, { recursive: true });
-      const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
+      const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
       const accessFor = (moduleId: string, collectionId: string) => {
         const access = node.moduleAccess?.find((item: any) => item.moduleId === moduleId && item.collectionId === collectionId);
         if (!access) throw new Error(`Code node ${node.id} has no access to ${moduleId}/${collectionId}.`);
@@ -897,7 +1056,13 @@ export default function (pi: ExtensionAPI) {
       const data = Object.freeze({
         query: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
-          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+          const budget = resolveNodeQueryBudget(access, run.payload);
+          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
+        },
+        queryAll: (request: any, page: any = {}) => {
+          const access = accessFor(request.moduleId, request.collectionId);
+          const budget = resolveNodeQueryBudget(access, run.payload);
+          return queryAllData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters }, page);
         },
         get: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
@@ -907,38 +1072,61 @@ export default function (pi: ExtensionAPI) {
           const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
           return access && capabilityAllows(store.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
         }),
-        submit: (batch: any) => executeDataBatch(store, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: "code", initiatorId: node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null } } }),
+        submit: (batch: any, options: any = {}) => executeDataBatchOrThrow(store, batch, {
+          access: node.moduleAccess,
+          allowBestEffort: node.dataCommit?.allowBestEffort === true,
+          context: {
+            initiatorKind: "code",
+            initiatorId: node.id,
+            workflowId: workflow.id,
+            workflowRunId: run.id,
+            nodeId: node.id,
+            binding: resolveCodeSubmissionBinding(options.binding, {
+              messages: active.messages,
+              visibleThroughTurn: run.visibleThroughTurn ?? run.turn,
+              fallback: { turn: run.turn || 0, messageId: node.metadata?.unboundData === true ? null : rpRun?.assistantMessageId || null },
+            }),
+            sourceReferences: resolveCodeSubmissionSourceReferences(options.sourceMessageIds, {
+              messages: active.messages,
+              visibleThroughTurn: run.visibleThroughTurn ?? run.turn,
+              fallback: run.sourceReferences || [],
+            }),
+          },
+        }),
       });
-      const output = await execute(Object.freeze({ run: structuredClone(run), node: structuredClone(node), card: { id: active.cardId, name: active.cardName }, workspace: nodeWorkspace, data }));
-      return { output, assistantMessageId: rpRun?.assistantMessageId || null };
-    }
-
-    if (node.type === "narrative") {
-      if (!rpRun || rpRun.workflowRunId !== run.id) throw new Error("Narrative node is not bound to the current RP turn.");
-      if (rpRun.resolveNarrative) throw new Error("A narrative node is already active.");
-      const configured = await resolveConfiguredModel(active, binding.modelId, rpRun.baseModel);
-      if (!configured.model) throw new Error("No model is available for the narrative node.");
-      if (active.context.model?.provider !== configured.model.provider || active.context.model?.id !== configured.model.id) {
-        const selected = await pi.setModel(configured.model);
-        if (!selected) throw new Error(`Pi could not select the narrative model: ${binding.modelId}`);
+      const services: Record<string, any> = { comfy: active.comfyUi };
+      if (node.runtimeServices?.includes("random")) {
+        services.random = createRpRandomService({
+          sessionDirectory: active.sessionDirectory,
+          workflowId: workflow.id,
+          workflowRunId: run.id,
+          nodeId: node.id,
+          caller: { kind: "code", id: node.id },
+        });
       }
-      rpRun.modelHeadPrompt = configured.profile?.headPrompt || null;
-      rpRun.modelTailPrompt = configured.profile?.tailPrompt || null;
-      rpRun.nodeAgentPrompt = agent?.prompt || null;
-      rpRun.workflowNodePrompt = node.prompt || null;
-      return new Promise((resolveNarrative, rejectNarrative) => {
-        rpRun!.workflowNarrativeNodeId = node.id;
-        rpRun!.resolveNarrative = resolveNarrative;
-        rpRun!.rejectNarrative = rejectNarrative;
-        rpRun!.phaseStartedAt = Date.now();
-        try {
-          pi.sendUserMessage(rpRun!.submittedText);
-        } catch (error) {
-          rpRun!.resolveNarrative = null;
-          rpRun!.rejectNarrative = null;
-          rejectNarrative(error as Error);
-        }
-      });
+      const output = await execute(Object.freeze({
+        run: structuredClone(run),
+        node: structuredClone(node),
+        workflow: structuredClone(workflow),
+        card: { id: active.cardId, name: active.cardName },
+        featureModules: active.featureModules.map(item => item.id),
+        module: workflow.ownerModuleId ? (() => {
+          const owner = active.featureModules.find(item => item.id === workflow.ownerModuleId);
+          if (!owner) throw new Error(`Workflow owner module ${workflow.ownerModuleId} is not loaded.`);
+          return Object.freeze({ id: owner.id, moduleKind: owner.moduleKind, directory: owner.moduleDirectory, resourceCatalog: structuredClone(owner.resourceCatalog) });
+        })() : null,
+        conversation: {
+          messages: structuredClone(active.messages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? active!.turn))),
+          player: { name: active.playerName, description: active.playerDescription },
+          fixedContext: active.stableCardContext,
+          primaryCharacters: "",
+        },
+        workspace: nodeWorkspace,
+        data,
+        calls: Object.freeze({ invoke: (request: any) => task.invokeWorkflow(request) }),
+        services: Object.freeze(services),
+      }));
+      return { output, route: resolveCodeNodeRoute(node, output), assistantMessageId: rpRun?.assistantMessageId || null };
     }
 
     const { profile, model } = await resolveConfiguredModel(active, binding.modelId);
@@ -952,17 +1140,83 @@ export default function (pi: ExtensionAPI) {
       : upstreamIds.map((id: string) => ({
           id,
           output: run.nodes[id]?.output,
+          narrativeSource: run.nodes[id]?.narrativeSource,
           ...(node.context.mode === "inherit" ? { inheritedContext: run.nodes[id]?.context } : {}),
         })).filter((item: any) => item.output !== null || item.inheritedContext);
-    const upstreamArtifacts = node.context.mode === "fixed" ? [] : await readVisibleArtifacts({
-      sessionDirectory: active.sessionDirectory,
-      target: { workflowRunId: run.id, nodeId: node.id, turn: run.turn },
-      fromNodeIds: upstreamIds,
-    });
     const upstreamArtifactContent = [];
-    for (const artifact of upstreamArtifacts) {
-      const content = await readFile(artifact.path, "utf8");
-      upstreamArtifactContent.push({ id: artifact.id, nodeId: artifact.nodeId, format: artifact.format, content: content.slice(0, 50000), truncated: content.length > 50000 });
+    for (const artifact of upstreamHandoffs) {
+      if (artifact.kind === "directory") {
+        upstreamArtifactContent.push({ id: artifact.id, nodeId: artifact.nodeId, format: artifact.format, kind: artifact.kind, narrativeSource: artifact.narrativeSource, path: artifact.stagedPath });
+        continue;
+      }
+      const content = await readFile(resolve(nodeWorkspace, artifact.stagedPath), "utf8");
+      upstreamArtifactContent.push({ id: artifact.id, nodeId: artifact.nodeId, format: artifact.format, kind: artifact.kind, narrativeSource: artifact.narrativeSource, path: artifact.stagedPath, content: content.slice(0, 50000), truncated: content.length > 50000 });
+    }
+    const handoffMirrorRoots = [...new Set(upstreamHandoffs.map((artifact: any) => `handoff/${artifact.nodeId}/`))];
+    const workspaceDocuments: Array<Record<string, any>> = [];
+    const dynamicCallOutputs: Array<Record<string, any>> = [];
+    let documentSnapshotSequence = 0;
+    if (node.metadata?.documentWorkspace === true) {
+      const stagedTargets = new Set<string>();
+      const nodeOutputInputs = new Set<string>(Array.isArray(node.metadata?.nodeOutputInputs) ? node.metadata.nodeOutputInputs : []);
+      for (const dependencyId of upstreamIds) {
+        if (!nodeOutputInputs.has(dependencyId)) continue;
+        const dependencyOutput = run.nodes[dependencyId]?.output;
+        if (dependencyOutput === undefined || dependencyOutput === null) continue;
+        if (dependencyOutput?.workflow && dependencyOutput?.outputs && typeof dependencyOutput.outputs === "object") continue;
+        const markdown = typeof dependencyOutput === "string";
+        const targetRelative = `materials/${dependencyId}/node-output.${markdown ? "md" : "json"}`;
+        const targetPath = resolve(nodeWorkspace, targetRelative);
+        await mkdir(dirname(targetPath), { recursive: true });
+        await writeFile(targetPath, markdown ? `${dependencyOutput.trim()}\n` : `${JSON.stringify(dependencyOutput, null, 2)}\n`, "utf8");
+        stagedTargets.add(targetRelative);
+        const declared = workflow.nodes.find((candidate: any) => candidate.id === dependencyId)?.metadata?.documentIndex?.["node-output"] || {};
+        workspaceDocuments.push({
+          id: `${dependencyId}.node-output`,
+          path: targetRelative,
+          readPolicy: declared.readPolicy || "conditional",
+          authority: declared.authority || "advisory",
+          appliesAt: declared.appliesAt || "task",
+          perspective: declared.perspective || "general",
+          priority: Number.isFinite(declared.priority) ? declared.priority : 0,
+          description: declared.description || `Node output from ${dependencyId}`,
+        });
+      }
+      for (const artifact of upstreamHandoffs) {
+        const targetRelative = artifact.stagedPath;
+        stagedTargets.add(targetRelative);
+        const declared = workflow.nodes.find((candidate: any) => candidate.id === artifact.nodeId)?.metadata?.documentIndex?.[artifact.id] || {};
+        workspaceDocuments.push(workspaceDocumentFromArtifact(artifact, declared));
+      }
+      const index = [
+        "# Node workspace document index",
+        "",
+        "The node author supplied the documents below. Read and apply them according to their metadata and your task prompt.",
+        "",
+        ...(handoffMirrorRoots.length ? [
+          "## Inherited workspace mirrors",
+          "",
+          "Each root below is a strict allowlisted mirror of part of an upstream node workspace. Unless an output was deliberately renamed with `as`, paths inside an inherited knowledge map remain relative to that mirror root. Do not resolve those paths from this node workspace root.",
+          "",
+          ...handoffMirrorRoots.map(root => `- \`${root}\``),
+          "",
+        ] : []),
+        ...workspaceDocuments.flatMap(document => [
+          `## ${document.id}`,
+          "",
+          `- path: \`${document.path}\``,
+          ...(document.entryPath && document.entryPath !== document.path ? [`- entry: \`${document.entryPath}\``] : []),
+          ...(document.kind ? [`- kind: \`${document.kind}\``] : []),
+          `- readPolicy: \`${document.readPolicy}\``,
+          `- authority: \`${document.authority}\``,
+          `- appliesAt: \`${document.appliesAt}\``,
+          `- perspective: \`${document.perspective}\``,
+          `- priority: \`${document.priority}\``,
+          `- description: ${document.description}`,
+          "",
+        ]),
+      ].join("\n");
+      await writeFile(resolve(nodeWorkspace, "WORKSPACE-DOCUMENTS.md"), index, "utf8");
     }
     let customContext = "";
     if (node.context.mode === "custom") {
@@ -987,20 +1241,115 @@ export default function (pi: ExtensionAPI) {
       piSystemPrompt: active.context.getSystemPrompt(),
       modelHead: profile?.headPrompt,
       agentPrompt: agent?.prompt,
-      fixedContext: await fixedRpContext(active),
-      dynamicContext: [Number.isSafeInteger(run.turn) ? `Turn: ${run.turn}` : "", run.payload?.frozenContext ? `Frozen completed-turn context:\n${run.payload.frozenContext}` : "", customContext].filter(Boolean).join("\n\n"),
-      upstreamArtifacts: upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "",
-      currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
+      fixedContext: node.metadata?.fixedContext === "none" ? "" : await fixedRpContext(active),
+      dynamicContext: composeWorkflowNodeDynamicContext({
+        workflowKind: workflow.kind,
+        turn: run.turn,
+        recentCompleteTurns: workflow.turnContext?.recentCompleteTurns,
+        recentContext: workflow.kind === "foreground" && node.metadata?.documentWorkspace !== true && Number.isSafeInteger(run.turn) ? recentCompletedTurnContext(active, run.turn, workflow.turnContext.recentCompleteTurns) : "",
+        callContext: run.callContext,
+        documentWorkspace: node.metadata?.documentWorkspace === true,
+        handoffMirrorRoots,
+        customContext,
+      }),
+      upstreamArtifacts: node.metadata?.documentWorkspace === true
+        ? ""
+        : upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "",
+      currentInput: typeof run.payload?.currentInput === "string"
+        ? run.payload.currentInput
+        : typeof run.textInput === "string" ? run.textInput : "",
       nodePrompt: node.prompt || node.description,
       modelTail: null,
     });
     const sdk: any = await import("@earendil-works/pi-coding-agent");
-    const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
-    const dataToolFactory = {
-      name: "rp-unified-data",
+    const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+    const nodeToolFactory = {
+      name: "rp-node-tools",
       hidden: true,
       factory(workerPi: any) {
-        if (agent?.tools?.includes("rp_data_query")) {
+        if (agent?.tools?.includes("rp_roll")) {
+        const random = createRpRandomService({
+          sessionDirectory: active.sessionDirectory!,
+          workflowId: workflow.id,
+          workflowRunId: run.id,
+          nodeId: node.id,
+          caller: { kind: "agent", id: agent.id },
+        });
+        workerPi.registerTool({
+          name: "rp_roll",
+          label: "Roll dice",
+          description: "Roll one or more groups of fair dice. A key identifies one logical roll in this workflow node; retrying the same key and parameters replays the original result.",
+          parameters: Type.Object({
+            key: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" }),
+            dice: Type.Array(Type.Object({
+              count: Type.Integer({ minimum: 1, maximum: 100 }),
+              sides: Type.Integer({ minimum: 2, maximum: 1000000 }),
+            }, { additionalProperties: false }), { minItems: 1, maxItems: 10 }),
+            modifier: Type.Optional(Type.Integer({ minimum: -1000000000, maximum: 1000000000 })),
+            reason: Type.Optional(Type.String({ maxLength: 500 })),
+          }, { additionalProperties: false }),
+          async execute(_id: string, parameters: any) {
+            const result = await random.roll(parameters);
+            return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+          },
+        });
+        }
+        if (node.workflowCalls?.length) {
+        const callSignatures = node.workflowCalls.map((callBinding: any) => {
+          const [moduleId] = callBinding.target.split("/");
+          const target = active.featureModules.find(module => module.id === moduleId)?.workflows.find(candidate => canonicalWorkflowRef(candidate) === callBinding.target);
+          if (!target) return null;
+          return {
+            workflow: callBinding.target,
+            inputs: target?.interface?.inputs || {},
+            exports: target?.interface?.exports || {},
+            fixedArguments: callBinding.fixedArguments || {},
+            allowedArguments: callBinding.allowedArguments,
+            automaticDocumentSnapshotInput: callBinding.documentSnapshotInput || null,
+          };
+        }).filter(Boolean);
+        const allowedWorkflowIds = callSignatures.map((signature: any) => signature.workflow);
+        if (allowedWorkflowIds.length) {
+        workerPi.registerTool({
+          name: "rp_call",
+          label: "Call module workflow",
+          description: `Invoke one exposed module workflow and wait for its output documents. Mechanical call signatures: ${JSON.stringify(callSignatures)}.`,
+          parameters: Type.Object({
+            workflow: Type.Union(allowedWorkflowIds.map((reference: string) => Type.Literal(reference))),
+            text: Type.Optional(Type.String()),
+            arguments: Type.Optional(Type.Record(Type.String(), Type.Any())),
+            documents: Type.Optional(Type.Record(Type.String(), Type.String())),
+            outputPaths: Type.Record(Type.String(), Type.String()),
+          }),
+          async execute(_id: string, parameters: any) {
+            const request = structuredClone(parameters);
+            const callBinding = node.workflowCalls.find((item: any) => item.target === request.workflow);
+            if (callBinding?.documentSnapshotInput) {
+              request.documents ||= {};
+              if (request.documents[callBinding.documentSnapshotInput]) throw new Error(`Document input ${callBinding.documentSnapshotInput} is supplied automatically and cannot be overridden.`);
+              const snapshotPath = `.call-snapshots/${String(++documentSnapshotSequence).padStart(3, "0")}-${request.workflow.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+              await createDocumentWorkspaceSnapshot({
+                nodeWorkspace,
+                outputPath: snapshotPath,
+                documents: workspaceDocuments,
+                dynamicOutputs: dynamicCallOutputs,
+                currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
+                narrative: "",
+                turnContext: workflow.turnContext,
+              });
+              request.documents[callBinding.documentSnapshotInput] = snapshotPath;
+            }
+            const result = await task.invokeWorkflow(request, { agent: true });
+            for (const [id, path] of Object.entries(result.outputs || {})) {
+              if (typeof path !== "string") continue;
+              dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: `Declared output ${id} from ${request.workflow}.` });
+            }
+            return { content: [{ type: "text", text: JSON.stringify(result.outputs, null, 2) }], details: result };
+          },
+        });
+        }
+        }
+        if (node.moduleAccess?.length && agent?.tools?.includes("rp_data_query")) {
         workerPi.registerTool({
           name: "rp_data_query",
           label: "Query RP data",
@@ -1009,12 +1358,13 @@ export default function (pi: ExtensionAPI) {
           async execute(_id: string, parameters: any) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
-            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: 20, runtimeCharacters: 6000, nodeLimit: access.queryBudget?.maxRecords || 20, nodeCharacters: access.queryBudget?.maxCharacters || 6000 });
+            const budget = resolveNodeQueryBudget(access, run.payload);
+            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
             return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
           },
         });
         }
-        if (agent?.tools?.includes("rp_data_get")) {
+        if (node.moduleAccess?.length && agent?.tools?.includes("rp_data_get")) {
         workerPi.registerTool({
           name: "rp_data_get",
           label: "Read one RP record",
@@ -1028,7 +1378,7 @@ export default function (pi: ExtensionAPI) {
           },
         });
         }
-        if (agent?.tools?.includes("rp_data_resolve")) {
+        if (node.moduleAccess?.length && agent?.tools?.includes("rp_data_resolve")) {
         workerPi.registerTool({
           name: "rp_data_resolve",
           label: "Resolve RP data identity",
@@ -1043,7 +1393,7 @@ export default function (pi: ExtensionAPI) {
           },
         });
         }
-        if (agent?.tools?.includes("rp_data_submit")) {
+        if (node.moduleAccess?.length && agent?.tools?.includes("rp_data_submit")) {
         workerPi.registerTool({
           name: "rp_data_submit",
           label: "Submit RP data output",
@@ -1053,7 +1403,7 @@ export default function (pi: ExtensionAPI) {
             const output = node.outputs?.[parameters.output];
             if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
             const batch = JSON.parse(await readFile(resolve(nodeWorkspace, output.path), "utf8"));
-            const receipt = await executeDataBatch(dataStore, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: node.type === "code" ? "code" : "agent", initiatorId: agent?.id || node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null } } });
+            const receipt = await executeDataBatch(dataStore, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: node.type === "code" ? "code" : "agent", initiatorId: agent?.id || node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null }, sourceReferences: run.sourceReferences || [] } });
             return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
           },
         });
@@ -1077,12 +1427,18 @@ export default function (pi: ExtensionAPI) {
             messages: [...event.messages, { role: "user", content: profile.tailPrompt, timestamp: Date.now() }],
           }));
         },
-      }] : []), dataToolFactory],
+      }] : []), nodeToolFactory],
     });
     await loader.reload();
     const permittedBuiltins = new Set(["read", "write", "edit", "bash", "grep", "find", "ls", "powershell"]);
     const permittedDataTools = new Set(["rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"]);
-    const tools = (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedDataTools.has(name));
+    const permittedRuntimeTools = new Set(["rp_roll"]);
+    const tools = (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)));
+    const hasResolvedWorkflowCall = node.workflowCalls?.some((binding: any) => {
+      const [moduleId] = binding.target.split("/");
+      return active.featureModules.find(module => module.id === moduleId)?.workflows.some(candidate => canonicalWorkflowRef(candidate) === binding.target);
+    });
+    if (hasResolvedWorkflowCall) tools.push("rp_call");
     const { session } = await sdk.createAgentSession({
       cwd: nodeWorkspace,
       modelRuntime: (active.context.modelRegistry as any).runtime,
@@ -1103,6 +1459,36 @@ export default function (pi: ExtensionAPI) {
         const normalized = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
         try { output = JSON.parse(normalized); }
         catch { throw new Error(`Workflow Agent ${agent.id} must return valid JSON.`); }
+      }
+      for (const definition of Object.values(node.outputs || {}) as any[]) {
+        if (definition.format !== "narrative") continue;
+        const outputPath = resolve(nodeWorkspace, definition.path);
+        const outputRelative = relative(nodeWorkspace, outputPath);
+        if (!outputRelative || outputRelative.startsWith("..") || outputRelative.includes(`..${sep}`)) throw new Error(`Narrative output path for node ${node.id} escapes its workspace.`);
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, content, "utf8");
+      }
+      if (node.metadata?.textOutput) {
+        const definition = node.outputs?.[node.metadata.textOutput];
+        const outputPath = resolve(nodeWorkspace, definition.path);
+        const outputRelative = relative(nodeWorkspace, outputPath);
+        if (!outputRelative || outputRelative.startsWith("..") || outputRelative.includes(`..${sep}`)) throw new Error(`Text output path for node ${node.id} escapes its workspace.`);
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, `${content.trim()}\n`, "utf8");
+      }
+      const snapshotDeclaration = node.metadata?.documentWorkspaceSnapshot;
+      if (snapshotDeclaration) {
+        const definition = node.outputs?.[snapshotDeclaration.output];
+        if (!definition || definition.format !== "document-workspace-snapshot" || definition.kind !== "directory") throw new Error(`Node ${node.id} documentWorkspaceSnapshot must reference a declared directory output with format document-workspace-snapshot.`);
+        await createDocumentWorkspaceSnapshot({
+          nodeWorkspace,
+          outputPath: definition.path,
+          documents: workspaceDocuments,
+          dynamicOutputs: dynamicCallOutputs,
+          currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
+          narrative: content,
+          turnContext: workflow.turnContext,
+        });
       }
       return {
         output,
@@ -1128,7 +1514,7 @@ export default function (pi: ExtensionAPI) {
     await stopBridge();
     const cardDirectory = resolveCardDirectory(context.cwd, cardArgument.trim());
     const manifest = JSON.parse(await readFile(resolve(cardDirectory, "manifest.json"), "utf8"));
-    if (!manifest.id || !manifest.name) throw new Error("Card manifest must contain id and name.");
+    if (manifest.schema_version !== 2 || !manifest.id || !manifest.name) throw new Error("Card manifest must use schema_version 2 and contain id and name.");
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.id)) {
       throw new Error("Card manifest id must be filesystem-safe before Web session storage can start.");
     }
@@ -1156,9 +1542,9 @@ export default function (pi: ExtensionAPI) {
       cardId: manifest.id,
       settings: {},
     });
-    const stableCardContext = await readCardContextFiles(cardDirectory, manifest.fixed_context, "fixed_context");
-    const primaryCharacterContext = await readCardContextFiles(cardDirectory, manifest.primary_characters, "primary_characters");
+    const stableCardContext = await readCardContextFile(cardDirectory, manifest.fixed_context, "fixed_context");
     const featureModules = await readFeatureModules(cardDirectory, manifest.feature_modules);
+    const comfyUi = createComfyUiService({ rootDirectory: context.cwd, cardDirectory, featureModules });
     const contextProcessors = await readContextProcessors(cardDirectory, manifest.context_processors, featureModules);
     const messagePolicy = await readMessageRetrievalPolicy(cardDirectory, manifest.context_policy);
     const messageSkill = await readMessageRetrievalSkill(cardDirectory, manifest.context_skill, messagePolicy);
@@ -1200,7 +1586,6 @@ export default function (pi: ExtensionAPI) {
       playerName: hasExistingRecord ? previousMetadata?.playerName || commonSettings.user?.playerName || "玩家" : commonSettings.user?.playerName || "玩家",
       playerDescription: hasExistingRecord ? previousMetadata?.playerDescription ?? commonSettings.user?.description ?? "" : commonSettings.user?.description ?? "",
       stableCardContext,
-      primaryCharacterContext,
       featureModules,
       messagePolicy,
       messageSkillPath: messageSkill.path,
@@ -1212,6 +1597,7 @@ export default function (pi: ExtensionAPI) {
       pending: false,
       turn: messages.reduce((maximum, message) => Math.max(maximum, message.binding.turn), 0),
       configStore,
+      comfyUi,
       workflowEngine: null as any,
       activeWorkflowId: cardSettings.settings.activeWorkflowId as string,
       close: async () => {},
@@ -1249,17 +1635,48 @@ export default function (pi: ExtensionAPI) {
       for (const candidate of available) {
         if (candidate.invalid || candidate.source !== "card" || candidate.kind === "foreground") continue;
         if (!workflowTriggerMatches(candidate, event)) continue;
-        await active.workflowEngine.start(candidate, {
-          cardId: active.cardId,
-          chatId: active.recordId,
-          turn: parentRun.turn,
-          visibleThroughTurn: candidate.kind === "global-background" ? parentRun.turn : null,
-          trigger: event,
-          payload: {
-            parentRunId: parentRun.id,
-            frozenContext: authoritativeTranscript(active, active.messages.filter(message => message.binding.turn <= parentRun.turn)),
-          },
-        }).catch(error => context.ui.notify(`Background workflow ${candidate.id} was not started: ${(error as Error).message}`, "warning"));
+        const triggerDocuments: Record<string, any> = {};
+        if (candidate.trigger?.documents && Object.keys(candidate.trigger.documents).length) {
+          const sourceWorkflow = await configStore.getWorkflow(event.workflowId);
+          for (const [inputId, mapping] of Object.entries(candidate.trigger.documents) as any[]) {
+            const sourceNode = sourceWorkflow.nodes.find((node: any) => node.id === mapping.fromNode);
+            const output = sourceNode?.outputs?.[mapping.output];
+            const state = parentRun.nodes?.[mapping.fromNode];
+            if (!sourceNode || !output || state?.status !== "completed") throw new Error(`Trigger document ${inputId} is unavailable from ${mapping.fromNode}/${mapping.output}.`);
+            if (!["turn", "session", "public"].includes(output.scope)) throw new Error(`Trigger document ${inputId} must use turn, session, or public scope.`);
+            const absolute = resolve(workflowNodeWorkspace(active.sessionDirectory, sourceWorkflow.id, parentRun.id, sourceNode.id), output.path);
+            await readFile(resolve(absolute, output.kind === "directory" ? "DOCUMENTS.md" : ""), output.kind === "directory" ? "utf8" : undefined as any);
+            triggerDocuments[inputId] = {
+              path: relative(active.sessionDirectory, absolute).replaceAll("\\", "/"),
+              format: output.format,
+              kind: output.kind,
+              narrativeSource: state.narrativeSource,
+              sourceReferences: parentRun.sourceReferences || [],
+              sourceArtifact: { workflowId: sourceWorkflow.id, workflowRunId: parentRun.id, nodeId: sourceNode.id, id: mapping.output, turn: parentRun.turn },
+            };
+          }
+        }
+        const visibleMessages = active.messages.filter(message => message.binding.turn <= parentRun.turn);
+        const runId = `workflow-${randomUUID()}`;
+        try {
+          const frozenTriggerDocuments = await freezeTriggeredDocuments({ sessionDirectory: active.sessionDirectory, workflow: candidate, runId, triggerDocuments });
+          await active.workflowEngine.start(candidate, {
+            id: runId,
+            cardId: active.cardId,
+            chatId: active.recordId,
+            turn: parentRun.turn,
+            visibleThroughTurn: candidate.kind === "global-background" ? parentRun.turn : null,
+            trigger: event,
+            sourceReferences: visibleMessages.map(messageSourceReference),
+            payload: {
+              parentRunId: parentRun.id,
+              triggerDocuments: frozenTriggerDocuments,
+            },
+          });
+        } catch (error) {
+          await cleanupFrozenTriggerInputs(active.sessionDirectory, candidate.id, runId).catch(() => {});
+          context.ui.notify(`Background workflow ${candidate.id} was not started: ${(error as Error).message}`, "warning");
+        }
       }
     };
 
@@ -1267,10 +1684,17 @@ export default function (pi: ExtensionAPI) {
       policy: await configStore.getRuntimePolicy(),
       resolveAgent: async (agentId: string | null) => agentId ? (await configStore.getAgent(agentId)).effective : null,
       resolveModel: async (modelId: string) => (await configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId) || null,
+      resolveWorkflow: async (reference: string) => {
+        for (const module of active?.featureModules || []) {
+          const workflow = module.workflows.find(candidate => canonicalWorkflowRef(candidate) === reference);
+          if (workflow) return workflow;
+        }
+        return null;
+      },
       executor: executeWorkflowNode,
       beforeNodeComplete: async ({ workflow, run, node, result }: any) => {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow data commit has no active RP chat.");
-        const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) });
+        const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
         return finalizeNodeData({ sessionDirectory: active.sessionDirectory, store, workflow, run, node, result });
       },
       nodeHistory: (workflowId: string, nodeId: string) => nodeCompletionTurns.get(`${workflowId}:${nodeId}`) ?? null,
@@ -1296,7 +1720,10 @@ export default function (pi: ExtensionAPI) {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) return;
         const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
         await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, run));
-        if (["completed", "failed", "cancelled"].includes(run.status)) await cleanupArtifacts(active.sessionDirectory, { type: "run", workflowRunId: run.id });
+        if (["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
+          await cleanupArtifacts(active.sessionDirectory, { type: "run", workflowRunId: run.id });
+          await cleanupFrozenTriggerInputs(active.sessionDirectory, workflow.id, run.id);
+        }
         for (const state of Object.values(run.nodes) as any[]) {
           const eventKey = `${run.id}:node:${state.id}:completed`;
           if (state.status === "completed" && !deliveredWorkflowEvents.has(eventKey)) {
@@ -1307,13 +1734,17 @@ export default function (pi: ExtensionAPI) {
             });
             if (Number.isSafeInteger(run.turn)) nodeCompletionTurns.set(`${workflow.id}:${state.id}`, run.turn);
             deliveredWorkflowEvents.add(eventKey);
-            await dispatchWorkflowEvent({ type: "node", workflowId: workflow.id, nodeId: state.id, runId: run.id }, run);
+            if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "node", workflowId: workflow.id, nodeId: state.id, runId: run.id }, run);
           }
         }
         const completeKey = `${run.id}:workflow:completed`;
         if (run.status === "completed" && !deliveredWorkflowEvents.has(completeKey)) {
           deliveredWorkflowEvents.add(completeKey);
-          await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
+          if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
+        }
+        if (workflow.kind === "foreground" && run.status === "completed" && rpRun?.workflowRunId === run.id) {
+          rpRun.workflowCompleted = true;
+          releaseCompletedRpTurn(run.id);
         }
       },
     });
@@ -1327,13 +1758,18 @@ export default function (pi: ExtensionAPI) {
       const latest = new Map<string, any>();
       for (const run of persisted) latest.set(run.id, run);
       for (const run of latest.values()) {
-        if (["completed", "failed", "cancelled"].includes(run.status)) continue;
+        if (["completed", "skipped", "failed", "cancelled"].includes(run.status)) continue;
         try {
-          const workflow = await configStore.getWorkflow(run.workflowId);
+          const workflow = run.ownerModuleId
+            ? active.featureModules.find(module => module.id === run.ownerModuleId)?.workflows.find(candidate => candidate.id === run.workflowId)
+            : await configStore.getWorkflow(run.workflowId);
+          if (!workflow) throw new Error(`Workflow definition was not found for ${run.ownerModuleId ? `${run.ownerModuleId}/` : ""}${run.workflowId}.`);
           for (const state of Object.values(run.nodes || {}) as any[]) {
             if (state.status === "completed") deliveredWorkflowEvents.add(`${run.id}:node:${state.id}:completed`);
           }
           if (workflow.kind === "foreground" && !rpRun && typeof run.payload?.currentInput === "string") {
+            const finalizer = workflow.nodes.find((node: any) => node.type === "turn-finalize");
+            const existingAssistant = active.messages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
             active.pending = true;
             rpRun = {
               cardId: active.cardId,
@@ -1342,10 +1778,11 @@ export default function (pi: ExtensionAPI) {
               submittedSequence: Number.isSafeInteger(run.payload.userSequence) ? run.payload.userSequence : active.messages.at(-1)?.sequence || 0,
               assistantContent: "",
               automaticSelections: {}, agentQueries: [], agentSources: [], processorSelections: [],
-              contextContent: null, phase: "narrative", assistantMessageId: null,
-              workflowRunId: run.id, workflowNarrativeNodeId: workflow.nodes.find((node: any) => node.type === "narrative")?.id || null,
+              contextContent: null, phase: "narrative", assistantMessageId: existingAssistant?.id || null,
+              workflowRunId: run.id, workflowNarrativeNodeId: finalizer?.narrative?.fromNode || null,
               resolveNarrative: null, rejectNarrative: null,
               baseModel: active.context.model,
+              agentSettled: Boolean(existingAssistant),
             };
           }
           await active.workflowEngine.restore(workflow, run);
@@ -1356,6 +1793,32 @@ export default function (pi: ExtensionAPI) {
     };
     await restoreWorkflowRuns(active.sessionDirectory);
 
+    function requireFrontendModule(moduleId: string) {
+      const module = active?.featureModules.find(item => item.id === moduleId && item.surface === "frontend");
+      if (!module) throw httpError(404, `Frontend feature module ${moduleId} was not found.`);
+      return module;
+    }
+    function activeDataStore() {
+      if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before using module data.");
+      return new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+    }
+    async function startManualBackgroundWorkflow(workflowId: string, payload: any) {
+      if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "Start or resume a chat before running a background workflow.");
+      const workflow = await configStore.copyWorkflowToCard(workflowId);
+      if (workflow.kind === "foreground" || workflow.kind.startsWith("module-")) throw httpError(400, "Manual controls may activate only top-level background workflows.");
+      const completedThrough = latestCompletedTurn(active);
+      const visibleMessages = active.messages.filter(message => message.binding.turn <= (workflow.kind === "global-background" ? completedThrough : active!.turn));
+      const run = await active.workflowEngine.start(workflow, {
+        cardId: active.cardId,
+        chatId: active.recordId,
+        turn: workflow.kind === "global-background" ? completedThrough : active.turn,
+        visibleThroughTurn: workflow.kind === "global-background" ? completedThrough : null,
+        trigger: { type: "manual" },
+          sourceReferences: [],
+          payload: { ...payload },
+      });
+      return { activated: workflow.id, run };
+    }
     let bridge;
     try {
       bridge = await webModule.startWebBridge({
@@ -1366,7 +1829,8 @@ export default function (pi: ExtensionAPI) {
             openingId: active?.openingId || null,
             playerName: active?.playerName || "玩家",
             messages: active ? recordsToWebMessages(active.messages) : [],
-            busy: active ? active.pending || !active.context.isIdle() : false,
+            busy: active ? bridgeBusy(active) : false,
+            blockingWorkflows: blockingTurnWorkflows(active),
           }),
           getSettings: async () => ({
             common: active?.commonSettings || defaultCommonSettings,
@@ -1438,7 +1902,8 @@ export default function (pi: ExtensionAPI) {
             });
             const latest = new Map<string, any>();
             for (const run of persisted) latest.set(run.id, { ...run, live: false });
-            for (const run of active.workflowEngine.snapshot()) latest.set(run.id, { ...run, live: true });
+            const blockingRunIds = new Set(active.workflowEngine.blockingTurnRuns().map((item: any) => item.runId));
+            for (const run of active.workflowEngine.snapshot()) latest.set(run.id, { ...run, live: true, blocksNextTurn: blockingRunIds.has(run.id) });
             return { runs: [...latest.values()].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt))) };
           },
           openWorkflowNodeProcessRecord: async (runId: string, nodeId: string) => {
@@ -1477,20 +1942,7 @@ export default function (pi: ExtensionAPI) {
               await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
               return { activated: workflow.id, startsOnNextInput: true };
             }
-            if (!active.recordId || !active.sessionDirectory) throw httpError(409, "Start or resume a chat before running a background workflow.");
-            const completedThrough = latestCompletedTurn(active);
-            const run = await active.workflowEngine.start(workflow, {
-              cardId: active.cardId,
-              chatId: active.recordId,
-              turn: workflow.kind === "global-background" ? completedThrough : active.turn,
-              visibleThroughTurn: workflow.kind === "global-background" ? completedThrough : null,
-              trigger: { type: "manual" },
-              payload: {
-                ...(value?.payload || {}),
-                frozenContext: authoritativeTranscript(active, active.messages.filter(message => message.binding.turn <= (workflow.kind === "global-background" ? completedThrough : active!.turn))),
-              },
-            });
-            return { activated: workflow.id, run };
+            return startManualBackgroundWorkflow(workflow.id, value?.payload || {});
           },
           updateWorkflowNodeBinding: async (workflowId: string, nodeId: string, value: any) => {
             const workflow = await configStore.copyWorkflowToCard(workflowId);
@@ -1498,6 +1950,17 @@ export default function (pi: ExtensionAPI) {
             if (!node) throw httpError(404, "Workflow node was not found.");
             node.agentId = typeof value.agentId === "string" && value.agentId ? value.agentId : null;
             node.modelId = typeof value.modelId === "string" && value.modelId ? value.modelId : null;
+            return configStore.saveCardWorkflow(workflow);
+          },
+          updateWorkflowTrigger: async (workflowId: string, value: any) => {
+            const workflow = await configStore.copyWorkflowToCard(workflowId);
+            if (workflow.kind === "foreground") throw httpError(400, "Foreground workflow triggers cannot be changed here.");
+            const blocking = workflow.trigger?.blockNextTurnUntilReady === true ? { blockNextTurnUntilReady: true } : {};
+            if (value?.type === "manual") workflow.trigger = { type: "manual", ...blocking };
+            else if (value?.type === "after-opening") workflow.trigger = { type: "after-opening", ...blocking };
+            else if (value?.type === "after-workflow") workflow.trigger = { type: "after-workflow", workflowId: String(value.workflowId || ""), ...blocking };
+            else if (value?.type === "node") workflow.trigger = { type: "node", workflowId: String(value.workflowId || ""), nodeId: String(value.nodeId || ""), ...blocking };
+            else throw httpError(400, "Unsupported workflow trigger type.");
             return configStore.saveCardWorkflow(workflow);
           },
           retryWorkflowNode: async (runId: string, nodeId: string, value: any) => {
@@ -1514,6 +1977,10 @@ export default function (pi: ExtensionAPI) {
             const retried = await active.workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true });
             return retried;
           },
+          recoverWorkflowNode: async (runId: string, nodeId: string) => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
+            return active.workflowEngine.recover(runId, nodeId);
+          },
           cancelWorkflowRun: async (runId: string) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
             const cancelled = await active.workflowEngine.cancel(runId);
@@ -1523,6 +1990,186 @@ export default function (pi: ExtensionAPI) {
               rpRun = null;
             }
             return cancelled;
+          },
+          skipWorkflowRun: async (runId: string) => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
+            const skipped = await active.workflowEngine.skip(runId);
+            if (rpRun?.workflowRunId === runId) {
+              if (!active.context.isIdle()) active.context.abort();
+              active.pending = false;
+              rpRun = null;
+            }
+            return skipped;
+          },
+          getImageGeneration: async () => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
+            const profiles = (await active.comfyUi.profiles()).map((profile: any) => ({
+              id: profile.id,
+              title: profile.title,
+              revision: profile.revision,
+              guideId: profile.guideId,
+              connectionId: profile.connectionId,
+              digest: profile.digest,
+              workflowDigest: profile.workflowDigest,
+              prompt: profile.prompt,
+              overrideStale: profile.overrideStale,
+            }));
+            const connections = await active.comfyUi.listConnections();
+            if (!active.sessionDirectory) return { available: true, sessionId: null, profiles, connections, preferences: null, requests: [], renders: [] };
+            await ensureFeatureModuleRecords(active);
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const module = active.featureModules.find(item => item.id === "comfy-image-generation");
+            if (!module) return { available: false, sessionId: active.recordId, profiles: [], connections, preferences: null, requests: [], renders: [] };
+            const [settings, requests, renders] = await Promise.all([
+              store.readCollection(module.id, "settings"),
+              store.readCollection(module.id, "requests"),
+              store.readCollection(module.id, "renders"),
+            ]);
+            const requestSummaries = requests.records.map((record: any) => ({
+              ...record,
+              data: {
+                ordinal: record.data.ordinal,
+                sourceKind: record.data.sourceKind,
+                triggerKind: record.data.triggerKind,
+                promptState: record.data.promptState,
+                selectedProfileIds: record.data.selectedProfileIds,
+                dedupeKey: record.data.dedupeKey,
+                createdAt: record.data.createdAt,
+              },
+            }));
+            return { available: true, sessionId: active.recordId, profiles, connections, preferences: settings.records.find(item => item.id === "image-preferences") || null, requests: requestSummaries, renders: renders.records };
+          },
+          saveImagePreferences: async (value: any) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before saving image preferences.");
+            await ensureFeatureModuleRecords(active);
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const current = (await store.readCollection("comfy-image-generation", "settings")).records.find(item => item.id === "image-preferences");
+            if (!current) throw httpError(404, "Image preferences record was not found.");
+            const profiles = await active.comfyUi.profiles();
+            const valid = new Set(profiles.map((item: any) => item.id));
+            const selectedProfileIds = Array.isArray(value.selectedProfileIds) ? [...new Set(value.selectedProfileIds.filter((id: unknown) => typeof id === "string" && valid.has(id)))] : [];
+            const inputPolicy = value.inputPolicy && typeof value.inputPolicy === "object" ? value.inputPolicy : current.data.inputPolicy;
+            const next = { selectedProfileIds, quickMode: value.quickMode === true, inputPolicy };
+            const batchId = `image-preferences-${Date.now()}-${randomUUID()}`;
+            await executeDataBatchOrThrow(store, { protocolVersion: 1, batchId, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `update-${randomUUID()}`, moduleId: "comfy-image-generation", collectionId: "settings", recordType: "image.preferences", action: "update", targetId: current.id, expectedRevision: current.revision, data: next }] }, { access: [{ moduleId: "comfy-image-generation", collectionId: "settings", capabilities: ["image.preferences.configure"], views: ["maintenance"] }], context: { initiatorKind: "user", initiatorId: "web", binding: { turn: active.turn, messageId: null } } });
+            return { saved: true, preferences: next };
+          },
+          startImageGeneration: async (value: any) => {
+            if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "Start or resume a chat before generating an image.");
+            const module = active.featureModules.find(item => item.id === "comfy-image-generation");
+            if (!module) throw httpError(409, "The ComfyUI feature module is not loaded.");
+            const execution: any = await import(`${pathToFileURL(resolve(module.moduleDirectory, "runtime", "image-execution.mjs")).href}?web=${Date.now()}`);
+            const operationId = typeof value.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.operationId) ? value.operationId : randomUUID();
+            const payload = execution.normalizeImageOperationIntent({ ...value, operationId });
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const existing = (await store.readCollection("comfy-image-generation", "requests")).records.find(item => item.id === `image-request-${operationId}`);
+            if (existing) execution.assertImageOperationIntent(existing, payload, operationId);
+            const workflow = await configStore.copyWorkflowToCard("agent-image-generation");
+            const completedThrough = latestCompletedTurn(active);
+            const run = await active.workflowEngine.start(workflow, { cardId: active.cardId, chatId: active.recordId, turn: completedThrough, visibleThroughTurn: completedThrough, trigger: { type: "manual" }, payload, reuseActive: true });
+            return { accepted: true, runId: run.id };
+          },
+          recoverImageGeneration: async (requestId: string) => {
+            if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "Start or resume a chat before recovering image generation.");
+            const module = active.featureModules.find(item => item.id === "comfy-image-generation");
+            if (!module) throw httpError(409, "The ComfyUI feature module is not loaded.");
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const [requestState, renderState] = await Promise.all([store.readCollection("comfy-image-generation", "requests"), store.readCollection("comfy-image-generation", "renders")]);
+            const request = requestState.records.find(item => item.id === requestId);
+            if (!request) throw httpError(404, "Image request was not found.");
+            const renders = renderState.records.filter(item => item.data.requestId === requestId && ["pending", "submitting", "submitted"].includes(item.data.state));
+            if (!renders.length) return { accepted: false, requestId, reason: "no-recoverable-renders" };
+            const operationId = request.data.dedupeKey;
+            const activeRun = active.workflowEngine.snapshot().find((run: any) => run.payload?.operationId === operationId && run.status === "awaiting-recovery");
+            if (activeRun) {
+              const recovered = await active.workflowEngine.recover(activeRun.id);
+              return { accepted: true, requestId, runId: recovered.id, mode: "workflow" };
+            }
+            const execution: any = await import(`${pathToFileURL(resolve(module.moduleDirectory, "runtime", "image-execution.mjs")).href}?recover=${Date.now()}`);
+            const access = [
+              { moduleId: "comfy-image-generation", collectionId: "requests", capabilities: ["image.requests.prepare"], views: ["maintenance"] },
+              { moduleId: "comfy-image-generation", collectionId: "renders", capabilities: ["image.renders.execute"], views: ["maintenance"] },
+            ];
+            const constraints = (collectionId: string) => {
+              const item = access.find(candidate => candidate.collectionId === collectionId)!;
+              return { capabilities: item.capabilities, views: item.views, runtimeLimit: 1000, runtimeCharacters: 1000000, nodeLimit: 1000, nodeCharacters: 1000000 };
+            };
+            const data = {
+              query: (query: any) => queryData(store, query, constraints(query.collectionId)),
+              get: (query: any) => getDataRecord(store, query, constraints(query.collectionId)),
+              submit: (draft: any) => executeDataBatchOrThrow(store, draft, { access, context: { initiatorKind: "user", initiatorId: "web", binding: { turn: active?.turn || 0, messageId: null } } }),
+            };
+            if (!comfyImageExecutions.has(requestId)) {
+              const task = execution.executeImageOperation({ data, services: { comfy: active.comfyUi }, requestId, renders })
+                .catch(console.error)
+                .finally(() => comfyImageExecutions.delete(requestId));
+              comfyImageExecutions.set(requestId, task);
+            }
+            return { accepted: true, requestId, mode: "render-recovery" };
+          },
+          saveComfyConnection: async (value: any) => active?.comfyUi.saveConnection(value),
+          testComfyConnection: async (connectionId: string) => active?.comfyUi.testConnection(connectionId),
+          saveComfyProfileOverride: async (profileId: string, value: any) => active?.comfyUi.saveProfileOverride(profileId, value.prompt || value),
+          openComfyProfileDocument: async (profileId: string, target: unknown) => {
+            if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
+            const profile = (await active.comfyUi.profiles([profileId]))[0];
+            if (!profile) throw httpError(404, "ComfyUI profile was not found.");
+            const paths: Record<string, string> = { profile: resolve(profile.directory, "profile.json"), workflow: resolve(profile.directory, "workflow.api.json"), guide: resolve(active.featureModules.find(item => item.id === "comfy-image-generation")!.moduleDirectory, "skill", "guides", profile.guideId, "SKILL.md") };
+            if (typeof target !== "string" || !paths[target]) throw httpError(400, "Document target must be profile, workflow, or guide.");
+            await readFile(paths[target], "utf8"); await openLocalDocument(paths[target]);
+            return { opened: true, path: relative(active.context.cwd, paths[target]).replaceAll("\\", "/") };
+          },
+          getComfyRenderImage: async (renderId: string, outputIndex: number, preview: unknown) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before viewing generated images.");
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const render = (await store.readCollection("comfy-image-generation", "renders")).records.find(item => item.id === renderId);
+            if (!render) throw httpError(404, "Image render record was not found.");
+            const output = render.data.outputs?.[outputIndex];
+            if (!output) throw httpError(404, "Image output was not found.");
+            const cleanPreview = typeof preview === "string" && /^(webp|jpeg);\d{1,3}$/.test(preview) ? preview : null;
+            return active.comfyUi.view({ connectionId: render.data.connectionId, output, preview: cleanPreview });
+          },
+          regenerateComfyRender: async (renderId: string, contentPrompt: string, scope: "current" | "all", operationId: string) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before regenerating images.");
+            const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+            const [requestState, renderState] = await Promise.all([store.readCollection("comfy-image-generation", "requests"), store.readCollection("comfy-image-generation", "renders")]);
+            const sourceRender = renderState.records.find(item => item.id === renderId);
+            if (!sourceRender) throw httpError(404, "Image render record was not found.");
+            const sourceRequest = requestState.records.find(item => item.id === sourceRender.data.requestId);
+            if (!sourceRequest) throw httpError(404, "Source image request was not found.");
+            const profileIds = scope === "all" ? sourceRequest.data.selectedProfileIds : [sourceRender.data.profileId];
+            const profiles = await active.comfyUi.profiles(profileIds);
+            if (!profiles.length) throw httpError(409, "The adapted profile is no longer available.");
+            const ordinal = Math.max(0, ...requestState.records.map(item => Number(item.data.ordinal || 0))) + 1;
+            const promptByGuide = new Map(sourceRequest.data.contentPrompts.map((item: any) => [item.guideId, item.content]));
+            promptByGuide.set(sourceRender.data.guideId, contentPrompt);
+            const module = active.featureModules.find(item => item.id === "comfy-image-generation");
+            if (!module) throw httpError(409, "The ComfyUI feature module is not loaded.");
+            const execution: any = await import(`${pathToFileURL(resolve(module.moduleDirectory, "runtime", "image-execution.mjs")).href}?web=${Date.now()}`);
+            const access = [
+              { moduleId: "comfy-image-generation", collectionId: "requests", capabilities: ["image.requests.prepare"], views: ["maintenance"] },
+              { moduleId: "comfy-image-generation", collectionId: "renders", capabilities: ["image.renders.execute"], views: ["maintenance"] },
+            ];
+            const constraints = (collectionId: string) => {
+              const item = access.find(candidate => candidate.collectionId === collectionId)!;
+              return { capabilities: item.capabilities, views: item.views, runtimeLimit: 1000, runtimeCharacters: 1000000, nodeLimit: 1000, nodeCharacters: 1000000 };
+            };
+            const data = {
+              query: (request: any) => queryData(store, request, constraints(request.collectionId)),
+              get: (request: any) => getDataRecord(store, request, constraints(request.collectionId)),
+              submit: (draft: any) => executeDataBatchOrThrow(store, draft, { access, context: { initiatorKind: "user", initiatorId: "web", binding: { turn: active?.turn || 0, messageId: null } } }),
+            };
+            const editedContentPrompts = [...promptByGuide].map(([guideId, content]) => ({ guideId, content }));
+            const derivedFrom = { sourceRequestId: sourceRequest.id, sourceRenderId: sourceRender.id, scope };
+            const definition = execution.buildImageOperation({ operationId, ordinal, source: sourceRequest.data, profiles, contentPrompts: editedContentPrompts, chatFolder: sourceRender.data.chatFolder, services: { comfy: active.comfyUi }, derivedFrom, intent: { operationId, profileIds, inputPolicy: { kind: sourceRequest.data.sourceKind }, userDirection: sourceRequest.data.userDirection, derivedFrom, editedContentPrompts } });
+            const ensured = await execution.ensureImageOperation({ data, definition });
+            if (!comfyImageExecutions.has(definition.requestId)) {
+              const task = execution.executeImageOperation({ data, services: { comfy: active.comfyUi }, requestId: definition.requestId, renders: ensured.renders })
+                .catch(console.error)
+                .finally(() => comfyImageExecutions.delete(definition.requestId));
+              comfyImageExecutions.set(definition.requestId, task);
+            }
+            return { accepted: true, requestId: definition.requestId, renderIds: ensured.renders.map((item: any) => item.id) };
           },
           listFeatureModules: async () => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -1537,10 +2184,12 @@ export default function (pi: ExtensionAPI) {
               let dataError = "";
               if (active.sessionDirectory) {
                 try {
-                  const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
-                  const collections: Record<string, unknown> = {};
-                  for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
-                  data = { collections };
+                  if (module.view.schemaVersion === 1) {
+                    const store = activeDataStore();
+                    const collections: Record<string, unknown> = {};
+                    for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
+                    data = { collections };
+                  }
                   available = true;
                 } catch (error) {
                   if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -1548,7 +2197,6 @@ export default function (pi: ExtensionAPI) {
                   }
                 }
               }
-              const view = await readFile(module.viewPath, "utf8").then(JSON.parse);
               modules.push({
                 id: module.id,
                 title: module.title,
@@ -1556,11 +2204,163 @@ export default function (pi: ExtensionAPI) {
                 displayOrder: module.displayOrder,
                 available,
                 error: dataError,
-                view,
+                view: module.view,
                 data,
               });
             }
             return { sessionId: active.recordId, modules };
+          },
+          queryModuleFrontendRegion: async (moduleId: string, regionId: string, value: any) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId); if (!["record-browser", "story-browser"].includes(region.type)) throw new Error(`Frontend region ${regionId} is not a record or story browser.`); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            const where: Record<string, unknown> = {};
+            for (const filter of region.filters || []) {
+              let filterValue = value?.filters?.[filter.id];
+              if (filterValue === undefined || filterValue === null || filterValue === "") continue;
+              if (filter.control === "number") filterValue = Number(filterValue);
+              if (filter.control === "boolean") filterValue = filterValue === true || filterValue === "true";
+              if (filter.control === "select" && !filter.options.includes(String(filterValue))) throw httpError(400, `Filter ${filter.id} has an unsupported value.`);
+              if (filter.control === "number" && !Number.isFinite(filterValue)) throw httpError(400, `Filter ${filter.id} must be numeric.`);
+              where[filter.index] = { [filter.operator]: filterValue };
+            }
+            const search = typeof value?.search === "string" && value.search.trim() ? { query: value.search.trim().slice(0, 500) } : undefined;
+            try {
+              const view = region.type === "story-browser" ? region.indexView : region.view;
+              const maxCharacters = region.type === "story-browser" ? region.indexMaxCharacters : region.maxCharacters;
+              return await queryDataStable(activeDataStore(), { moduleId, collectionId: region.collectionId, recordTypes: region.recordTypes, where, search, view, includeInactive: region.includeInactive, cursor: value?.cursor || null, limit: region.pageSize, maxCharacters, order: region.type === "story-browser" ? "desc" : "asc" }, { capabilities: [region.readCapability], views: [view], runtimeLimit: region.pageSize, runtimeCharacters: maxCharacters });
+            } catch (error) { throw httpError(400, (error as Error).message); }
+          },
+          getModuleFrontendStory: async (moduleId: string, regionId: string, recordId: string) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "story-browser"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            const record = await getDataRecord(activeDataStore(), { moduleId, collectionId: region.collectionId, id: recordId, view: region.fullView }, { capabilities: [region.readCapability], views: [region.fullView] });
+            if (!record) throw httpError(404, `Story ${recordId} was not found.`);
+            return record;
+          },
+          openModuleAuthoritySource: async (moduleId: string, regionId: string, recordId: string) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "story-browser"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            if (!region.allowOpenAuthoritySource) throw httpError(403, "This story browser does not expose its authority source.");
+            const path = await activeDataStore().authorityFileForRecord(moduleId, region.collectionId, recordId);
+            await openLocalDocument(path);
+            return { opened: true, path: relative(active.context.cwd, path).replaceAll("\\", "/"), unsupportedDirectEdit: true };
+          },
+          getModuleFrontendHistory: async (moduleId: string, regionId: string, recordId: string, cursor: string | null) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "record-browser"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            return getDataRecordHistory(activeDataStore(), { moduleId, collectionId: region.collectionId, id: recordId, view: region.view, cursor, limit: 20 }, { capabilities: [region.readCapability], views: [region.view], runtimeLimit: 20 });
+          },
+          getModuleFrontendSettings: async (moduleId: string, regionId: string) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "settings-form"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            const store = activeDataStore();
+            const state = await store.readCollection(moduleId, region.collectionId);
+            const raw = state.records.find((item: any) => item.id === region.recordId && item.recordType === region.recordType);
+            if (!raw) throw httpError(404, `Settings record ${region.recordId} was not found.`);
+            const rendered = await getDataRecord(store, { moduleId, collectionId: region.collectionId, id: region.recordId, view: region.view }, { capabilities: [region.readCapability], views: [region.view] });
+            return { record: rendered, values: Object.fromEntries(region.fields.map((field: any) => [field.path, dataValueAt(raw, `/data${field.path}`)])) };
+          },
+          updateModuleFrontendSettings: async (moduleId: string, regionId: string, value: any) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "settings-form"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            if (!Number.isSafeInteger(value?.expectedRevision) || value.expectedRevision < 1) throw httpError(400, "expectedRevision must be a positive integer.");
+            const store = activeDataStore();
+            const state = await store.readCollection(moduleId, region.collectionId);
+            const current = state.records.find((item: any) => item.id === region.recordId && item.recordType === region.recordType);
+            if (!current) throw httpError(404, `Settings record ${region.recordId} was not found.`);
+            let next;
+            try { next = applyFrontendSettingsValues(region, current.data, value.values || {}); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            const receipt = await executeDataBatch(store, { protocolVersion: 1, batchId: `frontend-${moduleId}-${regionId}-${randomUUID()}`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `update-${randomUUID()}`, moduleId, collectionId: region.collectionId, recordType: region.recordType, action: "update", targetId: region.recordId, expectedRevision: value.expectedRevision, data: next }] }, { access: [{ moduleId, collectionId: region.collectionId, capabilities: [region.updateCapability], views: [region.view] }], context: { initiatorKind: "user", initiatorId: "web-module-frontend", binding: { turn: active?.turn || 0, messageId: null }, sourceReferences: [] } });
+            if (receipt.status !== "committed") throw httpError(receipt.results?.some((item: any) => item.code === "revision_conflict") ? 409 : 400, `Settings update failed: ${receipt.results?.[0]?.error || receipt.status}`);
+            return { saved: true, receipt };
+          },
+          runModuleFrontendWorkflow: async (moduleId: string, regionId: string, workflowId: string, value: any) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            let payload;
+            try {
+              region = frontendRegion(module, regionId, "workflow-controls");
+              payload = validateFrontendWorkflowPayload(region, workflowId, value?.payload || {});
+            } catch (error) { throw httpError(400, (error as Error).message); }
+            return startManualBackgroundWorkflow(workflowId, { ...payload, frontendModuleId: moduleId, frontendRegionId: regionId });
+          },
+          inspectModuleFrontendIntegrity: async (moduleId: string, regionId: string) => {
+            const module = requireFrontendModule(moduleId);
+            let region;
+            try { region = frontendRegion(module, regionId, "integrity-alerts"); }
+            catch (error) { throw httpError(400, (error as Error).message); }
+            if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before inspecting module integrity.");
+            const result = await inspectDataIntegrity(active.sessionDirectory, {
+              messages: active.messages,
+              allowedModuleIds: [moduleId],
+            });
+            const issues = [...result.issues];
+            if (region.coverage) {
+              const coverage = region.coverage;
+              const store = activeDataStore();
+              const state = await store.readCollection(moduleId, coverage.collectionId);
+              const archiveState = state.records.find((item: any) => item.id === coverage.stateRecordId && item.recordType === coverage.stateRecordType);
+              const settings = state.records.find((item: any) => item.id === coverage.settingsRecordId && item.recordType === coverage.settingsRecordType);
+              if (!archiveState || !settings) throw httpError(409, "Module coverage state is not initialized.");
+              const lastArchivedTurn = Number(dataValueAt(archiveState, `/data${coverage.lastArchivedTurnPath}`));
+              const enabled = dataValueAt(settings, `/data${coverage.enabledPath}`) === true;
+              const protectRecentTurns = Number(dataValueAt(settings, `/data${coverage.protectRecentTurnsPath}`));
+              const archiveEveryTurns = Number(dataValueAt(settings, `/data${coverage.archiveEveryTurnsPath}`));
+              if (![lastArchivedTurn, protectRecentTurns, archiveEveryTurns].every(Number.isSafeInteger)) throw httpError(500, "Module coverage declaration resolved invalid values.");
+              const intervals = lastArchivedTurn > 0 ? [{ start: 1, end: lastArchivedTurn }] : [];
+              const currentRevisionByMessage = new Map(active.messages.map(message => [message.id, message.revision]));
+              const acknowledgedMessages = new Set<string>();
+              for (const item of state.records.filter((entry: any) => entry.status === "active" && entry.recordType === coverage.coverageRecordType)) {
+                const start = Number(dataValueAt(item, `/data${coverage.startTurnPath}`));
+                const end = Number(dataValueAt(item, `/data${coverage.endTurnPath}`));
+                if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > 0 && end >= start) intervals.push({ start, end });
+                if (!["repair", "supplement"].includes(item.data?.operation)) continue;
+                for (const messageId of item.data?.coveredMessageIds || []) {
+                  const currentRevision = currentRevisionByMessage.get(messageId);
+                  if (item.provenance?.sourceReferences?.some((source: any) => source.kind === "message" && source.id === messageId && source.revision === currentRevision)) acknowledgedMessages.add(messageId);
+                }
+              }
+              for (let index = issues.length - 1; index >= 0; index -= 1) if (issues[index].type === "source-revised" && acknowledgedMessages.has(issues[index].messageId)) issues.splice(index, 1);
+              intervals.sort((left, right) => left.start - right.start || left.end - right.end);
+              const merged: Array<{ start: number; end: number }> = [];
+              for (const interval of intervals) {
+                const previous = merged.at(-1);
+                if (previous && interval.start <= previous.end + 1) previous.end = Math.max(previous.end, interval.end);
+                else merged.push({ ...interval });
+              }
+              const eligibleLastTurn = Math.max(0, latestCompletedTurn(active) - protectRecentTurns);
+              if (enabled && eligibleLastTurn > 0) {
+                let cursor = 1;
+                for (const interval of merged) {
+                  if (interval.end < cursor) continue;
+                  if (interval.start > cursor) issues.push({ id: `coverage:${cursor}:${Math.min(eligibleLastTurn, interval.start - 1)}`, type: "coverage-gap", severity: "warning", moduleId, startTurn: cursor, endTurn: Math.min(eligibleLastTurn, interval.start - 1), batchIds: [], targets: [] });
+                  cursor = Math.max(cursor, interval.end + 1);
+                  if (cursor > eligibleLastTurn) break;
+                }
+                if (cursor <= eligibleLastTurn && eligibleLastTurn - cursor + 1 >= archiveEveryTurns) issues.push({ id: `coverage:${cursor}:${eligibleLastTurn}`, type: "coverage-gap", severity: "warning", moduleId, startTurn: cursor, endTurn: eligibleLastTurn, batchIds: [], targets: [] });
+              }
+            }
+            issues.sort((left: any, right: any) => left.startTurn - right.startTurn || left.type.localeCompare(right.type));
+            return { ...result, issues, action: region.action, empty: region.empty };
+          },
+          inspectDataImpact: async (messageId: string, revision: number | null, moduleId: string | null) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Start or resume a chat before inspecting data impact.");
+            const installed = active.featureModules.map(item => item.id);
+            if (moduleId && !installed.includes(moduleId)) throw httpError(404, `Feature module ${moduleId} is not available.`);
+            return inspectDataImpact(active.sessionDirectory, { messageId, revision, allowedModuleIds: moduleId ? [moduleId] : installed });
           },
           openFeatureModuleDocument: async (moduleId: string, target: unknown) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -1573,7 +2373,7 @@ export default function (pi: ExtensionAPI) {
             } else {
               if (!active.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening module data.");
               await ensureFeatureModuleRecords(active);
-              const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(item => ({ contract: item.contract, moduleDirectory: item.moduleDirectory })) });
+              const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
               const collections: Record<string, unknown> = {};
               for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
               documentPath = resolve(active.sessionDirectory, "workspace", "public", "module-views", `${module.id}.json`);
@@ -1709,7 +2509,7 @@ export default function (pi: ExtensionAPI) {
           },
           updateMessage: async (sequence: number, content: string) => {
             if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "There is no active saved chat to edit.");
-            if (active.pending || !active.context.isIdle()) throw httpError(409, "Wait for the current Pi response before editing messages.");
+            if (bridgeBusy(active)) throw httpError(409, "Wait for the current turn and its blocking background workflows before editing messages.");
             const index = active.messages.findIndex(message => message.sequence === sequence);
             if (index === -1) throw httpError(404, "Saved message was not found.");
             const previous = active.messages[index];
@@ -1722,12 +2522,13 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: active.pending || !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
             };
           },
           deleteMessage: async (sequence: number) => {
             if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "There is no active saved chat to edit.");
-            if (active.pending || !active.context.isIdle()) throw httpError(409, "Wait for the current Pi response before deleting messages.");
+            if (bridgeBusy(active)) throw httpError(409, "Wait for the current turn and its blocking background workflows before deleting messages.");
             const index = active.messages.findIndex(message => message.sequence === sequence);
             if (index === -1) throw httpError(404, "Saved message was not found.");
             const deleted = active.messages.splice(index);
@@ -1768,7 +2569,8 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: active.pending || !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
             };
           },
           resumeSession: async (sessionId: string) => {
@@ -1810,7 +2612,8 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
             };
           },
           selectOpening: async (opening: any) => {
@@ -1821,7 +2624,8 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: active.pending || !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
             };
           }
           const createdAt = new Date().toISOString();
@@ -1834,36 +2638,40 @@ export default function (pi: ExtensionAPI) {
             kind: "opening",
             content: opening.content,
             createdAt,
+            narrativeSource: { producerKind: "card", producerId: active.cardId, layer: "story", characterId: null },
           });
           await updateMetadata();
+          await dispatchWorkflowEvent({ type: "after-opening", openingId: opening.id, messageId: openingRecord?.id || null }, { id: `opening-${opening.id}`, turn: 0 });
           return {
             sessionId: active.recordId,
             openingId: active.openingId,
             playerName: active.playerName,
             messages: recordsToWebMessages(active.messages),
-            busy: !active.context.isIdle(),
+            busy: bridgeBusy(active),
+            blockingWorkflows: blockingTurnWorkflows(active),
           };
           },
           submitInput: async (content: string) => {
           if (!active?.openingId) throw httpError(409, "Select an opening first.");
           if (active.pending || !active.context.isIdle()) throw httpError(409, "Pi is still processing the previous message.");
-          for (const run of active.workflowEngine.snapshot()) {
-            if (run.kind !== "turn-background" || ["completed", "failed", "cancelled"].includes(run.status)) continue;
-            const workflow = await active.configStore.getWorkflow(run.workflowId);
-            const blocking = workflow.nodes.some((node: any) => node.blockNextTurn && !["completed", "skipped", "failed", "cancelled"].includes(run.nodes[node.id]?.status));
-            if (blocking) throw httpError(409, `Background workflow ${workflow.title} must finish before the next player turn.`);
+          const blockers = active.workflowEngine.blockingTurnRuns();
+          if (blockers.length) {
+            const first = blockers[0];
+            const additional = blockers.length > 1 ? ` and ${blockers.length - 1} other workflow(s)` : "";
+            throw httpError(409, `Background workflow ${first.workflowTitle}${additional} must finish or be cancelled before the next player turn.`);
           }
           await ensureActiveRecord();
           await cleanupArtifacts(active.sessionDirectory!, { type: "turn", turn: active.turn + 1 });
           active.turn += 1;
           active.pending = true;
-          await appendMessage({
+          const userRecord = await appendMessage({
             sequence: active.messages.length,
             turn: active.turn,
             role: "user",
             kind: "message",
             content,
             createdAt: new Date().toISOString(),
+            narrativeSource: { producerKind: "user", producerId: null, layer: "in-world", characterId: null },
           });
           await updateMetadata();
           rpRun = {
@@ -1888,6 +2696,8 @@ export default function (pi: ExtensionAPI) {
           try {
             const workflow = await active.configStore.getWorkflow(active.activeWorkflowId);
             if (workflow.kind !== "foreground") throw new Error(`Active workflow ${workflow.id} is not a foreground workflow.`);
+            const finalizer = workflow.nodes.find((node: any) => node.type === "turn-finalize");
+            rpRun.workflowNarrativeNodeId = finalizer?.narrative?.fromNode || null;
             const workflowRunId = `workflow-${randomUUID()}`;
             rpRun.workflowRunId = workflowRunId;
             await active.workflowEngine.start(workflow, {
@@ -1896,6 +2706,7 @@ export default function (pi: ExtensionAPI) {
               chatId: active.recordId,
               turn: active.turn,
               trigger: { type: "player-input" },
+              sourceReferences: userRecord ? [messageSourceReference(userRecord)] : [],
               payload: { currentInput: content, userSequence: rpRun.submittedSequence },
             });
           } catch (error) {
@@ -1920,7 +2731,8 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: active.pending || !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
               settings: active.commonSettings,
             };
           },
@@ -1944,7 +2756,8 @@ export default function (pi: ExtensionAPI) {
               openingId: active.openingId,
               playerName: active.playerName,
               messages: recordsToWebMessages(active.messages),
-              busy: active.pending || !active.context.isIdle(),
+              busy: bridgeBusy(active),
+              blockingWorkflows: blockingTurnWorkflows(active),
               settings: active.commonSettings,
               deletedPlayerName: removed.name,
             };
@@ -1995,7 +2808,7 @@ export default function (pi: ExtensionAPI) {
     const nodeId = rpRun.workflowNarrativeNodeId;
     const node = entry?.workflow?.nodes?.find((item: any) => item.id === nodeId);
     if (!entry || !node) throw new Error("The active RP workflow node is unavailable.");
-    return { entry, node, store: new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: active.featureModules.map(module => ({ contract: module.contract, moduleDirectory: module.moduleDirectory })) }) };
+    return { entry, node, store: new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) }) };
   }
 
   function nodeDataAccess(node: any, moduleId: string, collectionId: string) {
@@ -2033,13 +2846,14 @@ export default function (pi: ExtensionAPI) {
       const { entry, node, store } = currentDataNode();
       await requireCurrentAgentTool(entry, node, "rp_data_query");
       const access = nodeDataAccess(node, parameters.moduleId, parameters.collectionId);
+      const budget = resolveNodeQueryBudget(access, entry.run.payload);
       const result = await queryData(store, parameters, {
         capabilities: access.capabilities,
         views: access.views,
-        runtimeLimit: 20,
-        runtimeCharacters: 6000,
-        nodeLimit: access.queryBudget?.maxRecords || 20,
-        nodeCharacters: access.queryBudget?.maxCharacters || 6000,
+        runtimeLimit: budget.maxRecords,
+        runtimeCharacters: budget.maxCharacters,
+        nodeLimit: budget.maxRecords,
+        nodeCharacters: budget.maxCharacters,
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
     },
@@ -2117,7 +2931,7 @@ export default function (pi: ExtensionAPI) {
       const receipt = await executeDataBatch(store, batch, {
         access: node.moduleAccess,
         allowBestEffort: node.dataCommit?.allowBestEffort === true,
-        context: { initiatorKind: "agent", initiatorId: node.agentId || node.id, workflowId: entry.workflow.id, workflowRunId: entry.run.id, nodeId: node.id, binding: { turn: entry.run.turn || 0, messageId: rpRun?.assistantMessageId || null } },
+        context: { initiatorKind: "agent", initiatorId: node.agentId || node.id, workflowId: entry.workflow.id, workflowRunId: entry.run.id, nodeId: node.id, binding: { turn: entry.run.turn || 0, messageId: rpRun?.assistantMessageId || null }, sourceReferences: entry.run.sourceReferences || [] },
       });
       return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
     },
@@ -2175,6 +2989,7 @@ export default function (pi: ExtensionAPI) {
       }
       const receipt = { source, mode: policy.agent.mode, decision: parameters.decision, selector: parameters.selector || null, status, error: error || null, selectedRecordIds: selected.map(record => record.id), queriedAt: new Date().toISOString() };
       rpRun.agentQueries.push(receipt);
+      if (rpRun.workflowRunId) await active.workflowEngine.addSourceReferences(rpRun.workflowRunId, selected.map(messageSourceReference));
       await writeContextReceipt(active, rpRun);
       return { content: [{ type: "text", text: [`RP message query: ${status}`, error ? `Reason: ${error}` : "", authoritativeTranscript(active, selected)].filter(Boolean).join("\n\n") }], details: receipt };
     },
@@ -2208,145 +3023,6 @@ export default function (pi: ExtensionAPI) {
       if (result.cancelled) context.ui.notify("Web RP chat selection was cancelled.", "warning");
     },
   });
-  pi.on("before_agent_start", async event => {
-    if (!active?.pending || !rpRun) return;
-    if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
-    if (rpRun.phase !== "narrative" || event.prompt.trim() !== rpRun.submittedText.trim()) return;
-    return {
-      systemPrompt: [
-        event.systemPrompt,
-          rpRun.modelHeadPrompt,
-          rpRun.nodeAgentPrompt,
-        await fixedRpContext(active),
-        messageRetrievalFixedContext(active),
-        featureModuleFixedContext(active),
-        rpRun.workflowNodePrompt,
-      ].join("\n\n"),
-    };
-  });
-
-  pi.on("context", async event => {
-    if (!active?.pending || !rpRun) return;
-    if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
-
-    if (rpRun.phase !== "narrative") return;
-
-    let boundary = -1;
-    for (let index = event.messages.length - 1; index >= 0; index -= 1) {
-      const message = event.messages[index];
-      if (message.role === "user" && messageText(message) === rpRun.submittedText.trim()) {
-        boundary = index;
-        break;
-      }
-    }
-    if (boundary === -1) return;
-
-    if (rpRun.contextContent === null) {
-      const workflowRun = rpRun.workflowRunId
-        ? active.workflowEngine.snapshot().find((run: any) => run.id === rpRun!.workflowRunId)
-        : null;
-      const workflowDefinition = workflowRun ? await active.configStore.getWorkflow(workflowRun.workflowId) : null;
-      const narrativeNode = workflowDefinition?.nodes.find((node: any) => node.id === rpRun!.workflowNarrativeNodeId);
-      const upstreamIds = narrativeNode
-        ? new Set(narrativeNode.context.fromNodes.length ? narrativeNode.context.fromNodes : narrativeNode.dependsOn)
-        : new Set();
-      const upstreamOutputs = workflowRun && narrativeNode?.context.mode !== "fixed"
-        ? Object.values(workflowRun.nodes).filter((state: any) => upstreamIds.has(state.id) && state.status === "completed" && state.output !== null)
-        : [];
-      rpRun.contextContent = [
-        "# Web RP context for this turn",
-        await buildDynamicProcessorContext(active, rpRun),
-        await buildAutomaticContext(active, rpRun),
-        upstreamOutputs.length ? `# Completed workflow-node outputs\n${JSON.stringify(upstreamOutputs, null, 2)}` : "",
-      ].join("\n\n");
-      await writeContextReceipt(active, rpRun);
-    }
-    const authoritativeContext = {
-      role: "custom" as const,
-      customType: "pi-rp-authoritative-context",
-      content: rpRun.contextContent,
-      display: false,
-      details: {
-        cardId: active.cardId,
-        sessionId: active.recordId,
-        userSequence: rpRun.submittedSequence,
-      },
-      timestamp: Date.now(),
-    };
-
-    return {
-      messages: [
-        authoritativeContext,
-        event.messages[boundary],
-        ...event.messages.slice(boundary + 1),
-        ...(rpRun.modelTailPrompt ? [{
-          role: "custom" as const,
-          customType: "pi-rp-model-tail",
-          content: rpRun.modelTailPrompt,
-          display: false,
-          details: { modelId: "workflow-selected" },
-          timestamp: Date.now(),
-        }] : []),
-      ],
-    };
-  });
-
-  pi.on("agent_end", async event => {
-    if (!active?.pending || !rpRun) return;
-    if (active.cardId !== rpRun.cardId || active.recordId !== rpRun.recordId) return;
-    if ((event as any).willRetry) return;
-    const nodeUsage = tokenUsageFromMessages(event.messages, rpRun.phaseStartedAt || 0);
-    const nodeProcessRecord = lastAgentExchange(event.messages, rpRun.phaseStartedAt || 0);
-    if (rpRun.phase !== "narrative") return;
-    const assistant = [...event.messages].reverse().find((message: any) => message.role === "assistant");
-    const content = messageText(assistant);
-    if (!content) return;
-    rpRun.assistantContent = content;
-    const assistantRecord = await appendMessage({
-      sequence: active.messages.length,
-      turn: active.turn,
-      role: "assistant",
-      kind: "message",
-      content,
-      createdAt: new Date().toISOString(),
-    });
-    if (!assistantRecord) return;
-    rpRun.assistantMessageId = assistantRecord.id;
-    await updateMetadata();
-    const resolveNarrative = rpRun.resolveNarrative;
-    rpRun.resolveNarrative = null;
-    rpRun.rejectNarrative = null;
-    resolveNarrative?.({ output: content, usage: nodeUsage, processRecord: nodeProcessRecord });
-    rpRun.phase = "done";
-  });
-
-  pi.on("agent_settled", async () => {
-    const settledRun = rpRun;
-    if (!settledRun) return;
-    let keepForWorkflowRetry = false;
-    try {
-      if (settledRun.rejectNarrative) {
-        keepForWorkflowRetry = true;
-        const rejectNarrative = settledRun.rejectNarrative;
-        settledRun.resolveNarrative = null;
-        settledRun.rejectNarrative = null;
-        rejectNarrative(new Error("The narrative agent settled without producing a saved response."));
-      }
-      if (!active?.pending) return;
-      if (active.cardId !== settledRun.cardId || active.recordId !== settledRun.recordId) return;
-      await writeContextReceipt(active, settledRun);
-      if (settledRun.baseModel && (active.context.model?.provider !== settledRun.baseModel.provider || active.context.model?.id !== settledRun.baseModel.id)) {
-        await pi.setModel(settledRun.baseModel);
-      }
-    } finally {
-      if (keepForWorkflowRetry) return;
-      if (active?.cardId === settledRun.cardId && active.recordId === settledRun.recordId) {
-        active.pending = false;
-      }
-      if (rpRun === settledRun) rpRun = null;
-    }
-  });
-
   pi.on("session_before_switch", stopBridge);
   pi.on("session_shutdown", stopBridge);
 }

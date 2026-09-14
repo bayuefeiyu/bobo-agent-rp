@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 3, "id": "prepare-private-context", "ownerModuleId": "world-narrative-coordinator", "title": "准备完整导演私有上下文", "description": "导出完整私有记录目录、当前交接、深度报告与设置，不截断或修改权威数据。", "kind": "module-external", "agentCallable": false,
+  "interface": { "inputs": {}, "exports": { "context": { "format": "document-set", "kind": "directory", "description": "含CURRENT.md、DOCUMENTS.md及全部导演记录快照。" } } },
+  "revision": "1", "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 8 },
+  "nodes": [
+    { "id": "prepare", "type": "code", "outputs": { "context": { "path": "private-context", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "moduleAccess": [
+      { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.read"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.read"], "views": ["daily-director"], "queryBudget": { "maxRecords": 100, "maxCharacters": 1000000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["runtime"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } }
+    ], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/prepare-private-context.mjs" } },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["prepare"], "exports": { "context": { "fromNode": "prepare", "output": "context" } }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

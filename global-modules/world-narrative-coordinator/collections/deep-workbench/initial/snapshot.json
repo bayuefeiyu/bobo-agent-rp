@@ -1,0 +1,10 @@
+[
+  {
+    "protocolVersion": 2, "id": "deep-report-current", "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "recordType": "director.deep-report", "dataSchemaVersion": 1, "sequence": 0, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "basisTurn": 0, "basisWorldTime": null, "previousRevision": 0, "coverage": [], "assumptions": [], "invalidatingSignals": [], "summary": "尚无深度推演报告。", "content": "", "worldNarrativeTopics": [{ "topicId": "initial-active", "title": "待首次推演的活跃题材", "status": "active", "premise": "首次深度推演后替换。", "conditions": [], "boundaries": [], "suggestedAngles": [], "invalidatingSignals": [] }, { "topicId": "initial-backup", "title": "待首次推演的备用题材", "status": "backup", "premise": "首次深度推演后替换。", "conditions": [], "boundaries": [], "suggestedAngles": [], "invalidatingSignals": [] }], "nextReviewTriggers": [] }, "note": null, "provenance": {}
+  },
+  {
+    "protocolVersion": 2, "id": "deep-state-current", "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "recordType": "director.deep-state", "dataSchemaVersion": 1, "sequence": 1, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "status": "idle", "currentRunId": null, "lastTriggerTurn": null, "lastTriggerWorldTime": null, "lastCompletedTurn": null, "lastCompletedWorldTime": null, "currentReportRevision": 1, "triggerReasons": [], "failure": null }, "note": null, "provenance": {}
+  }
+]

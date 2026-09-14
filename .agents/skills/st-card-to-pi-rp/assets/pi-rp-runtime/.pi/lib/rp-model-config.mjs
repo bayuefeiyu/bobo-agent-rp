@@ -74,6 +74,19 @@ export function composeNodePrompt({ piSystemPrompt, modelHead, agentPrompt, fixe
   return { systemPrompt, contextMessages };
 }
 
+export function composeWorkflowNodeDynamicContext({ workflowKind, turn, recentCompleteTurns, recentContext, callContext, documentWorkspace, handoffMirrorRoots = [], customContext }) {
+  return [
+    Number.isSafeInteger(turn) ? `Turn: ${turn}` : "",
+    workflowKind === "foreground" && Number.isSafeInteger(turn) && recentContext ? `Most recent ${recentCompleteTurns} complete turns:\n${recentContext}` : "",
+    callContext ? "Module call inputs: CALL-INPUTS.md" : "",
+    documentWorkspace ? "Workspace document index: WORKSPACE-DOCUMENTS.md" : "",
+    !documentWorkspace && handoffMirrorRoots.length
+      ? `Inherited workspace mirror roots: ${handoffMirrorRoots.join(", ")}\nPaths recorded inside inherited maps are relative to their corresponding mirror root unless the producing workflow deliberately renamed an output.`
+      : "",
+    customContext,
+  ].filter(Boolean).join("\n\n");
+}
+
 export function promptHash(value) {
   return value && value.trim() ? `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}` : null;
 }

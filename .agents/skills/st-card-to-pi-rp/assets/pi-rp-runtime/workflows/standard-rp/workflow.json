@@ -1,10 +1,11 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "id": "standard-rp",
   "title": "标准角色扮演回合",
-  "description": "使用基本上下文生成一条正文，并在后台功能完成后提交本回合。",
+  "description": "以普通 Agent 节点在精简初始上下文和节点文档工作区上完成规划、按需查询与正文创作。",
   "kind": "foreground",
-  "revision": "1",
+  "revision": "4",
+  "turnContext": { "recentCompleteTurns": 5 },
   "defaults": {
     "agentId": "narrative-writer",
     "modelId": "pi:current",
@@ -14,22 +15,154 @@
   "trigger": { "type": "manual" },
   "nodes": [
     {
-      "id": "narrative",
-      "title": "正文创作",
-      "description": "生成本轮唯一的玩家可见正文。",
-      "type": "narrative",
-      "retry": { "maxAttempts": 3 },
+      "id": "prepare-document-workspace",
+      "title": "初始化节点文档工作区",
+      "description": "建立本轮上游资料工作区；模块准备调用可显式插入在此节点与下游 Agent 之间。",
+      "type": "code",
+      "retry": { "maxAttempts": 1 },
       "context": { "mode": "fixed" },
-      "outputs": {},
+      "outputs": {
+        "workspace-overview": {
+          "path": "workspace-overview.md",
+          "format": "markdown",
+          "scope": "workflow",
+          "retain": "run"
+        },
+        "upstream-context": {
+          "path": "upstream-context.md",
+          "format": "markdown",
+          "scope": "workflow",
+          "retain": "run"
+        },
+        "recent-turns": {
+          "path": "recent-complete-turns.md",
+          "format": "markdown",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          { "output": "workspace-overview" },
+          { "output": "upstream-context" },
+          { "output": "recent-turns" }
+        ]
+      },
       "moduleAccess": [],
-      "dataCommit": { "onNodeEnd": [] }
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "builtin": "prepare-document-workspace",
+        "documentIndex": {
+          "workspace-overview": {
+            "readPolicy": "optional",
+            "authority": "advisory",
+            "appliesAt": "planning",
+            "description": "本轮节点文档工作区的结构说明。"
+          },
+          "upstream-context": {
+            "readPolicy": "required",
+            "authority": "binding",
+            "appliesAt": "planning-and-writing",
+            "perspective": "general",
+            "priority": 100,
+            "description": "在正文创作前由已配置上下文处理器生成的上游资料；未生成时文件不存在。"
+          },
+          "recent-turns": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "analysis-planning-writing",
+            "perspective": "story",
+            "priority": 100,
+            "description": "按工作流窗口一次性冻结的最近完整聊天回合；后续快照复用此文件。"
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-recent-narrative-stories",
+      "title": "准备近期非正文故事",
+      "description": "若近场或广域叙事模块已安装，按正文统一窗口导出摘要目录和按需全文。",
+      "type": "code",
+      "dependsOn": ["prepare-card-context"],
+      "outputs": { "stories": { "path": "recent-narrative-stories", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "stories" }] },
+      "moduleAccess": [],
+      "workflowCalls": ["local-scene-narrative/export-recent-stories", "world-scope-narrative/export-recent-stories"],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": ".pi/workflow/prepare-recent-narrative-stories.mjs", "documentIndex": { "stories": { "readPolicy": "conditional", "authority": "canonical", "appliesAt": "analysis-planning-writing", "priority": 85, "description": "最近若干正文轮次所对应的已发布近场、广域故事摘要目录及按需全文。" } } }
+    },
+    {
+      "id": "prepare-card-context",
+      "title": "准备卡片创作资料",
+      "description": "按正文节点通常需要的类别，导出本卡全部静态创作资料快照。",
+      "type": "call",
+      "target": "card-context-library/export-context",
+      "dependsOn": ["prepare-document-workspace"],
+      "arguments": {
+        "categories": ["world", "character", "narrative-guidance", "rule", "style", "format", "reference"]
+      },
+      "documents": {},
+      "outputPaths": { "context": "card-context" },
+      "outputs": {
+        "context": { "path": "card-context", "format": "document-set", "scope": "workflow", "retain": "run" }
+      },
+      "workspaceHandoff": { "include": [{ "output": "context" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "documentIndex": {
+          "context": {
+            "readPolicy": "required",
+            "authority": "binding",
+            "appliesAt": "planning-writing-checking",
+            "perspective": "general",
+            "priority": 90,
+            "description": "本卡世界观、人物、创作指导、规则、文风、格式和参考资料的分类快照；先读其中 DOCUMENTS.md。"
+          }
+        }
+      }
+    },
+    {
+      "id": "write-narrative",
+      "title": "规划与正文创作",
+      "description": "读取节点工作区文档清单，先形成初步规划，按需调用获准的模块工作流，再修正规划并完成正文。",
+      "type": "agent",
+      "dependsOn": ["prepare-recent-narrative-stories"],
+      "retry": { "maxAttempts": 3 },
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-document-workspace", "prepare-card-context", "prepare-recent-narrative-stories"] },
+      "prompt": "先读取 WORKSPACE-DOCUMENTS.md，并依据其中的路径、readPolicy、authority、appliesAt 和说明使用已准备资料。先结合固定设定、工作流配置的最近完整回合、当前玩家输入和工作区资料形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，则在初步分析完成后调用一次；context由运行时自动冻结当前已授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导，再修正规划。其他模块调用只按节点作者写明的时机与要求执行。完成正文后最终回复只包含玩家可见正文，不展示规划、检查过程、工具调用或文档清单。",
+      "outputs": {
+        "narrative": {
+          "path": "narrative.md",
+          "format": "narrative",
+          "scope": "workflow",
+          "retain": "run"
+        },
+        "post-turn-context": {
+          "path": "post-turn-context",
+          "format": "document-workspace-snapshot",
+          "kind": "directory",
+          "scope": "turn",
+          "retain": "turn"
+        }
+      },
+      "moduleAccess": [],
+      "workflowCalls": [
+        { "target": "world-narrative-coordinator/pre-director-update", "documentSnapshotInput": "context", "maxCalls": 1 },
+        { "target": "world-narrative-coordinator/materialize-guidance", "fixedArguments": { "publicationId": "publication-narrative", "channel": "narrative" }, "maxCalls": 1 }
+      ],
+      "dataCommit": { "onNodeEnd": [] },
+      "narrativeSource": { "layer": "story" },
+      "metadata": { "documentWorkspace": true, "documentWorkspaceSnapshot": { "output": "post-turn-context" } }
     },
     {
       "id": "finalize-turn",
-      "title": "提交回合",
-      "description": "标记本轮已完成；回合编号只在下一条用户消息被接受时推进。",
+      "title": "完成本回合",
+      "description": "发布选定的正文输出；回合编号只在下一条用户消息被接受时推进。",
       "type": "turn-finalize",
-      "dependsOn": ["narrative"],
+      "dependsOn": ["write-narrative"],
+      "narrative": { "fromNode": "write-narrative", "output": "narrative" },
       "outputs": {},
       "moduleAccess": [],
       "dataCommit": { "onNodeEnd": [] }

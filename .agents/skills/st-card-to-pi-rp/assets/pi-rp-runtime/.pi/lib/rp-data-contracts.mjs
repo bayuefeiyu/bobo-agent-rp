@@ -30,7 +30,7 @@ function safeRelativePath(value, label) {
 }
 
 function pointer(value, label) {
-  if (typeof value !== "string" || !value.startsWith("/data/")) throw new Error(`${label} must be an RFC 6901 pointer below /data/.`);
+  if (typeof value !== "string" || (value !== "/data" && !value.startsWith("/data/"))) throw new Error(`${label} must be an RFC 6901 pointer at or below /data/.`);
   return value;
 }
 

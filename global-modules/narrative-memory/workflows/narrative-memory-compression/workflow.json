@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-compression",
+  "title": "叙事记忆事件压缩",
+  "description": "在有效事件目录达到阈值时，以非阻塞后台工作流建立事件摘要。",
+  "kind": "module-internal",
+  "revision": "2",
+  "defaults": {
+    "agentId": "narrative-memory-compressor",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "prepare-compression",
+      "title": "检查并冻结有效目录",
+      "description": "检查当前阈值，生成只含目录信息的有效事件快照。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.compression.read"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.compression.read"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "routeFromOutput": "route",
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/prepare-compression.mjs"
+      }
+    },
+    {
+      "id": "materialize-compression-snapshot",
+      "title": "生成压缩规划资料",
+      "description": "仅在满足压缩条件时，使用资格节点已冻结的有效目录生成时间线资料。",
+      "type": "code",
+      "dependsOn": ["prepare-compression"],
+      "conditions": [{ "nodeId": "prepare-compression", "routes": ["compress"] }],
+      "retry": { "maxAttempts": 1 },
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-compression"] },
+      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/materialize-compression-snapshot.mjs",
+        "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "compression-planning", "priority": 100, "description": "由已冻结的有效目录生成的压缩资料；先读其中DOCUMENTS.md。" } }
+      }
+    },
+    {
+      "id": "plan-compression",
+      "title": "规划语义分组",
+      "description": "只根据有效目录提出可合并分组。",
+      "type": "agent",
+      "agentId": "narrative-memory-compressor",
+      "modelId": "pi:current",
+      "dependsOn": ["materialize-compression-snapshot"],
+      "conditions": [
+        {
+          "nodeId": "prepare-compression",
+          "routes": [
+            "compress"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": ["materialize-compression-snapshot"]
+      },
+      "prompt": "根据有效事件目录提出压缩分组。",
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true }
+    },
+    {
+      "id": "commit-compression",
+      "title": "派生并提交摘要",
+      "description": "展开叶事件、检查分组并原子创建摘要和更新阈值。",
+      "type": "code",
+      "dependsOn": [
+        "plan-compression"
+      ],
+      "conditions": [
+        {
+          "nodeId": "prepare-compression",
+          "routes": [
+            "compress"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-compression",
+          "plan-compression"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read",
+            "memory.compression.write"
+          ],
+          "views": [
+            "archive",
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.update",
+            "memory.compression.write"
+          ],
+          "views": [
+            "archive",
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 100,
+            "maxCharacters": 100000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/commit-compression.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit-compression"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

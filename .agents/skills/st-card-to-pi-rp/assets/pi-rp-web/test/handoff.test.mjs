@@ -59,4 +59,11 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(styles, /grid-template-columns: minmax\(360px, 1fr\) 360px/);
   assert.match(styles, /@media \(max-width: 1020px\)/);
   assert.match(styles, /grid-template-columns: 48px minmax\(0, 1fr\)/);
+  assert.match(app, /region\.type === "image-generation"/);
+  assert.match(app, /快速模式/);
+  assert.match(app, /源文件找不到；提示词仍可重新生成/);
+  assert.match(page, /id="image-positive-prompt"[^>]*readonly/);
+  assert.match(page, /id="image-regenerate-scope"/);
+  assert.match(page, /id="comfy-connection-form"/);
+  assert.match(app, /updateWorkflowTrigger|\/trigger/);
 });

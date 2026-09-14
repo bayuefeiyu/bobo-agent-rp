@@ -1,0 +1,611 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-archive",
+  "title": "叙事记忆两级归档",
+  "description": "按冷却和保护回合归档连续剧情；运行期间由公共调度器阻止下一轮输入。",
+  "kind": "module-internal",
+  "revision": "2",
+  "defaults": {
+    "agentId": "narrative-memory-archive-indexer",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "prepare-reference-snapshot",
+      "title": "准备完整记忆目录",
+      "description": "通过公共快照工作流取得归档所需的完整目录。",
+      "type": "call",
+      "dependsOn": ["prepare-archive"],
+      "conditions": [{ "nodeId": "prepare-archive", "routes": ["archive"] }],
+      "target": "narrative-memory/narrative-memory-reference-snapshot",
+      "arguments": { "catalog": {} },
+      "documents": {},
+      "outputPaths": { "snapshot": "reference-snapshot" },
+      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "完整记忆目录；先读其中DOCUMENTS.md。" } } }
+    },
+    {
+      "id": "prepare-archive",
+      "title": "确定归档范围并组装上下文",
+      "description": "计算冷却与保护范围，区分早期参考剧情和本次归档剧情，读取来源捕获及摘要超限任务。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "routeFromOutput": "route",
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/prepare-archive.mjs"
+      }
+    },
+    {
+      "id": "materialize-archive-task",
+      "title": "生成归档任务资料",
+      "description": "仅在需要归档时，把已冻结的范围和来源组装为按用途分开的文档集。",
+      "type": "code",
+      "dependsOn": ["prepare-archive"],
+      "conditions": [{ "nodeId": "prepare-archive", "routes": ["archive"] }],
+      "retry": { "maxAttempts": 1 },
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-archive"] },
+      "outputs": { "task": { "path": "archive-task", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "task" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/materialize-archive-task.mjs",
+        "documentIndex": { "task": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "已冻结的待归档剧情、参考、模块来源及使用指导。" } }
+      }
+    },
+    {
+      "id": "archive-checklist",
+      "title": "列出客观归档清单",
+      "description": "不分析、不定性，只列出需要新增和修改的记录及主要内容。",
+      "type": "agent",
+      "agentId": "narrative-memory-archive-indexer",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "prepare-reference-snapshot",
+        "materialize-archive-task"
+      ],
+      "conditions": [
+        {
+          "nodeId": "prepare-archive",
+          "routes": [
+            "archive"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-reference-snapshot",
+          "materialize-archive-task"
+        ]
+      },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的归档任务资料和完整目录，按Agent职责输出客观清单。",
+      "outputs": { "checklist": { "path": "archive-checklist.md", "format": "markdown", "kind": "file", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "checklist" }] },
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true, "textOutput": "checklist", "documentIndex": { "checklist": { "readPolicy": "required", "authority": "advisory", "appliesAt": "archiving", "priority": 90, "description": "一级Agent生成的客观归档清单。" } } }
+    },
+    {
+      "id": "archive-model",
+      "title": "审查并生成归档变更",
+      "description": "独立语义建模，输出原子统一变更批次。",
+      "type": "agent",
+      "agentId": "narrative-memory-archive-editor",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "archive-checklist"
+      ],
+      "conditions": [
+        {
+          "nodeId": "prepare-archive",
+          "routes": [
+            "archive"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-reference-snapshot",
+          "materialize-archive-task",
+          "archive-checklist"
+        ]
+      },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的原始归档资料、完整目录和一级清单，完成归档变更。",
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true }
+    },
+    {
+      "id": "commit-archive",
+      "title": "校验并原子提交",
+      "description": "派生确定性字段、校验引用和版本，提交成功后推进归档范围。",
+      "type": "code",
+      "dependsOn": [
+        "archive-model"
+      ],
+      "conditions": [
+        {
+          "nodeId": "prepare-archive",
+          "routes": [
+            "archive"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-archive",
+          "archive-model"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.update"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 100,
+            "maxCharacters": 100000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/commit-archive.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit-archive"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

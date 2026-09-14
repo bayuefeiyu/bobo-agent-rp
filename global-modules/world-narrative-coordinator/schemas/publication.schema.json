@@ -1,0 +1,5 @@
+{
+  "type": "object", "required": ["channel", "items"],
+  "properties": { "channel": { "type": "string", "minLength": 1 }, "items": { "type": "array", "items": { "type": "object", "required": ["guidanceId"], "properties": { "guidanceId": { "type": "string", "minLength": 1 }, "note": { "type": ["string", "null"] } }, "additionalProperties": false } } },
+  "additionalProperties": false
+}

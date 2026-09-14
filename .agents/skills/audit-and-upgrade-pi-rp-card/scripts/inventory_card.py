@@ -98,12 +98,13 @@ def manifest_references(manifest: dict[str, Any]) -> list[tuple[str, str]]:
     source = manifest.get("source")
     if isinstance(source, dict):
         add("source.artifact", source.get("artifact"))
-    for field in ("fixed_context", "primary_characters", "context_processors", "feature_modules"):
+    add("fixed_context", manifest.get("fixed_context"))
+    for field in ("context_processors", "feature_modules"):
         values = manifest.get(field)
         if isinstance(values, list):
             for index, value in enumerate(values):
                 add(f"{field}[{index}]", value)
-    for field in ("knowledge_map", "context_policy", "context_skill"):
+    for field in ("context_policy", "context_skill"):
         add(field, manifest.get(field))
     openings = manifest.get("openings")
     if isinstance(openings, list):
@@ -147,6 +148,8 @@ def module_inventory(card_root: Path, project_root: Path, manifest: dict[str, An
         module_root = definition_path.parent
         contract_file = definition.get("dataContractFile")
         contract = load_json(module_root / contract_file) if isinstance(contract_file, str) else None
+        resource_file = definition.get("resourceCatalogFile")
+        resource_catalog = load_json(module_root / resource_file) if isinstance(resource_file, str) else None
         collections = contract.get("collections") if isinstance(contract, dict) and isinstance(contract.get("collections"), dict) else {}
         capabilities = contract.get("capabilities") if isinstance(contract, dict) and isinstance(contract.get("capabilities"), dict) else {}
         upstream = project_root / "global-modules" / str(module_id) if isinstance(module_id, str) else None
@@ -154,8 +157,11 @@ def module_inventory(card_root: Path, project_root: Path, manifest: dict[str, An
             "id": module_id,
             "manifestPath": value,
             "surface": definition.get("surface"),
+            "moduleKind": definition.get("moduleKind"),
             "basedOn": definition.get("basedOn"),
             "dataContractVersion": contract.get("schemaVersion") if isinstance(contract, dict) else None,
+            "resourceCatalogVersion": resource_catalog.get("schemaVersion") if isinstance(resource_catalog, dict) else None,
+            "resourceDocuments": len(resource_catalog.get("documents", [])) if isinstance(resource_catalog, dict) and isinstance(resource_catalog.get("documents"), list) else 0,
             "collections": [
                 {
                     "id": collection_id,
@@ -199,6 +205,7 @@ def workflow_inventory(card_root: Path, project_root: Path, runtime_template: Pa
                     "type": node.get("type"),
                     "dependsOn": node.get("dependsOn", []),
                     "outputs": node.get("outputs", {}),
+                    "workspaceHandoff": node.get("workspaceHandoff", {"include": []}),
                     "moduleAccess": node.get("moduleAccess", []),
                     "dataCommit": node.get("dataCommit", {"onNodeEnd": []}),
                 }

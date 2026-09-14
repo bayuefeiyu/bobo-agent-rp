@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 6,
+  "id": "world-narrative-coordinator",
+  "moduleKind": "data",
+  "basedOn": null,
+  "title": "世界叙事统筹",
+  "description": "在世界逻辑推演的基础上孵化设定、统筹长期方向、监督节奏烈度，并按频道向创作工作流发布最小充分指导。",
+  "surface": "background",
+  "contextOrder": 450,
+  "displayOrder": 450,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": null,
+  "frontendViewFile": null,
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/prepare-private-context/workflow.json",
+    "workflows/materialize-guidance/workflow.json",
+    "workflows/director-health-report/workflow.json",
+    "workflows/pre-director-update/workflow.json",
+    "workflows/post-director-update/workflow.json",
+    "workflows/review-story-candidates/workflow.json",
+    "workflows/deep-director-planning/workflow.json",
+    "workflows/director-data-maintenance/workflow.json",
+    "workflows/director-integrity-repair/workflow.json"
+  ]
+}

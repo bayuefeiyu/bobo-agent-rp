@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 3, "id": "export-recent-stories", "ownerModuleId": "world-scope-narrative", "title": "导出近期广域故事", "description": "按正文统一窗口导出摘要目录和不含摘要的全文入口。", "kind": "module-external", "agentCallable": false,
+  "interface": { "inputs": { "throughTurn": { "type": "parameter", "required": true, "valueType": "integer", "description": "当前已完成正文轮次。" }, "recentCompleteTurns": { "type": "parameter", "required": true, "valueType": "integer", "description": "正文工作流的统一最近回合窗口。" } }, "exports": { "stories": { "format": "document-set", "kind": "directory", "description": "近期故事摘要目录及全文文件。" } } },
+  "revision": "1", "defaults": { "agentId": null, "modelId": null, "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 10 },
+  "nodes": [
+    { "id": "export", "type": "code", "outputs": { "stories": { "path": "stories", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "moduleAccess": [{ "moduleId": "world-scope-narrative", "collectionId": "story-publications", "capabilities": ["world-story.creative.read"], "views": ["creative-index", "creative-full"], "queryBudget": { "maxRecords": 2000, "maxCharacters": 2000000 } }], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-scope-narrative/runtime/workflow/export-recent-stories.mjs" } },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["export"], "exports": { "stories": { "fromNode": "export", "output": "stories" } }, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

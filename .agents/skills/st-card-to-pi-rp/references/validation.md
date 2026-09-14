@@ -10,7 +10,7 @@ Run:
 python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
 ```
 
-The validator checks the manifest, safe paths, openings, provenance, context processors, module v4 definitions, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, workflow v2 nodes/outputs/access/commits, frontend declarations, and referenced files.
+The validator checks card manifest v2, the single fixed foundation path, required card-context-library registration, safe paths, openings, provenance, context processors, module v6 kinds and owned workflow files, resource catalog/document coverage, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, top-level workflow v3 nodes/outputs/access/commits, frontend declarations, and referenced files.
 
 ## Coverage and fidelity
 
@@ -23,6 +23,8 @@ Every non-empty source unit has one explicit disposition: mapped, metadata-only,
 - generated runtime text describes behavior, not invented story facts.
 
 Preserve unusual diction, pacing, motifs, biased narration, deliberate contradictions, and information boundaries. Do not promote a character belief to objective truth or leak opening-specific state.
+
+Confirm that the creator accepted the final foundation/library division before implementation. The foundation must remain compact and source-supported; every other static creative document must be listed exactly once in the card-context-library catalog, use a deliberate indivisible boundary, and retain a provenance route. Treat an exact full-document duplicate between the foundation and a library document as an error.
 
 ## Unified-data audit
 
@@ -37,8 +39,10 @@ Validate the DAG, conditions, joins, retries, triggers, instance policy, blockin
 - change files are declared outputs with format `unified-change-batch`;
 - `dataCommit.onNodeEnd` names exact outputs/paths and runs before downstream nodes;
 - concurrent nodes do not write the same authoritative collection incompatibly;
-- scoped artifacts and retention match every later consumer;
+- scoped file/directory artifacts and retention match every later consumer, and every node-to-node transfer appears only in the producer's explicit `workspaceHandoff.include`;
 - process records remain user-only.
+
+For each module call, also verify that the target is a declared module workflow, every required input is supplied, export paths and formats match exactly, and any `fixedArguments`/`allowedArguments` policy names only declared parameter inputs. For card-context-library exports, test each requested category set, the generated `DOCUMENTS.md`, whole-document copying, duplicate-path collisions, and choice-group instructions; metadata guides Agent judgment and is not a hard-coded read executor.
 
 Across workflows, build a trigger and ownership map. Detect cycles, duplicate starts, unstable dedupe keys, incompatible concurrent writes, and conflicting assumptions about record status or schema.
 

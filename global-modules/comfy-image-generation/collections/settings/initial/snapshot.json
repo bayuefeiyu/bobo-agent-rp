@@ -1,0 +1,23 @@
+[
+  {
+    "protocolVersion": 2,
+    "id": "image-preferences",
+    "moduleId": "comfy-image-generation",
+    "collectionId": "settings",
+    "recordType": "image.preferences",
+    "dataSchemaVersion": 1,
+    "sequence": 0,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-09-03T00:00:00.000Z",
+    "updatedAt": "2026-09-03T00:00:00.000Z",
+    "binding": { "messageId": null, "turn": 0 },
+    "data": {
+      "selectedProfileIds": [],
+      "quickMode": false,
+      "inputPolicy": { "kind": "recent-turns", "turnCount": 3, "target": "latest" }
+    },
+    "note": null,
+    "provenance": {}
+  }
+]

@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeDataContract } from "./rp-data-contracts.mjs";
 import { RpDataStore } from "./rp-data-store.mjs";
-import { executeDataBatch } from "./rp-data-changes.mjs";
-import { queryData } from "./rp-data-query.mjs";
-import { commitDataFiles } from "./rp-data-transactions.mjs";
+import { assertCommittedDataReceipt, executeDataBatch, executeDataBatchOrThrow } from "./rp-data-changes.mjs";
+import { getDataRecordHistory, queryData, queryDataStable } from "./rp-data-query.mjs";
+import { commitDataFiles, inspectDataImpact, inspectDataIntegrity } from "./rp-data-transactions.mjs";
 
 const contract = normalizeDataContract({
   schemaVersion: 1,
@@ -34,6 +34,20 @@ const contract = normalizeDataContract({
     "rumor.query": { collections: ["entries"], actions: ["query"], views: ["rp"] },
     "rumor.write": { collections: ["entries"], actions: ["create", "update", "archive", "restore", "delete", "increase-spread"], views: [] },
   },
+});
+
+test("strict data submissions accept committed receipts and reject failed or partial receipts", async () => {
+  const committed = { batchId: "ok", status: "committed", results: [] };
+  assert.equal(assertCommittedDataReceipt(committed), committed);
+  for (const status of ["failed", "partial"]) {
+    const receipt = { batchId: `batch-${status}`, status, results: [{ status: "failed", code: "revision_conflict", error: "stale revision" }] };
+    assert.throws(() => assertCommittedDataReceipt(receipt), error => {
+      assert.equal(error.code, "revision_conflict");
+      assert.equal(error.receipt, receipt);
+      return true;
+    });
+  }
+  await assert.rejects(executeDataBatchOrThrow({}, {}, { }), /must be an object|protocolVersion|batch/i);
 });
 
 async function fixture(t) {
@@ -110,6 +124,52 @@ test("revision conflicts and permissions reject silent writes", async t => {
   const state = await store.readCollection("rumors", "entries");
   assert.equal(state.records[0].revision, 1);
   assert.equal(state.records[0].status, "active");
+});
+
+test("data receipts retain exact input revisions and impact inspection is read-only", async t => {
+  const { store } = await fixture(t);
+  const sourceReferences = [
+    { kind: "message", id: "message.one", revision: 1, narrativeSource: { producerKind: "user", layer: "in-world" } },
+    { kind: "message", id: "message.two", revision: 3, narrativeSource: { producerKind: "agent", producerId: "writer", layer: "story" } },
+  ];
+  const receipt = await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "batch-sourced",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "op-sourced", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.sourced", data: { content: "有来源", source: "character.queen" } }],
+  }, { access: { rumors: ["rumor.write"] }, context: { workflowId: "archive", workflowRunId: "run.1", nodeId: "commit", binding: { turn: 9, messageId: "message.two" }, sourceReferences } });
+  assert.deepEqual(receipt.sourceReferences.map(item => [item.id, item.revision]), [["message.one", 1], ["message.two", 3]]);
+  assert.equal(receipt.targets[0].moduleId, "rumors");
+  const record = (await store.readCollection("rumors", "entries")).records[0];
+  assert.deepEqual(record.provenance.sourceReferences, receipt.sourceReferences);
+  const before = JSON.stringify(record);
+  const impact = await inspectDataImpact(store.sessionDirectory, { messageId: "message.two", revision: 3, allowedModuleIds: ["rumors"] });
+  assert.equal(impact.matched, true);
+  assert.equal(impact.batches[0].batchId, "batch-sourced");
+  assert.deepEqual(impact.batches[0].matchedRevisions, [3]);
+  assert.equal(JSON.stringify((await store.readCollection("rumors", "entries")).records[0]), before);
+  assert.equal((await inspectDataImpact(store.sessionDirectory, { messageId: "message.two", revision: 2 })).matched, false);
+  assert.equal((await inspectDataImpact(store.sessionDirectory, { messageId: "message.two", revision: 3, allowedModuleIds: ["other"] })).matched, false);
+  const changed = await inspectDataIntegrity(store.sessionDirectory, { messages: [{ id: "message.two", revision: 4, binding: { turn: 9 } }], allowedModuleIds: ["rumors"] });
+  assert.deepEqual(changed.issues.map(item => [item.type, item.startTurn, item.recordedRevisions, item.currentRevision]), [["source-revised", 9, [3], 4]]);
+});
+
+test("frontend keyset pagination remains stable while records are added and revised", async t => {
+  const { store } = await fixture(t);
+  const create = (batchId, id, content) => executeDataBatch(store, { protocolVersion: 1, batchId, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `op-${batchId}`, moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: id, data: { content, source: "character.queen" } }] }, { access: { rumors: ["rumor.write"] } });
+  await create("stable-one", "rumor.one", "一");
+  await create("stable-two", "rumor.two", "二");
+  const access = { capabilities: ["rumor.query"], views: ["rp"], runtimeLimit: 1, runtimeCharacters: 1000 };
+  const first = await queryDataStable(store, { moduleId: "rumors", collectionId: "entries", view: "rp", limit: 1 }, access);
+  assert.deepEqual(first.items.map(item => item.id), ["rumor.one"]);
+  await create("stable-three", "rumor.three", "三");
+  await executeDataBatch(store, { protocolVersion: 1, batchId: "stable-revise", status: "pending", commitPolicy: "atomic", operations: [{ operationId: "op-stable-revise", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "update", targetId: "rumor.one", expectedRevision: 1, data: { content: "一改", source: "character.queen" } }] }, { access: { rumors: ["rumor.write"] } });
+  const second = await queryDataStable(store, { moduleId: "rumors", collectionId: "entries", view: "rp", limit: 1, cursor: first.nextCursor }, access);
+  const third = await queryDataStable(store, { moduleId: "rumors", collectionId: "entries", view: "rp", limit: 1, cursor: second.nextCursor }, access);
+  assert.deepEqual([second.items[0].id, third.items[0].id], ["rumor.two", "rumor.three"]);
+  const history = await getDataRecordHistory(store, { moduleId: "rumors", collectionId: "entries", id: "rumor.one", view: "rp", limit: 10 }, { capabilities: ["rumor.query"], views: ["rp"], runtimeLimit: 10 });
+  assert.deepEqual(history.items.map(item => item.revision), [2, 1]);
 });
 
 test("best-effort commits require explicit workflow authorization", async t => {

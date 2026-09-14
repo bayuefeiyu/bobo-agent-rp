@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 3,
+  "id": "agent-image-generation",
+  "title": "Agent 剧情生图",
+  "description": "解析显式输入范围，为每类模型生成一次画面内容片段，并调用已适配的 ComfyUI 工作流。",
+  "kind": "module-internal",
+  "revision": "1",
+  "defaults": {
+    "agentId": "image-prompt-writer",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 2,
+    "dedupeKey": "$.request.operationId"
+  },
+  "writeLocks": [
+    { "moduleId": "comfy-image-generation", "collectionId": "requests" },
+    { "moduleId": "comfy-image-generation", "collectionId": "renders" }
+  ],
+  "nodes": [
+    {
+      "id": "resolve-input",
+      "title": "解析生图输入",
+      "description": "冻结参考内容、生图目标、模型指导和所选工作流。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {
+        "prompt-context": {
+          "path": "prompt-context",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          { "output": "prompt-context" }
+        ]
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "settings",
+          "capabilities": [
+            "image.preferences.read"
+          ],
+          "views": [
+            "rp"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 2000
+          }
+        },
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "requests",
+          "capabilities": [
+            "image.requests.prepare"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "routeFromOutput": "route",
+      "metadata": {
+        "entryFile": "features/comfy-image-generation/runtime/workflow/resolve-input.mjs",
+        "documentIndex": {
+          "prompt-context": {
+            "readPolicy": "required",
+            "authority": "task-input",
+            "appliesAt": "prompt-writing",
+            "perspective": "image-generation",
+            "priority": 100,
+            "description": "本次生图目标、连续性资料与各模型提示词规则。"
+          }
+        }
+      }
+    },
+    {
+      "id": "generate-content-prompts",
+      "title": "生成画面内容提示词",
+      "description": "按每个不同模型指导，仅生成随剧情变化的画面内容片段。",
+      "type": "agent",
+      "agentId": "image-prompt-writer",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "resolve-input"
+      ],
+      "conditions": [
+        {
+          "nodeId": "resolve-input",
+          "routes": [
+            "prompt"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "fixedContext": "none",
+        "documentWorkspace": true
+      }
+    },
+    {
+      "id": "persist-and-render",
+      "title": "记录并执行生图",
+      "description": "原子建立请求和待执行记录，再依序提交 ComfyUI 并记录结果。",
+      "type": "code",
+      "dependsOn": [
+        "resolve-input",
+        "generate-content-prompts"
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "resolve-input",
+          "generate-content-prompts"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "requests",
+          "capabilities": [
+            "image.requests.prepare"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        },
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "renders",
+          "capabilities": [
+            "image.renders.execute"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 20,
+            "maxCharacters": 50000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/comfy-image-generation/runtime/workflow/persist-and-render.mjs",
+        "unboundData": true
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "persist-and-render"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "comfy-image-generation",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "required": ["name", "catalogSummary", "templateMode", "templateId", "templateVersion", "sourceEntryIds", "coveredEventIds", "precedingSummaryIds", "timeRange", "locationIds", "overviewInformationControl", "sections", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "catalogSummary": { "type": "string" },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "sourceEntryIds": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "coveredEventIds": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "precedingSummaryIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "timeRange": {
+      "type": "object",
+      "required": ["displayStart", "displayEnd", "startTrueTime", "endTrueTime", "startSortValue", "endSortValue", "timeRuleVersion"],
+      "properties": {
+        "displayStart": { "type": "string", "minLength": 1 },
+        "displayEnd": { "type": ["string", "null"] },
+        "startTrueTime": { "type": "string", "minLength": 1 },
+        "endTrueTime": { "type": "string", "minLength": 1 },
+        "startSortValue": { "type": "string", "minLength": 1 },
+        "endSortValue": { "type": "string", "minLength": 1 },
+        "timeRuleVersion": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "locationIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "overviewInformationControl": {
+      "type": "object",
+      "required": ["mode", "knowerIds"],
+      "properties": { "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "sections": { "type": "object", "additionalProperties": true },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

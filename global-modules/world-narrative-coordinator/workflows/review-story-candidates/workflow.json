@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 3,
+  "id": "review-story-candidates",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "统审非正文故事候选",
+  "description": "后置导演的第二次Agent调用：只审核硬冲突和逻辑硬伤，输出完整发布包并顺手记录必要监督。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "turn-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot"], "description": "含本轮正文和受控资料的后置快照。" },
+      "local-candidate": { "type": "document", "required": false, "kind": "directory", "formats": ["story-candidate"], "description": "近场候选。" },
+      "world-candidate": { "type": "document", "required": false, "kind": "directory", "formats": ["story-candidate"], "description": "广域候选。" }
+    },
+    "exports": { "reviewed": { "format": "reviewed-story-set", "kind": "directory", "description": "按模块分目录的已审核完整发布包；被扣留者仅写状态。" } }
+  },
+  "revision": "1",
+  "defaults": { "agentId": "world-narrative-story-reviewer", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state" }],
+  "nodes": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agentId": "world-narrative-story-reviewer",
+      "prompt": "读取turn-context及实际存在的local-candidate、world-candidate全文和最小元数据。仅检查硬性冲突与明显逻辑硬伤，按既有事实和本轮正文>广域>近场处理。输出JSON对象：decisions对象下只为存在的候选填写local/world，每项含decision、reason；replace时还必须含完整story和完整metadata，accept-original/withhold时不得含story或metadata。另含directorBatch，格式为 {\"operations\": [...]}，operations可为空且只能操作world-narrative-coordinator/private-state；协议版本、原子提交策略和批次ID由代码补齐。不得输出修订指令。",
+      "outputs": {},
+      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "documentWorkspace": true, "callInputs": ["turn-context", "local-candidate", "world-candidate"] }
+    },
+    {
+      "id": "assemble",
+      "type": "code",
+      "dependsOn": ["review"],
+      "context": { "mode": "previous-output", "fromNodes": ["review"] },
+      "outputs": { "reviewed": { "path": "reviewed", "format": "reviewed-story-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "reviewed" }] },
+      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }],
+      "workflowCalls": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/assemble-reviewed-stories.mjs", "sourceNode": "review", "callInputs": ["local-candidate", "world-candidate"] }
+    },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["assemble"], "exports": { "reviewed": { "fromNode": "assemble", "output": "reviewed" } }, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

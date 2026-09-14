@@ -1,0 +1,4 @@
+{
+  "schemaVersion": 3, "id": "director-opening-bootstrap", "title": "开场导演初始化", "description": "开场展示后初始化相关导演状态，并阻塞首次输入。", "kind": "turn-background", "revision": "1", "defaults": { "agentId": "world-narrative-daily-director", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 }, "trigger": { "type": "after-opening", "blockNextTurnUntilReady": true },
+  "nodes": [{ "id": "bootstrap", "type": "call", "target": "world-narrative-coordinator/post-director-update", "arguments": { "phase": "opening" }, "documents": {}, "outputPaths": { "delegations": "delegations" }, "outputs": { "delegations": { "path": "delegations", "format": "director-delegation-plan", "kind": "directory", "scope": "workflow", "retain": "run" } }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }]
+}

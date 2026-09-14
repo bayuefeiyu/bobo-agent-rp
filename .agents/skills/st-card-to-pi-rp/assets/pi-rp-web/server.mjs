@@ -27,6 +27,15 @@ function sendBinary(response, status, body, mimeType) {
   response.end(body);
 }
 
+function sendCachedBinary(response, status, body, mimeType) {
+  response.writeHead(status, {
+    "content-type": mimeType,
+    "content-length": body.length,
+    "cache-control": "private, max-age=300",
+  });
+  response.end(body);
+}
+
 async function readJson(request) {
   const chunks = [];
   let size = 0;
@@ -200,12 +209,109 @@ export function createApplication({ cardStore, bridge }) {
       if (request.method === "GET" && url.pathname === "/api/modules") {
         return sendJson(response, 200, await bridge.listFeatureModules());
       }
+      if (request.method === "GET" && url.pathname === "/api/data-impact") {
+        const revisionText = url.searchParams.get("revision");
+        const revision = revisionText === null ? null : Number(revisionText);
+        if (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) {
+          const error = new Error("revision must be a positive integer.");
+          error.status = 400;
+          throw error;
+        }
+        const moduleId = url.searchParams.get("moduleId");
+        return sendJson(response, 200, await bridge.inspectDataImpact(
+          cleanId(url.searchParams.get("messageId"), "messageId"),
+          revision,
+          moduleId === null ? null : cleanId(moduleId, "moduleId"),
+        ));
+      }
+      if (request.method === "GET" && url.pathname === "/api/image-generation") {
+        return sendJson(response, 200, await bridge.getImageGeneration());
+      }
+      if (request.method === "PUT" && url.pathname === "/api/image-generation/preferences") {
+        return sendJson(response, 200, await bridge.saveImagePreferences(await readJson(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/image-generation/run") {
+        return sendJson(response, 202, await bridge.startImageGeneration(await readJson(request)));
+      }
+      const imageRecoveryMatch = url.pathname.match(/^\/api\/image-generation\/requests\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/recover$/);
+      if (request.method === "POST" && imageRecoveryMatch) {
+        return sendJson(response, 202, await bridge.recoverImageGeneration(cleanId(imageRecoveryMatch[1], "requestId")));
+      }
+      if (request.method === "POST" && url.pathname === "/api/image-generation/connections") {
+        return sendJson(response, 200, await bridge.saveComfyConnection(await readJson(request)));
+      }
+      const comfyTestMatch = url.pathname.match(/^\/api\/image-generation\/connections\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/test$/);
+      if (request.method === "POST" && comfyTestMatch) {
+        return sendJson(response, 200, await bridge.testComfyConnection(cleanId(comfyTestMatch[1], "connectionId")));
+      }
+      const profileOverrideMatch = url.pathname.match(/^\/api\/image-generation\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/override$/);
+      if (request.method === "PUT" && profileOverrideMatch) {
+        return sendJson(response, 200, await bridge.saveComfyProfileOverride(cleanId(profileOverrideMatch[1], "profileId"), await readJson(request)));
+      }
+      const profileOpenMatch = url.pathname.match(/^\/api\/image-generation\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/open$/);
+      if (request.method === "POST" && profileOpenMatch) {
+        const body = await readJson(request);
+        return sendJson(response, 200, await bridge.openComfyProfileDocument(cleanId(profileOpenMatch[1], "profileId"), body.target));
+      }
+      const renderImageMatch = url.pathname.match(/^\/api\/image-generation\/renders\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/images\/(\d+)$/);
+      if (request.method === "GET" && renderImageMatch) {
+        const image = await bridge.getComfyRenderImage(cleanId(renderImageMatch[1], "renderId"), Number(renderImageMatch[2]), url.searchParams.get("preview"));
+        return sendCachedBinary(response, 200, image.body, image.mimeType);
+      }
+      const renderRegenerateMatch = url.pathname.match(/^\/api\/image-generation\/renders\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regenerate$/);
+      if (request.method === "POST" && renderRegenerateMatch) {
+        const body = await readJson(request);
+        return sendJson(response, 202, await bridge.regenerateComfyRender(cleanId(renderRegenerateMatch[1], "renderId"), cleanText(body.contentPrompt, "contentPrompt", 20000), body.scope === "all" ? "all" : "current", cleanId(body.operationId, "operationId")));
+      }
       const moduleDocumentMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/open$/);
       if (request.method === "POST" && moduleDocumentMatch) {
         const body = await readJson(request);
         return sendJson(response, 200, await bridge.openFeatureModuleDocument(
           cleanId(moduleDocumentMatch[1], "moduleId"),
           body.target,
+        ));
+      }
+      const moduleRecordsMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/records$/);
+      if (request.method === "GET" && moduleRecordsMatch) {
+        const filters = {};
+        for (const [key, value] of url.searchParams) if (key.startsWith("filter.")) filters[cleanId(key.slice(7), "filterId")] = value;
+        return sendJson(response, 200, await bridge.queryModuleFrontendRegion(
+          cleanId(moduleRecordsMatch[1], "moduleId"),
+          cleanId(moduleRecordsMatch[2], "regionId"),
+          { cursor: url.searchParams.get("cursor"), search: url.searchParams.get("search") || "", filters },
+        ));
+      }
+      const moduleHistoryMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/records\/([a-zA-Z0-9][a-zA-Z0-9._:-]*)\/history$/);
+      if (request.method === "GET" && moduleHistoryMatch) {
+        return sendJson(response, 200, await bridge.getModuleFrontendHistory(
+          cleanId(moduleHistoryMatch[1], "moduleId"), cleanId(moduleHistoryMatch[2], "regionId"), cleanId(moduleHistoryMatch[3], "recordId"), url.searchParams.get("cursor"),
+        ));
+      }
+      const moduleStoryMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/stories\/([a-zA-Z0-9][a-zA-Z0-9._:-]*)$/);
+      if (request.method === "GET" && moduleStoryMatch) {
+        return sendJson(response, 200, await bridge.getModuleFrontendStory(cleanId(moduleStoryMatch[1], "moduleId"), cleanId(moduleStoryMatch[2], "regionId"), cleanId(moduleStoryMatch[3], "recordId")));
+      }
+      const moduleStorySourceMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/stories\/([a-zA-Z0-9][a-zA-Z0-9._:-]*)\/open-source$/);
+      if (request.method === "POST" && moduleStorySourceMatch) {
+        return sendJson(response, 200, await bridge.openModuleAuthoritySource(cleanId(moduleStorySourceMatch[1], "moduleId"), cleanId(moduleStorySourceMatch[2], "regionId"), cleanId(moduleStorySourceMatch[3], "recordId")));
+      }
+      const moduleSettingsMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/settings$/);
+      if (request.method === "GET" && moduleSettingsMatch) {
+        return sendJson(response, 200, await bridge.getModuleFrontendSettings(cleanId(moduleSettingsMatch[1], "moduleId"), cleanId(moduleSettingsMatch[2], "regionId")));
+      }
+      if (request.method === "PUT" && moduleSettingsMatch) {
+        return sendJson(response, 200, await bridge.updateModuleFrontendSettings(cleanId(moduleSettingsMatch[1], "moduleId"), cleanId(moduleSettingsMatch[2], "regionId"), await readJson(request)));
+      }
+      const moduleIntegrityMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/integrity$/);
+      if (request.method === "GET" && moduleIntegrityMatch) {
+        return sendJson(response, 200, await bridge.inspectModuleFrontendIntegrity(
+          cleanId(moduleIntegrityMatch[1], "moduleId"), cleanId(moduleIntegrityMatch[2], "regionId"),
+        ));
+      }
+      const moduleWorkflowMatch = url.pathname.match(/^\/api\/modules\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/regions\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/workflows\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/run$/);
+      if (request.method === "POST" && moduleWorkflowMatch) {
+        return sendJson(response, 202, await bridge.runModuleFrontendWorkflow(
+          cleanId(moduleWorkflowMatch[1], "moduleId"), cleanId(moduleWorkflowMatch[2], "regionId"), cleanId(moduleWorkflowMatch[3], "workflowId"), await readJson(request),
         ));
       }
       if (request.method === "GET" && url.pathname === "/api/models") {
@@ -268,6 +374,10 @@ export function createApplication({ cardStore, bridge }) {
           await readJson(request),
         ));
       }
+      const workflowTriggerMatch = url.pathname.match(/^\/api\/workflows\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/trigger$/);
+      if (request.method === "PUT" && workflowTriggerMatch) {
+        return sendJson(response, 200, await bridge.updateWorkflowTrigger(cleanId(workflowTriggerMatch[1], "workflowId"), await readJson(request)));
+      }
       const retryRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/retry$/);
       if (request.method === "POST" && retryRunMatch) {
         return sendJson(response, 202, await bridge.retryWorkflowNode(
@@ -276,9 +386,20 @@ export function createApplication({ cardStore, bridge }) {
           await readJson(request),
         ));
       }
+      const recoverRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/recover$/);
+      if (request.method === "POST" && recoverRunMatch) {
+        return sendJson(response, 202, await bridge.recoverWorkflowNode(
+          cleanId(recoverRunMatch[1], "runId"),
+          cleanId(recoverRunMatch[2], "nodeId"),
+        ));
+      }
       const cancelRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/cancel$/);
       if (request.method === "POST" && cancelRunMatch) {
         return sendJson(response, 200, await bridge.cancelWorkflowRun(cleanId(cancelRunMatch[1], "runId")));
+      }
+      const skipRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/skip$/);
+      if (request.method === "POST" && skipRunMatch) {
+        return sendJson(response, 200, await bridge.skipWorkflowRun(cleanId(skipRunMatch[1], "runId")));
       }
       if (request.method === "GET" && url.pathname === "/api/user-avatar") {
         const playerName = cleanText(url.searchParams.get("playerName"), "playerName", 200);

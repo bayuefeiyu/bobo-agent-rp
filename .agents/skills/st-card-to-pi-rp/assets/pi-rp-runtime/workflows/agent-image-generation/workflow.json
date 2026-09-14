@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 3,
+  "id": "agent-image-generation",
+  "title": "Agent 剧情生图入口",
+  "description": "顶层手动入口；同步调用剧情生图模块内部工作流。",
+  "kind": "global-background",
+  "revision": "2",
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 2, "dedupeKey": "$.operationId" },
+  "trigger": { "type": "manual" },
+  "nodes": [{
+    "id": "generate",
+    "type": "call",
+    "target": "comfy-image-generation/agent-image-generation",
+    "arguments": {},
+    "documents": {},
+    "outputPaths": {},
+    "outputs": {},
+    "moduleAccess": [],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "argumentSources": { "request": "$" } }
+  }]
+}

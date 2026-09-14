@@ -23,6 +23,21 @@ ALLOWED_TRANSFORMS = {
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
+RUNTIME_SERVICES = {"random"}
+
+
+def validate_runtime_services(node: dict[str, Any], label: str, errors: list[str]) -> None:
+    services = node.get("runtimeServices", [])
+    if not isinstance(services, list) or any(not isinstance(service, str) for service in services):
+        errors.append(f"{label}.runtimeServices must be a string array")
+        return
+    if len(services) != len(set(services)):
+        errors.append(f"{label}.runtimeServices must not contain duplicates")
+    if services and node.get("type", "agent") != "code":
+        errors.append(f"{label}.runtimeServices is supported only for code nodes")
+    unsupported = sorted(set(services) - RUNTIME_SERVICES)
+    if unsupported:
+        errors.append(f"{label}.runtimeServices contains unsupported services: {unsupported}")
 
 
 def supported_image_type(path: Path) -> str | None:
@@ -297,13 +312,190 @@ def validate_data_record_v2(value: Any, module_id: str, collection_id: str, reco
         errors.append(f"{label}.data must be an object")
 
 
+def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, errors: list[str]) -> None:
+    if not isinstance(view, dict) or set(view) != {"schemaVersion", "regions"} or view.get("schemaVersion") not in {1, 2} or not isinstance(view.get("regions"), list):
+        errors.append(f"{label} must contain schemaVersion 1 or 2 and a regions array")
+        return
+    if view["schemaVersion"] == 1:
+        return
+    interactive = {"record-browser", "settings-form", "workflow-controls", "integrity-alerts"}
+    legacy = {"text", "markdown", "json", "key-value", "list", "table", "image-generation"}
+    seen: set[str] = set()
+    collections = contract.get("collections", {})
+    capabilities = contract.get("capabilities", {})
+    for index, region in enumerate(view["regions"]):
+        region_label = f"{label}.regions[{index}]"
+        if not isinstance(region, dict) or region.get("type") not in interactive | legacy:
+            errors.append(f"{region_label} has an unsupported type")
+            continue
+        if region.get("type") not in interactive:
+            continue
+        region_id = region.get("id")
+        if not isinstance(region_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", region_id) or region_id in seen:
+            errors.append(f"{region_label}.id is invalid or duplicate")
+        else:
+            seen.add(region_id)
+        if not isinstance(region.get("title"), str) or not region["title"].strip():
+            errors.append(f"{region_label}.title is required")
+        if region.get("type") == "workflow-controls":
+            workflows = region.get("workflows")
+            if not isinstance(workflows, list) or not workflows:
+                errors.append(f"{region_label}.workflows must be a non-empty array")
+            elif any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("parameters", []), list) for item in workflows):
+                errors.append(f"{region_label}.workflows is invalid")
+            continue
+        if region.get("type") == "integrity-alerts":
+            action = region.get("action")
+            if not isinstance(action, dict) or not all(isinstance(action.get(key), str) for key in ("workflowRegionId", "workflowId", "startTurnParameter", "endTurnParameter")):
+                errors.append(f"{region_label}.action is invalid")
+            coverage = region.get("coverage")
+            if coverage is not None:
+                if not isinstance(coverage, dict):
+                    errors.append(f"{region_label}.coverage must be an object")
+                    continue
+                collection_id = coverage.get("collectionId")
+                collection = collections.get(collection_id)
+                record_types = [coverage.get("stateRecordType"), coverage.get("settingsRecordType"), coverage.get("coverageRecordType")]
+                if not isinstance(collection, dict) or any(item not in collection.get("recordTypes", {}) for item in record_types):
+                    errors.append(f"{region_label}.coverage references unknown records")
+                    continue
+                view_id = coverage.get("view")
+                if any(view_id not in collection["recordTypes"][item].get("views", {}) for item in record_types):
+                    errors.append(f"{region_label}.coverage view is not declared by every record type")
+                read_capability = capabilities.get(coverage.get("readCapability"), {})
+                if collection_id not in read_capability.get("collections", []) or "query" not in read_capability.get("actions", []) or view_id not in read_capability.get("views", []):
+                    errors.append(f"{region_label}.coverage capability does not grant the declared view")
+            continue
+        collection_id = region.get("collectionId")
+        collection = collections.get(collection_id)
+        if not isinstance(collection, dict):
+            errors.append(f"{region_label}.collectionId is unknown")
+            continue
+        record_types = region.get("recordTypes") if region.get("type") == "record-browser" else [region.get("recordType")]
+        if not isinstance(record_types, list) or not record_types or any(item not in collection.get("recordTypes", {}) for item in record_types):
+            errors.append(f"{region_label} references unknown record types")
+            continue
+        view_id = region.get("view")
+        if any(view_id not in collection["recordTypes"][item].get("views", {}) for item in record_types):
+            errors.append(f"{region_label}.view is not declared by every record type")
+        read_capability = capabilities.get(region.get("readCapability"), {})
+        if collection_id not in read_capability.get("collections", []) or "query" not in read_capability.get("actions", []) or view_id not in read_capability.get("views", []):
+            errors.append(f"{region_label}.readCapability does not grant the declared view")
+        if region.get("type") == "settings-form":
+            update_capability = capabilities.get(region.get("updateCapability"), {})
+            if collection_id not in update_capability.get("collections", []) or "update" not in update_capability.get("actions", []):
+                errors.append(f"{region_label}.updateCapability does not grant update")
+            if not isinstance(region.get("recordId"), str) or not isinstance(region.get("fields"), list) or not region["fields"]:
+                errors.append(f"{region_label} requires recordId and editable fields")
+    workflow_regions = {region.get("id"): region for region in view["regions"] if isinstance(region, dict) and region.get("type") == "workflow-controls"}
+    for index, region in enumerate(view["regions"]):
+        if not isinstance(region, dict) or region.get("type") != "integrity-alerts" or not isinstance(region.get("action"), dict):
+            continue
+        action = region["action"]
+        workflow_region = workflow_regions.get(action.get("workflowRegionId"))
+        workflow = next((item for item in workflow_region.get("workflows", []) if isinstance(item, dict) and item.get("id") == action.get("workflowId")), None) if workflow_region else None
+        if workflow is None:
+            errors.append(f"{label}.regions[{index}].action references an undeclared workflow control")
+
+
+def validate_resource_catalog(module_root: Path, catalog: Any, module_id: str, label: str, errors: list[str]) -> None:
+    fields = {"schemaVersion", "moduleId", "categories", "selectionGroups", "documents"}
+    if not isinstance(catalog, dict) or set(catalog) != fields or catalog.get("schemaVersion") != 1 or catalog.get("moduleId") != module_id:
+        errors.append(f"{label} must be an exact resource catalog v1 for {module_id}")
+        return
+    safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+    categories = catalog.get("categories")
+    if not isinstance(categories, dict) or not categories:
+        errors.append(f"{label}.categories must be a non-empty object")
+        categories = {}
+    else:
+        for category_id, category in categories.items():
+            if not isinstance(category_id, str) or not safe_id.fullmatch(category_id) or not isinstance(category, dict) or set(category) != {"title", "description"} or not isinstance(category.get("title"), str) or not category["title"].strip() or not isinstance(category.get("description"), str):
+                errors.append(f"{label}.categories.{category_id} is invalid")
+    groups = catalog.get("selectionGroups")
+    if not isinstance(groups, dict):
+        errors.append(f"{label}.selectionGroups must be an object")
+        groups = {}
+    else:
+        for group_id, group in groups.items():
+            if not isinstance(group_id, str) or not safe_id.fullmatch(group_id) or not isinstance(group, dict) or set(group) != {"title", "mode", "instruction", "fallback"}:
+                errors.append(f"{label}.selectionGroups.{group_id} is invalid")
+                continue
+            if group.get("mode") not in {"one", "at-most-one", "one-or-more", "any"} or not isinstance(group.get("title"), str) or not group["title"].strip() or not isinstance(group.get("instruction"), str) or not group["instruction"].strip() or (group.get("fallback") is not None and (not isinstance(group["fallback"], str) or not safe_id.fullmatch(group["fallback"]))):
+                errors.append(f"{label}.selectionGroups.{group_id} is invalid")
+    documents = catalog.get("documents")
+    if not isinstance(documents, list):
+        errors.append(f"{label}.documents must be an array")
+        return
+    document_fields = {"id", "path", "title", "summary", "categories", "subcategory", "readPolicy", "authority", "appliesAt", "priority", "selectionGroup", "readWhen", "perspective", "aliases", "related", "sources"}
+    ids: set[str] = set()
+    paths: set[str] = set()
+    valid_documents: list[dict[str, Any]] = []
+    for index, document in enumerate(documents):
+        document_label = f"{label}.documents[{index}]"
+        if not isinstance(document, dict) or set(document) != document_fields:
+            errors.append(f"{document_label} must use the exact document field set")
+            continue
+        document_id, document_path = document.get("id"), document.get("path")
+        if not isinstance(document_id, str) or not safe_id.fullmatch(document_id) or document_id in ids:
+            errors.append(f"{document_label}.id is invalid or duplicated")
+            continue
+        ids.add(document_id)
+        if not safe_relative_path(document_path) or not str(document_path).startswith("documents/") or not str(document_path).lower().endswith(".md") or document_path in paths:
+            errors.append(f"{document_label}.path must be a unique Markdown file below documents/")
+        else:
+            paths.add(document_path)
+            require_file(module_root, document_path, f"{document_label}.path", errors)
+        document_categories = document.get("categories")
+        if not isinstance(document_categories, list) or not document_categories or any(not isinstance(item, str) or not safe_id.fullmatch(item) for item in document_categories) or len(document_categories) != len(set(document_categories)) or any(item not in categories for item in document_categories):
+            errors.append(f"{document_label}.categories must reference unique declared categories")
+        subcategory = document.get("subcategory")
+        if subcategory is not None and (not isinstance(subcategory, str) or not safe_id.fullmatch(subcategory)):
+            errors.append(f"{document_label}.subcategory must be null or a safe ID")
+        if document.get("readPolicy") not in {"required", "conditional", "choice", "optional"}:
+            errors.append(f"{document_label}.readPolicy is invalid")
+        if document.get("authority") not in {"binding", "canonical", "advisory", "exploratory"}:
+            errors.append(f"{document_label}.authority is invalid")
+        applies_at = document.get("appliesAt")
+        if not isinstance(applies_at, list) or any(not isinstance(item, str) or item not in {"analysis", "retrieval", "planning", "writing", "checking", "archiving"} for item in applies_at) or len(applies_at) != len(set(applies_at)):
+            errors.append(f"{document_label}.appliesAt is invalid")
+        selection_group = document.get("selectionGroup")
+        if (document.get("readPolicy") == "choice") != isinstance(selection_group, str) or (isinstance(selection_group, str) and selection_group not in groups):
+            errors.append(f"{document_label}.selectionGroup must name a declared group exactly for choice documents")
+        for field in ("readWhen", "aliases", "related", "sources"):
+            value = document.get(field)
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value) or len(value) != len(set(value)):
+                errors.append(f"{document_label}.{field} must be a unique string array")
+        if not isinstance(document.get("priority"), int) or isinstance(document.get("priority"), bool) or not isinstance(document.get("title"), str) or not document["title"].strip() or not isinstance(document.get("summary"), str) or not document["summary"].strip() or not isinstance(document.get("perspective"), str) or not document["perspective"].strip():
+            errors.append(f"{document_label} has invalid title, summary, perspective, or priority")
+        valid_documents.append(document)
+    for document in valid_documents:
+        if any(related not in ids for related in document.get("related", [])):
+            errors.append(f"{label} document {document.get('id')} references an unknown related document")
+    for group_id, group in groups.items():
+        members = [document for document in valid_documents if document.get("selectionGroup") == group_id]
+        if not members:
+            errors.append(f"{label} selection group {group_id} has no members")
+        elif group.get("fallback") is not None and all(document.get("id") != group["fallback"] for document in members):
+            errors.append(f"{label} selection group {group_id} fallback is not a member")
+    documents_root = module_root / "documents"
+    actual_paths = {
+        path.relative_to(module_root).as_posix()
+        for path in documents_root.rglob("*.md")
+        if path.is_file()
+    } if documents_root.is_dir() else set()
+    if actual_paths != paths:
+        for path in sorted(actual_paths - paths):
+            errors.append(f"{label} contains an unlisted resource document: {path}")
+
+
 def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None:
     if not isinstance(values, list):
         errors.append("feature_modules must be an array")
         return
     safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     ids: set[str] = set()
-    module_fields = {"schemaVersion", "id", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "frontendViewFile", "skillFile"}
+    module_fields = {"schemaVersion", "id", "moduleKind", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "resourceCatalogFile", "frontendViewFile", "skillFile", "workflowFiles"}
     index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
     index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
     for index, path_value in enumerate(values):
@@ -315,8 +507,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
         module = load_json(root / path_value, errors)
         if not isinstance(module, dict):
             continue
-        if set(module) != module_fields or module.get("schemaVersion") != 4:
-            errors.append(f"{label} must use the exact module v4 field set")
+        if set(module) != module_fields or module.get("schemaVersion") != 6:
+            errors.append(f"{label} must use the exact module v6 field set")
             continue
         module_id = module.get("id")
         if not isinstance(module_id, str) or not safe_id.fullmatch(module_id):
@@ -329,13 +521,143 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
             errors.append(f"{label}.basedOn must be null or a safe module ID")
         if module.get("surface") not in {"frontend", "background"}:
             errors.append(f"{label}.surface is invalid")
+        module_kind = module.get("moduleKind")
+        if module_kind not in {"data", "resource", "hybrid"}:
+            errors.append(f"{label}.moduleKind is invalid")
+            continue
+        has_data = module_kind in {"data", "hybrid"}
+        has_resources = module_kind in {"resource", "hybrid"}
+        if has_data != isinstance(module.get("dataContractFile"), str):
+            errors.append(f"{label}.dataContractFile must match moduleKind {module_kind}")
+        if has_resources != isinstance(module.get("resourceCatalogFile"), str):
+            errors.append(f"{label}.resourceCatalogFile must match moduleKind {module_kind}")
+        if module.get("surface") == "frontend" and not has_data:
+            errors.append(f"{label} resource-only modules must use background surface")
+        if (module.get("surface") == "frontend") != isinstance(module.get("frontendViewFile"), str):
+            errors.append(f"{label}.frontendViewFile must be present exactly for frontend modules")
         if not isinstance(module.get("contextOrder"), int) or not isinstance(module.get("displayOrder"), int):
             errors.append(f"{label} contextOrder and displayOrder must be integers")
-        for field in ("dataContractFile", "frontendViewFile", "skillFile"):
+        for field in ("skillFile",):
             require_file(module_root, module.get(field), f"{label}.{field}", errors)
-        view = load_json(module_root / str(module.get("frontendViewFile", "")), errors)
-        if not isinstance(view, dict) or view.get("schemaVersion") != 1 or not isinstance(view.get("regions"), list):
-            errors.append(f"{label}.frontendViewFile must contain schemaVersion 1 and a regions array")
+        for field in ("dataContractFile", "resourceCatalogFile", "frontendViewFile"):
+            if module.get(field) is not None:
+                require_file(module_root, module.get(field), f"{label}.{field}", errors)
+        owned_contract = load_json(module_root / module["dataContractFile"], []) if has_data and safe_relative_path(module.get("dataContractFile")) and (module_root / module["dataContractFile"]).is_file() else {}
+        workflow_files = module.get("workflowFiles")
+        if not isinstance(workflow_files, list) or not workflow_files:
+            errors.append(f"{label}.workflowFiles must contain at least one module workflow")
+        else:
+            if len(workflow_files) != len(set(path for path in workflow_files if isinstance(path, str))):
+                errors.append(f"{label}.workflowFiles must not contain duplicates")
+            for workflow_index, workflow_path in enumerate(workflow_files):
+                workflow_label = f"{label}.workflowFiles[{workflow_index}]"
+                require_file(module_root, workflow_path, workflow_label, errors)
+                if not safe_relative_path(workflow_path) or not (module_root / workflow_path).is_file():
+                    continue
+                owned = load_json(module_root / workflow_path, errors)
+                if not isinstance(owned, dict) or owned.get("schemaVersion") != 3:
+                    errors.append(f"{workflow_label} must contain a workflow v3 object")
+                    continue
+                if owned.get("kind") not in {"module-external", "module-internal"} or owned.get("ownerModuleId") != module_id:
+                    errors.append(f"{workflow_label} must be a module workflow owned by {module_id}")
+                instance_policy = owned.get("instancePolicy", {})
+                if not isinstance(instance_policy, dict):
+                    errors.append(f"{workflow_label}.instancePolicy must be an object")
+                    instance_policy = {}
+                instance_mode = instance_policy.get("mode", "multiple" if owned.get("kind") == "module-external" else "single")
+                if instance_mode not in {"single", "multiple"}:
+                    errors.append(f"{workflow_label}.instancePolicy.mode is invalid")
+                owned_locks = owned.get("writeLocks")
+                if owned.get("kind") == "module-internal" and owned_locks == []:
+                    errors.append(f"{workflow_label}.writeLocks must not be empty")
+                if owned_locks is not None:
+                    if not isinstance(owned_locks, list):
+                        errors.append(f"{workflow_label}.writeLocks must be an array")
+                        owned_locks = []
+                    seen_owned_locks: set[tuple[str, str | None]] = set()
+                    for lock_index, lock in enumerate(owned_locks):
+                        lock_label = f"{workflow_label}.writeLocks[{lock_index}]"
+                        if not isinstance(lock, dict) or set(lock) - {"moduleId", "collectionId"} or lock.get("moduleId") != module_id:
+                            errors.append(f"{lock_label} must name only the owner module and an optional collection")
+                            continue
+                        collection_id = lock.get("collectionId")
+                        if collection_id is not None and collection_id not in owned_contract.get("collections", {}):
+                            errors.append(f"{lock_label} references an unknown owner collection")
+                        key = (module_id, collection_id)
+                        if key in seen_owned_locks:
+                            errors.append(f"{workflow_label}.writeLocks contains a duplicate lock")
+                        seen_owned_locks.add(key)
+                if owned.get("kind") == "module-internal" and instance_mode == "multiple":
+                    if not isinstance(instance_policy.get("dedupeKey"), str) or not instance_policy["dedupeKey"].strip():
+                        errors.append(f"{workflow_label}.instancePolicy.dedupeKey is required for multiple module-internal workflows")
+                    maximum = instance_policy.get("maxConcurrentInstances")
+                    if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < 1:
+                        errors.append(f"{workflow_label}.instancePolicy.maxConcurrentInstances must be a positive integer")
+                    if not isinstance(owned_locks, list) or not owned_locks or any(not isinstance(lock, dict) or lock.get("collectionId") is None for lock in owned_locks):
+                        errors.append(f"{workflow_label}.writeLocks must contain exact collection locks for multiple module-internal workflows")
+                interface = owned.get("interface", {}) if isinstance(owned.get("interface", {}), dict) else {}
+                interface_inputs = interface.get("inputs", {}) if isinstance(interface.get("inputs", {}), dict) else {}
+                interface_exports = interface.get("exports", {}) if isinstance(interface.get("exports", {}), dict) else {}
+                for input_id, definition in interface_inputs.items():
+                    if not isinstance(definition, dict):
+                        errors.append(f"{workflow_label}.interface.inputs.{input_id} is invalid")
+                        continue
+                    input_type = definition.get("type", "parameter")
+                    input_kind = definition.get("kind", "file" if input_type == "document" else None)
+                    if input_type == "document" and input_kind not in {"file", "directory", "either"}:
+                        errors.append(f"{workflow_label}.interface.inputs.{input_id}.kind is invalid")
+                    if input_type != "document" and "kind" in definition:
+                        errors.append(f"{workflow_label}.interface.inputs.{input_id}.kind is supported only for document inputs")
+                for export_id, definition in interface_exports.items():
+                    if not isinstance(definition, dict):
+                        errors.append(f"{workflow_label}.interface.exports.{export_id} is invalid")
+                        continue
+                    export_format = definition.get("format", "markdown")
+                    export_kind = definition.get("kind", "directory" if export_format == "document-set" else "file")
+                    if export_kind not in {"file", "directory"}:
+                        errors.append(f"{workflow_label}.interface.exports.{export_id}.kind is invalid")
+                    if export_format == "document-set" and export_kind != "directory":
+                        errors.append(f"{workflow_label}.interface.exports.{export_id} document-set must use directory kind")
+                owned_nodes = owned.get("nodes", [])
+                if not isinstance(owned_nodes, list) or sum(1 for node in owned_nodes if isinstance(node, dict) and node.get("type") == "workflow-return") != 1:
+                    errors.append(f"{workflow_label} must contain exactly one workflow-return node")
+                if isinstance(owned_nodes, list):
+                    for node_index, node in enumerate(owned_nodes):
+                        if isinstance(node, dict):
+                            validate_runtime_services(node, f"{workflow_label}.nodes[{node_index}]", errors)
+                            if owned.get("kind") == "module-internal":
+                                effective_locks = owned_locks if isinstance(owned_locks, list) else [{"moduleId": module_id, "collectionId": None}]
+                                for access in node.get("moduleAccess", []) if isinstance(node.get("moduleAccess", []), list) else []:
+                                    if not isinstance(access, dict) or access.get("moduleId") != module_id:
+                                        continue
+                                    collection_id = access.get("collectionId")
+                                    capabilities = owned_contract.get("capabilities", {}) if isinstance(owned_contract, dict) else {}
+                                    writable = any(
+                                        isinstance(capabilities.get(capability_id), dict)
+                                        and any(action != "query" for action in capabilities[capability_id].get("actions", []))
+                                        for capability_id in access.get("capabilities", []) if isinstance(capability_id, str)
+                                    )
+                                    if writable and not any(isinstance(lock, dict) and lock.get("moduleId") == module_id and lock.get("collectionId") in {None, collection_id} for lock in effective_locks):
+                                        errors.append(f"{workflow_label}.nodes[{node_index}] writable access to {collection_id} is not covered by workflow.writeLocks")
+                if "trigger" in owned:
+                    errors.append(f"{workflow_label} module workflows cannot declare triggers")
+            if module_id == "card-context-library":
+                if module_kind != "resource" or workflow_files != ["workflows/export-context/workflow.json"]:
+                    errors.append(f"{label} card-context-library must be a resource module with only export-context")
+                else:
+                    export_workflow = load_json(module_root / workflow_files[0], errors)
+                    interface = export_workflow.get("interface", {}) if isinstance(export_workflow, dict) else {}
+                    inputs = interface.get("inputs", {}) if isinstance(interface, dict) else {}
+                    exports = interface.get("exports", {}) if isinstance(interface, dict) else {}
+                    categories_input = inputs.get("categories", {}) if isinstance(inputs, dict) else {}
+                    context_export = exports.get("context", {}) if isinstance(exports, dict) else {}
+                    if export_workflow.get("kind") != "module-external" or categories_input.get("type") != "parameter" or categories_input.get("required") is not True or categories_input.get("valueType") != "string-array" or context_export.get("format") != "document-set":
+                        errors.append(f"{label} export-context must accept required category strings and export one document-set")
+        if has_resources and safe_relative_path(module.get("resourceCatalogFile")) and (module_root / module["resourceCatalogFile"]).is_file():
+            validate_resource_catalog(module_root, load_json(module_root / module["resourceCatalogFile"], errors), module_id, f"{label}.resourceCatalogFile", errors)
+        if not has_data:
+            continue
+        view = load_json(module_root / module["frontendViewFile"], errors) if module.get("frontendViewFile") else None
         contract = load_json(module_root / str(module.get("dataContractFile", "")), errors)
         if not isinstance(contract, dict) or contract.get("schemaVersion") != 1 or contract.get("moduleId") != module_id or not isinstance(contract.get("collections"), dict) or not contract["collections"]:
             errors.append(f"{label}.dataContractFile must be a data contract v1 for {module_id}")
@@ -447,6 +769,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                         errors.append(f"{label}.capability {capability_id} has unsupported actions for {collection_id}: {sorted(invalid_actions)}")
                     if invalid_views:
                         errors.append(f"{label}.capability {capability_id} has undefined views for {collection_id}: {sorted(invalid_views)}")
+        if view is not None:
+            validate_frontend_view_v2(view, contract, f"{label}.frontendViewFile", errors)
 
 
 def module_contract_map(root: Path) -> dict[str, dict[str, Any]]:
@@ -468,6 +792,44 @@ def module_contract_map(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def module_workflow_map(root: Path) -> dict[str, dict[str, Any]]:
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) else []:
+        if not safe_relative_path(module_path):
+            continue
+        module = load_json(root / module_path, [])
+        if not isinstance(module, dict) or not isinstance(module.get("id"), str):
+            continue
+        module_root = (root / module_path).parent
+        for workflow_path in module.get("workflowFiles", []) if isinstance(module.get("workflowFiles"), list) else []:
+            if not safe_relative_path(workflow_path):
+                continue
+            workflow = load_json(module_root / workflow_path, [])
+            if isinstance(workflow, dict) and isinstance(workflow.get("id"), str):
+                result[f"{module['id']}/{workflow['id']}"] = workflow
+    return result
+
+
+def module_resource_catalog_map(root: Path) -> dict[str, dict[str, Any]]:
+    manifest = load_json(root / "manifest.json", [])
+    result: dict[str, dict[str, Any]] = {}
+    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) and isinstance(manifest.get("feature_modules"), list) else []:
+        if not safe_relative_path(module_path):
+            continue
+        module = load_json(root / module_path, [])
+        if not isinstance(module, dict) or not isinstance(module.get("id"), str) or not safe_relative_path(module.get("resourceCatalogFile")):
+            continue
+        catalog = load_json((root / module_path).parent / module["resourceCatalogFile"], [])
+        if isinstance(catalog, dict):
+            result[module["id"]] = catalog
+    return result
+
+
 def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     workflow_root = root / "workflows"
     if not workflow_root.exists():
@@ -475,16 +837,18 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     ids: set[str] = set()
     safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     allowed_kinds = {"foreground", "turn-background", "global-background"}
-    allowed_types = {"agent", "code", "narrative", "gate", "join", "turn-finalize"}
+    allowed_types = {"agent", "code", "call", "gate", "join", "turn-finalize"}
     contracts = module_contract_map(root)
+    module_workflows = module_workflow_map(root)
+    resource_catalogs = module_resource_catalog_map(root)
     for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
         label = f"workflows/{directory.name}/workflow.json"
         workflow = load_json(directory / "workflow.json", errors)
         if not isinstance(workflow, dict):
             continue
         workflow_id = workflow.get("id")
-        if workflow.get("schemaVersion") != 2:
-            errors.append(f"{label}.schemaVersion must be 2")
+        if workflow.get("schemaVersion") != 3:
+            errors.append(f"{label}.schemaVersion must be 3")
         if not isinstance(workflow_id, str) or not safe_id.fullmatch(workflow_id):
             errors.append(f"{label}.id is invalid")
         elif workflow_id != directory.name:
@@ -496,6 +860,26 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
         kind = workflow.get("kind")
         if kind not in allowed_kinds:
             errors.append(f"{label}.kind is invalid")
+        write_locks = workflow.get("writeLocks", [])
+        if not isinstance(write_locks, list):
+            errors.append(f"{label}.writeLocks must be an array")
+        else:
+            if kind == "module-internal" and "writeLocks" in workflow and not write_locks:
+                errors.append(f"{label}.writeLocks must not be empty for a module-internal workflow")
+            seen_locks: set[tuple[str, str | None]] = set()
+            for lock_index, lock in enumerate(write_locks):
+                lock_label = f"{label}.writeLocks[{lock_index}]"
+                if not isinstance(lock, dict) or set(lock) - {"moduleId", "collectionId"}:
+                    errors.append(f"{lock_label} is invalid")
+                    continue
+                module_id, collection_id = lock.get("moduleId"), lock.get("collectionId")
+                if module_id not in contracts or (collection_id is not None and collection_id not in contracts.get(module_id, {}).get("collections", {})):
+                    errors.append(f"{lock_label} references an unknown module or collection")
+                    continue
+                key = (module_id, collection_id)
+                if key in seen_locks:
+                    errors.append(f"{label}.writeLocks contains duplicate {module_id}/{collection_id or '*'}")
+                seen_locks.add(key)
         nodes = workflow.get("nodes")
         if not isinstance(nodes, list) or not nodes:
             errors.append(f"{label}.nodes must be a non-empty array")
@@ -517,6 +901,102 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             by_id[node_id] = node
             if node.get("type", "agent") not in allowed_types:
                 errors.append(f"{node_label}.type is invalid")
+            node_type = node.get("type", "agent")
+            validate_runtime_services(node, node_label, errors)
+            if node_type == "call":
+                target = node.get("target")
+                target_workflow = module_workflows.get(target)
+                if not isinstance(target, str) or target_workflow is None:
+                    errors.append(f"{node_label}.target must reference a declared module workflow")
+                else:
+                    arguments = node.get("arguments", {})
+                    documents = node.get("documents", {})
+                    output_paths = node.get("outputPaths", {})
+                    if not isinstance(arguments, dict) or not isinstance(documents, dict) or not isinstance(output_paths, dict):
+                        errors.append(f"{node_label} call arguments, documents, and outputPaths must be objects")
+                    else:
+                        interface = target_workflow.get("interface", {}) if isinstance(target_workflow.get("interface"), dict) else {}
+                        inputs = interface.get("inputs", {}) if isinstance(interface.get("inputs"), dict) else {}
+                        exports = interface.get("exports", {}) if isinstance(interface.get("exports"), dict) else {}
+                        for input_id, definition in inputs.items():
+                            if not isinstance(definition, dict) or not definition.get("required"):
+                                continue
+                            input_type = definition.get("type", "parameter")
+                            if input_type == "parameter" and input_id not in arguments:
+                                errors.append(f"{node_label} is missing required parameter {input_id}")
+                            if input_type == "document" and input_id not in documents:
+                                errors.append(f"{node_label} is missing required document {input_id}")
+                        if target == "card-context-library/export-context" and isinstance(arguments.get("categories"), list):
+                            declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
+                            if not arguments["categories"] or any(category not in declared_categories for category in arguments["categories"]):
+                                errors.append(f"{node_label}.arguments.categories must select declared card-context-library categories")
+                        if set(output_paths) != set(exports):
+                            errors.append(f"{node_label}.outputPaths must exactly match target exports")
+                        declared_node_outputs = node.get("outputs", {}) if isinstance(node.get("outputs", {}), dict) else {}
+                        for export_id, export_definition in exports.items():
+                            output = declared_node_outputs.get(export_id)
+                            export_format = export_definition.get("format", "markdown") if isinstance(export_definition, dict) else "markdown"
+                            export_kind = export_definition.get("kind", "directory" if export_format == "document-set" else "file") if isinstance(export_definition, dict) else "file"
+                            output_kind = output.get("kind", "directory" if output.get("format") == "document-set" else "file") if isinstance(output, dict) else None
+                            if not isinstance(output, dict) or output.get("path") != output_paths.get(export_id) or output.get("format") != export_format or output_kind != export_kind:
+                                errors.append(f"{node_label}.outputs.{export_id} must match the target export path, format, and kind")
+            workflow_calls = node.get("workflowCalls", [])
+            if not isinstance(workflow_calls, list):
+                errors.append(f"{node_label}.workflowCalls must be an array")
+            elif node_type not in {"agent", "code"} and workflow_calls:
+                errors.append(f"{node_label}.workflowCalls is supported only for agent and code nodes")
+            else:
+                seen_targets: set[str] = set()
+                for call_index, raw_call in enumerate(workflow_calls):
+                    call_label = f"{node_label}.workflowCalls[{call_index}]"
+                    if isinstance(raw_call, str):
+                        target, fixed_arguments, allowed_arguments = raw_call, {}, None
+                    elif isinstance(raw_call, dict) and not set(raw_call) - {"target", "fixedArguments", "allowedArguments"}:
+                        target = raw_call.get("target")
+                        fixed_arguments = raw_call.get("fixedArguments", {})
+                        allowed_arguments = raw_call.get("allowedArguments")
+                    else:
+                        errors.append(f"{call_label} is invalid")
+                        continue
+                    target_workflow = module_workflows.get(target)
+                    if not isinstance(target, str) or target_workflow is None:
+                        errors.append(f"{call_label}.target must reference a declared module workflow")
+                        continue
+                    if target in seen_targets:
+                        errors.append(f"{node_label}.workflowCalls contains duplicate target {target}")
+                    seen_targets.add(target)
+                    if node_type == "agent" and target_workflow.get("agentCallable") is not True:
+                        errors.append(f"{call_label}.target is not agentCallable")
+                    if not isinstance(fixed_arguments, dict) or (allowed_arguments is not None and not isinstance(allowed_arguments, dict)):
+                        errors.append(f"{call_label} fixedArguments and allowedArguments are invalid")
+                        continue
+                    overlap = set(fixed_arguments) & set(allowed_arguments or {})
+                    if overlap:
+                        errors.append(f"{call_label} cannot both fix and allow arguments {sorted(overlap)}")
+                    parameter_inputs = {
+                        input_id for input_id, definition in target_workflow.get("interface", {}).get("inputs", {}).items()
+                        if isinstance(definition, dict) and definition.get("type", "parameter") == "parameter"
+                    }
+                    if (set(fixed_arguments) | set(allowed_arguments or {})) - parameter_inputs:
+                        errors.append(f"{call_label} restricts arguments absent from the target interface")
+                    for argument_id, allowed in (allowed_arguments or {}).items():
+                        if not isinstance(allowed, list) or not allowed or any(not isinstance(value, (str, int, float, bool)) and value is not None for value in allowed):
+                            errors.append(f"{call_label}.allowedArguments.{argument_id} must be a non-empty scalar array")
+                    if target == "card-context-library/export-context" and isinstance((allowed_arguments or {}).get("categories"), list):
+                        declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
+                        if any(category not in declared_categories for category in allowed_arguments["categories"]):
+                            errors.append(f"{call_label}.allowedArguments.categories contains an undeclared resource category")
+            if "blockNextTurn" in node:
+                errors.append(f"{node_label}.blockNextTurn was replaced by trigger.blockNextTurnUntilReady")
+            narrative_source = node.get("narrativeSource")
+            if narrative_source is not None:
+                if not isinstance(narrative_source, dict) or set(narrative_source) - {"layer", "characterId"}:
+                    errors.append(f"{node_label}.narrativeSource may contain only layer and characterId")
+                else:
+                    if narrative_source.get("layer") not in {"unspecified", "in-world", "story", "authorial"}:
+                        errors.append(f"{node_label}.narrativeSource.layer is invalid")
+                    if narrative_source.get("characterId") is not None and (not isinstance(narrative_source.get("characterId"), str) or not safe_id.fullmatch(narrative_source["characterId"])):
+                        errors.append(f"{node_label}.narrativeSource.characterId is invalid")
             outputs = node.get("outputs", {})
             if not isinstance(outputs, dict):
                 errors.append(f"{node_label}.outputs must be an object")
@@ -528,6 +1008,41 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                     errors.append(f"{node_label}.outputs.{output_id}.scope is invalid")
                 elif output.get("retain", "node") not in {"node", "run", "turn", "session", "permanent"}:
                     errors.append(f"{node_label}.outputs.{output_id}.retain is invalid")
+                elif output.get("kind", "directory" if output.get("format") == "document-set" else "file") not in {"file", "directory"}:
+                    errors.append(f"{node_label}.outputs.{output_id}.kind is invalid")
+                elif output.get("format") == "document-set" and output.get("kind", "directory") != "directory":
+                    errors.append(f"{node_label}.outputs.{output_id} document-set must use directory kind")
+            handoff = node.get("workspaceHandoff", {"include": []})
+            if not isinstance(handoff, dict) or set(handoff) != {"include"} or not isinstance(handoff.get("include"), list):
+                errors.append(f"{node_label}.workspaceHandoff must contain only an include array")
+            else:
+                handoff_outputs: set[str] = set()
+                handoff_targets: list[str] = []
+                for include_index, inclusion in enumerate(handoff["include"]):
+                    include_label = f"{node_label}.workspaceHandoff.include[{include_index}]"
+                    if not isinstance(inclusion, dict) or "output" not in inclusion or not set(inclusion).issubset({"output", "as"}):
+                        errors.append(f"{include_label} must contain output and may contain as")
+                        continue
+                    output_id = inclusion.get("output")
+                    if output_id not in outputs:
+                        errors.append(f"{include_label} references unknown output {output_id}")
+                        continue
+                    if output_id in handoff_outputs:
+                        errors.append(f"{node_label}.workspaceHandoff duplicates output {output_id}")
+                    handoff_outputs.add(output_id)
+                    target = inclusion.get("as", outputs[output_id].get("path"))
+                    if not safe_relative_path(target) or "." in target.replace("\\", "/").split("/"):
+                        errors.append(f"{include_label} target is invalid")
+                        continue
+                    normalized_target = target.replace("\\", "/")
+                    if any(existing == normalized_target or existing.startswith(normalized_target + "/") or normalized_target.startswith(existing + "/") for existing in handoff_targets):
+                        errors.append(f"{node_label}.workspaceHandoff target paths overlap at {normalized_target}")
+                    handoff_targets.append(normalized_target)
+                    output = outputs[output_id]
+                    scope = output.get("scope", "node")
+                    retain = output.get("retain", "node" if scope == "node" else "run" if scope == "workflow" else "turn" if scope == "turn" else "session")
+                    if scope == "node" or retain == "node":
+                        errors.append(f"{include_label} output must survive the producing node")
             module_access = node.get("moduleAccess", [])
             if not isinstance(module_access, list):
                 errors.append(f"{node_label}.moduleAccess must be an array")
@@ -556,6 +1071,15 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                         capability = contract_capabilities.get(capability_id) if isinstance(contract_capabilities, dict) else None
                         if not isinstance(capability, dict) or collection_id not in capability.get("collections", []):
                             errors.append(f"{access_label} capability {capability_id!r} is unknown or does not cover the collection")
+                        elif kind == "module-internal" and any(action != "query" for action in capability.get("actions", [])):
+                            effective_locks = write_locks if "writeLocks" in workflow else [{"moduleId": workflow.get("ownerModuleId"), "collectionId": None}]
+                            if not any(
+                                isinstance(lock, dict)
+                                and lock.get("moduleId") == module_id
+                                and lock.get("collectionId") in {None, collection_id}
+                                for lock in effective_locks
+                            ):
+                                errors.append(f"{access_label} writable capability {capability_id!r} is not covered by workflow.writeLocks")
                     allowed_views = {
                         view
                         for capability_id in capabilities
@@ -564,8 +1088,13 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                     if any(view not in allowed_views for view in views):
                         errors.append(f"{access_label}.views exceeds its capabilities")
                     budget = access.get("queryBudget")
-                    if budget is not None and (not isinstance(budget, dict) or any(isinstance(budget.get(field), bool) or not isinstance(budget.get(field), int) or budget[field] < 1 for field in ("maxRecords", "maxCharacters"))):
-                        errors.append(f"{access_label}.queryBudget is invalid")
+                    if budget is not None:
+                        if not isinstance(budget, dict) or set(budget) - {"maxRecords", "maxCharacters", "defaultRecords", "defaultCharacters", "parameter"} or any(isinstance(budget.get(field), bool) or not isinstance(budget.get(field), int) or budget[field] < 1 for field in ("maxRecords", "maxCharacters")):
+                            errors.append(f"{access_label}.queryBudget is invalid")
+                        elif any(field in budget and (isinstance(budget[field], bool) or not isinstance(budget[field], int) or budget[field] < 1 or budget[field] > budget[maximum]) for field, maximum in (("defaultRecords", "maxRecords"), ("defaultCharacters", "maxCharacters"))):
+                            errors.append(f"{access_label}.queryBudget defaults are invalid")
+                        elif "parameter" in budget and (not isinstance(budget["parameter"], str) or not safe_id.fullmatch(budget["parameter"])):
+                            errors.append(f"{access_label}.queryBudget.parameter is invalid")
             commit = node.get("dataCommit", {"onNodeEnd": []})
             if not isinstance(commit, dict) or not isinstance(commit.get("onNodeEnd"), list):
                 errors.append(f"{node_label}.dataCommit.onNodeEnd must be an array")
@@ -583,6 +1112,39 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             dependencies = node.get("dependsOn", [])
             if not isinstance(dependencies, list) or any(item not in node_ids for item in dependencies):
                 errors.append(f"{label} node {node_id} has invalid dependencies")
+            route_field = node.get("routeFromOutput")
+            if route_field is not None and (node.get("type", "agent") != "code" or not isinstance(route_field, str) or not safe_id.fullmatch(route_field)):
+                errors.append(f"{label} node {node_id}.routeFromOutput must be a safe field ID on a code node")
+            conditions = node.get("conditions", [])
+            if not isinstance(conditions, list):
+                errors.append(f"{label} node {node_id}.conditions must be an array")
+            else:
+                for condition_index, condition in enumerate(conditions):
+                    condition_label = f"{label} node {node_id}.conditions[{condition_index}]"
+                    if not isinstance(condition, dict) or set(condition) - {"nodeId", "routes", "statuses"}:
+                        errors.append(f"{condition_label} is invalid")
+                        continue
+                    if condition.get("nodeId") not in node_ids:
+                        errors.append(f"{condition_label}.nodeId references an unknown node")
+                    routes = condition.get("routes", [])
+                    if not isinstance(routes, list) or any(not isinstance(route, str) or not safe_id.fullmatch(route) for route in routes):
+                        errors.append(f"{condition_label}.routes is invalid")
+                    statuses = condition.get("statuses", ["completed"])
+                    if not isinstance(statuses, list) or any(status not in {"completed", "skipped", "failed", "cancelled"} for status in statuses):
+                        errors.append(f"{condition_label}.statuses is invalid")
+            if node.get("type", "agent") == "agent" and node.get("metadata", {}).get("documentWorkspace") is True:
+                context = node.get("context", {}) if isinstance(node.get("context", {}), dict) else {}
+                sources = context.get("fromNodes") if isinstance(context.get("fromNodes"), list) and context.get("fromNodes") else dependencies
+                for source_id in sources:
+                    source = by_id.get(source_id, {})
+                    indexed = source.get("metadata", {}).get("documentIndex", {}) if isinstance(source.get("metadata", {}), dict) else {}
+                    included = {
+                        item.get("output") for item in source.get("workspaceHandoff", {}).get("include", [])
+                        if isinstance(item, dict)
+                    }
+                    for output_id in indexed if isinstance(indexed, dict) else []:
+                        if output_id in source.get("outputs", {}) and output_id not in included:
+                            errors.append(f"{label} node {source_id} documents {output_id} for {node_id} but does not include it in workspaceHandoff")
         visiting: set[str] = set()
         visited: set[str] = set()
 
@@ -613,6 +1175,18 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                 pending.extend(by_id[dependency].get("dependsOn", []))
             return result
 
+        if workflow_id in {"standard-rp", "advanced-memory-rp"}:
+            context_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "card-context-library/export-context"]
+            if not context_call_ids:
+                errors.append(f"{label} must prepare card-context-library resources before narration")
+            if workflow_id == "advanced-memory-rp" and context_call_ids:
+                timeline_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "narrative-memory/narrative-memory-reference-snapshot" and isinstance(node.get("arguments", {}).get("timeline"), dict)]
+                if not timeline_call_ids or not any(timeline_id in ancestors_for(context_id) for context_id in context_call_ids for timeline_id in timeline_call_ids):
+                    errors.append(f"{label} must prepare an effective memory timeline before exporting card-context-library resources")
+                narrative_agents = [node for node in by_id.values() if node.get("type") == "agent" and any(isinstance(output, dict) and output.get("format") == "narrative" for output in node.get("outputs", {}).values())]
+                if not narrative_agents or any("narrative-memory/narrative-memory-retrieve" not in [binding if isinstance(binding, str) else binding.get("target") for binding in node.get("workflowCalls", [])] for node in narrative_agents):
+                    errors.append(f"{label} narrative Agent must expose narrative-memory/narrative-memory-retrieve")
+
         writers: dict[tuple[str, str], list[str]] = {}
         read_actions = {"query", "get"}
         for node_id, node in by_id.items():
@@ -629,29 +1203,30 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                 for right in owner_nodes[left_index + 1:]:
                     if left not in ancestors_for(right) and right not in ancestors_for(left):
                         errors.append(f"{label} has unordered writers {left} and {right} for {owner[0]}/{owner[1]}")
-        types = {node.get("type", "agent") for node in by_id.values()}
-        narrative_count = sum(1 for node in by_id.values() if node.get("type", "agent") == "narrative")
-        if kind == "foreground" and (narrative_count != 1 or "turn-finalize" not in types):
-            errors.append(f"{label} foreground workflow requires exactly one narrative and at least one turn-finalize node")
+        finalizers = [(node_id, node) for node_id, node in by_id.items() if node.get("type", "agent") == "turn-finalize"]
+        if kind == "foreground" and len(finalizers) != 1:
+            errors.append(f"{label} foreground workflow requires exactly one turn-finalize node")
         elif kind == "foreground":
-            narrative_id = next(node_id for node_id, node in by_id.items() if node.get("type", "agent") == "narrative")
-            finalizers = [node_id for node_id, node in by_id.items() if node.get("type", "agent") == "turn-finalize"]
-
-            def ancestors(node_id: str) -> set[str]:
-                result: set[str] = set()
-                pending = list(by_id[node_id].get("dependsOn", []))
-                while pending:
-                    dependency = pending.pop()
-                    if dependency in result or dependency not in by_id:
-                        continue
-                    result.add(dependency)
-                    pending.extend(by_id[dependency].get("dependsOn", []))
-                return result
-
-            if not any(narrative_id in ancestors(finalizer) for finalizer in finalizers):
-                errors.append(f"{label} turn-finalize must run after narrative")
-        if kind != "foreground" and "narrative" in types:
-            errors.append(f"{label} background workflow cannot contain a narrative node")
+            finalizer_id, finalizer = finalizers[0]
+            narrative = finalizer.get("narrative")
+            if not isinstance(narrative, dict) or set(narrative) != {"fromNode", "output"}:
+                errors.append(f"{label} turn-finalize must map one narrative output")
+            else:
+                source = by_id.get(narrative.get("fromNode"), {})
+                output = source.get("outputs", {}).get(narrative.get("output")) if isinstance(source.get("outputs", {}), dict) else None
+                if not isinstance(output, dict) or output.get("format") != "narrative":
+                    errors.append(f"{label} turn-finalize source must be a declared narrative-format output")
+                if narrative.get("fromNode") not in ancestors_for(finalizer_id):
+                    errors.append(f"{label} turn-finalize must run after its narrative source")
+        elif finalizers:
+            errors.append(f"{label} only foreground workflows may contain turn-finalize")
+        trigger = workflow.get("trigger", {"type": "manual"})
+        if not isinstance(trigger, dict):
+            errors.append(f"{label}.trigger must be an object")
+        elif trigger.get("type", "manual") not in {"manual", "after-opening", "after-workflow", "node"}:
+            errors.append(f"{label}.trigger.type is invalid")
+        elif trigger.get("blockNextTurnUntilReady", False) is True and kind != "turn-background":
+            errors.append(f"{label}.trigger.blockNextTurnUntilReady is only valid for turn-background workflows")
     return ids
 
 
@@ -659,8 +1234,8 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
     if not isinstance(manifest, dict):
         errors.append("manifest.json must contain an object")
         return
-    if manifest.get("schema_version") != 1:
-        errors.append("manifest schema_version must be 1")
+    if manifest.get("schema_version") != 2:
+        errors.append("manifest schema_version must be 2")
     for field in ("id", "name"):
         if not isinstance(manifest.get(field), str) or not manifest[field].strip():
             errors.append(f"manifest {field} must be a non-empty string")
@@ -675,20 +1250,10 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
         errors.append("manifest cover is required because the extracted source contains an authored card image")
 
     fixed_context = manifest.get("fixed_context")
-    if not isinstance(fixed_context, list) or not fixed_context:
-        errors.append("manifest fixed_context must be a non-empty array")
+    if not isinstance(fixed_context, str):
+        errors.append("manifest fixed_context must be one relative file path")
     else:
-        for index, path in enumerate(fixed_context):
-            require_file(root, path, f"fixed_context[{index}]", errors)
-
-    require_file(root, manifest.get("knowledge_map"), "knowledge_map", errors)
-
-    primary_characters = manifest.get("primary_characters", [])
-    if not isinstance(primary_characters, list):
-        errors.append("primary_characters must be an array")
-    else:
-        for index, path in enumerate(primary_characters):
-            require_file(root, path, f"primary_characters[{index}]", errors)
+        require_file(root, fixed_context, "fixed_context", errors)
 
     context_policy_path = manifest.get("context_policy")
     require_file(root, context_policy_path, "context_policy", errors)
@@ -712,7 +1277,38 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
                 errors.append("context_skill must be a skill with name and one-line description frontmatter")
 
     validate_feature_modules(root, manifest.get("feature_modules"), errors)
-    validate_context_processors(root, manifest.get("context_processors"), declared_module_ids(root, manifest), errors)
+    module_ids = declared_module_ids(root, manifest)
+    if "card-context-library" not in module_ids:
+        errors.append("manifest feature_modules must include the card-context-library resource module")
+    if "world-narrative-coordinator" in module_ids:
+        if "narrative-memory" not in module_ids:
+            errors.append("world-narrative-coordinator requires the narrative-memory module")
+        context_catalog = None
+        for module_path in manifest.get("feature_modules", []):
+            if not safe_relative_path(module_path):
+                continue
+            module = load_json(root / module_path, [])
+            if isinstance(module, dict) and module.get("id") == "card-context-library" and safe_relative_path(module.get("resourceCatalogFile")):
+                context_catalog = load_json((root / module_path).parent / module["resourceCatalogFile"], [])
+                break
+        if not isinstance(context_catalog, dict) or "director-future" not in context_catalog.get("categories", {}):
+            errors.append("world-narrative-coordinator requires card-context-library category director-future")
+    elif isinstance(fixed_context, str) and safe_relative_path(fixed_context) and (root / fixed_context).is_file():
+        foundation_text = (root / fixed_context).read_text(encoding="utf-8-sig").strip()
+        for module_path in manifest.get("feature_modules", []):
+            if not safe_relative_path(module_path):
+                continue
+            module = load_json(root / module_path, [])
+            if not isinstance(module, dict) or module.get("id") != "card-context-library" or not safe_relative_path(module.get("resourceCatalogFile")):
+                continue
+            module_root = (root / module_path).parent
+            catalog = load_json(module_root / module["resourceCatalogFile"], [])
+            for document in catalog.get("documents", []) if isinstance(catalog, dict) and isinstance(catalog.get("documents"), list) else []:
+                document_path = document.get("path") if isinstance(document, dict) else None
+                if safe_relative_path(document_path) and (module_root / document_path).is_file():
+                    if foundation_text and (module_root / document_path).read_text(encoding="utf-8-sig").strip() == foundation_text:
+                        errors.append(f"fixed_context exactly duplicates card-context-library document {document.get('id')}")
+    validate_context_processors(root, manifest.get("context_processors"), module_ids, errors)
 
     openings = manifest.get("openings")
     if not isinstance(openings, list) or not openings:
@@ -732,12 +1328,8 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
         else:
             ids.add(opening_id)
         require_file(root, opening.get("file"), f"openings[{index}].file", errors)
-        recommended = opening.get("recommended_context", [])
-        if not isinstance(recommended, list):
-            errors.append(f"openings[{index}].recommended_context must be an array")
-        else:
-            for context_index, path in enumerate(recommended):
-                require_file(root, path, f"openings[{index}].recommended_context[{context_index}]", errors)
+        if "recommended_context" in opening:
+            errors.append(f"openings[{index}].recommended_context was replaced by the card-context-library catalog")
 
     default_opening = manifest.get("default_opening")
     if default_opening not in ids:

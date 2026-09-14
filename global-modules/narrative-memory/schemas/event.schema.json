@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "required": ["name", "catalogSummary", "status", "templateMode", "templateId", "templateVersion", "time", "participantIds", "locationIds", "relatedEntityIds", "precedingEventIds", "relatedEventIds", "overviewInformationControl", "informationBlocks", "sections", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "catalogSummary": { "type": "string" },
+    "status": { "enum": ["ongoing", "completed"] },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "time": {
+      "type": "object",
+      "required": ["displayStart", "displayEnd", "trueTime", "sortValue", "timeRuleVersion"],
+      "properties": {
+        "displayStart": { "type": "string", "minLength": 1 },
+        "displayEnd": { "type": ["string", "null"] },
+        "trueTime": { "type": "string", "minLength": 1 },
+        "sortValue": { "type": "string", "minLength": 1 },
+        "timeRuleVersion": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "participantIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "locationIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "relatedEntityIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "precedingEventIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "relatedEventIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "overviewInformationControl": {
+      "type": "object",
+      "required": ["mode", "knowerIds"],
+      "properties": { "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "informationBlocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "mode", "knowerIds", "content"],
+        "properties": { "title": { "type": "string", "minLength": 1 }, "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "content": { "type": "object", "additionalProperties": true } },
+        "additionalProperties": false
+      }
+    },
+    "sections": { "type": "object", "additionalProperties": true },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

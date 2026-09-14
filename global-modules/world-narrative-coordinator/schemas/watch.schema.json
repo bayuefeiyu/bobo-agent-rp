@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["recordFamily", "title", "summary", "content", "category", "stage", "problem", "signals", "recommendedResponse", "subjectRefs", "subjectLabels", "lastReviewedTurn"],
+  "properties": {
+    "recordFamily": { "const": "watch" }, "title": { "type": "string", "minLength": 1 }, "summary": { "type": "string" }, "content": { "type": "string" },
+    "category": { "type": "string", "minLength": 1 }, "stage": { "enum": ["observe", "warn", "intervene"] },
+    "problem": { "type": "string" }, "signals": { "type": "array", "items": { "type": "string" } }, "recommendedResponse": { "type": "string" },
+    "subjectRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "subjectLabels": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "lastReviewedTurn": { "type": "integer", "minimum": 0 }
+  }, "additionalProperties": false
+}

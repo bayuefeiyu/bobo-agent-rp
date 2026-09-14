@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>Pi RP</title>
-    <link rel="stylesheet" href="/styles.css?v=20" />
+    <link rel="stylesheet" href="/styles.css?v=23" />
   </head>
   <body>
     <div class="app-layout">
@@ -179,6 +179,20 @@
                 <p id="module-settings-status" class="setting-status" role="status" aria-live="polite"></p>
               </div>
             </form>
+            <form id="comfy-connection-form" class="settings-card" aria-labelledby="comfy-connection-heading">
+              <div class="setting-copy"><h3 id="comfy-connection-heading">ComfyUI 连接</h3><p>浏览器只看到连接 ID；凭据保存在系统的项目隔离缓存中。远程连接推荐 HTTPS。</p></div>
+              <div class="setting-control config-fields">
+                <label>连接<select id="comfy-connection-select" class="setting-select"></select></label>
+                <div class="field-pair"><label>连接 ID<input id="comfy-connection-id" class="setting-input" required /></label><label>名称<input id="comfy-connection-title" class="setting-input" required /></label></div>
+                <label>ComfyUI 地址<input id="comfy-connection-url" class="setting-input" type="url" value="http://127.0.0.1:8188" required /></label>
+                <label>访问令牌<input id="comfy-connection-token" class="setting-input" type="password" placeholder="留空保留已保存凭据" /></label>
+                <label>本机 output 路径（仅用于打开目录，可空）<input id="comfy-output-path" class="setting-input" /></label>
+                <label class="check-label"><input id="comfy-insecure-remote" type="checkbox" /> 明确允许非本机 HTTP</label>
+                <div class="config-actions"><button id="comfy-test-connection" type="button" class="secondary-button">测试连接</button><button type="submit">保存连接</button></div>
+                <p id="comfy-connection-status" class="setting-status"></p>
+                <div id="comfy-profile-documents" class="comfy-profile-documents"></div>
+              </div>
+            </form>
           </div>
         </section>
 
@@ -282,6 +296,29 @@
         <p id="handoff-description">此页面对应的 Pi 会话已经结束。请使用最新打开的 Web RP 页面。</p>
       </div>
     </section>
-    <script type="module" src="/app.js?v=20"></script>
+    <dialog id="image-run-dialog" class="image-dialog">
+      <form method="dialog" class="image-dialog-card">
+        <header><h2>定制本次生图</h2><button value="cancel" aria-label="关闭">×</button></header>
+        <label>输入来源<select id="image-source-kind"><option value="recent-turns">最近正文轮次</option><option value="custom-brief">自定义内容</option></select></label>
+        <label>最近轮数<input id="image-turn-count" type="number" min="1" max="20" value="3" /></label>
+        <label>生图目标<select id="image-target-kind"><option value="latest">仅最新轮（更早内容作参考）</option><option value="all">全部所选内容</option></select></label>
+        <label>自定义内容<textarea id="image-custom-brief" rows="5" placeholder="当输入来源为自定义内容时填写"></textarea></label>
+        <label>本次额外要求<textarea id="image-user-direction" rows="3" placeholder="例如：更想看本轮第二段的场景。不会保存到下次。"></textarea></label>
+        <footer><button value="cancel" class="secondary-button">取消</button><button id="image-run-confirm" value="default">开始生图</button></footer>
+      </form>
+    </dialog>
+    <dialog id="image-viewer-dialog" class="image-dialog image-viewer-dialog">
+      <form method="dialog" class="image-viewer-card"><button value="close" class="image-viewer-close" aria-label="关闭">×</button><img id="image-viewer-image" alt="生成图片原图" /><footer class="image-viewer-controls"><button id="image-viewer-previous" type="button">上一张</button><button id="image-viewer-zoom" type="button">放大</button><button id="image-viewer-next" type="button">下一张</button><a id="image-viewer-download" download>下载原图</a></footer></form>
+    </dialog>
+    <dialog id="image-prompt-dialog" class="image-dialog">
+      <form method="dialog" class="image-dialog-card">
+        <header><h2>查看与修改画面内容</h2><button value="cancel" aria-label="关闭">×</button></header>
+        <label>画面内容片段<textarea id="image-content-prompt" rows="8"></textarea></label>
+        <label>重新生成范围<select id="image-regenerate-scope"><option value="current">仅当前工作流</option><option value="all">原请求的全部工作流</option></select></label>
+        <details><summary>完整提示词（只读）</summary><label>正面<textarea id="image-positive-prompt" rows="6" readonly></textarea></label><label>负面<textarea id="image-negative-prompt" rows="4" readonly></textarea></label></details>
+        <footer><button value="cancel" class="secondary-button">关闭</button><button id="image-regenerate-confirm" value="default">修改并重新生成</button></footer>
+      </form>
+    </dialog>
+    <script type="module" src="/app.js?v=23"></script>
   </body>
 </html>

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "world-scope-narrative",
+  "categories": {
+    "creative-principle": { "title": "创作准则", "description": "广域叙事的题材、烈度、节奏与收束原则。" },
+    "style": { "title": "文风", "description": "广域叙事独立文风。" },
+    "format": { "title": "格式", "description": "候选正文与最小元数据格式。" }
+  },
+  "selectionGroups": {},
+  "documents": [
+    { "id": "world-principles", "path": "documents/creative-principles.md", "title": "广域叙事创作准则", "summary": "广域故事的主体、烈度、节奏、传播价值和收束要求。", "categories": ["creative-principle"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["planning", "writing", "checking"], "priority": 100, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["world-style", "world-format"], "sources": [] },
+    { "id": "world-style", "path": "documents/style.md", "title": "广域叙事文风", "summary": "供作者在转卡时基于正文文风适配的独立广域文风。", "categories": ["style"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["writing", "checking"], "priority": 90, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["world-principles"], "sources": [] },
+    { "id": "world-format", "path": "documents/format.md", "title": "广域叙事格式", "summary": "广域故事正文与候选元数据输出格式。", "categories": ["format"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["writing", "checking"], "priority": 100, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["world-principles"], "sources": [] }
+  ]
+}

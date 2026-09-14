@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["recordFamily", "title", "summary", "content", "lifecycleStatus", "subjectRefs", "subjectLabels", "lastReviewedTurn"],
+  "properties": {
+    "recordFamily": { "type": "string" },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string" },
+    "content": { "type": "string" },
+    "lifecycleStatus": { "type": "string" },
+    "resolution": { "type": ["string", "null"], "enum": ["completed", "failed", "abandoned", "invalidated", "transformed", null] },
+    "subjectRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "subjectLabels": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "authorIntentRefs": { "type": "array", "items": { "type": "string", "pattern": "^card-context:[a-zA-Z0-9._-]+#[^#]+$" }, "uniqueItems": true },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "reviewSignals": { "type": "array", "items": { "type": "string" } },
+    "lastReviewedTurn": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

@@ -20,15 +20,23 @@ Choose commit policy deliberately:
 - `grouped` when authored groups are independently atomic;
 - `best-effort` only when partial application is an intended result and the workflow node explicitly permits it.
 
-Batch IDs and operation IDs are idempotency keys. A committed ID cannot be reused for different content. Commits within one session are serialized, and multi-file failure rolls back replacements within the transaction boundary.
+Batch IDs and operation IDs are idempotency keys. A committed ID cannot be reused for different content. Commits within one session are serialized, and multi-file failure rolls back replacements within the transaction boundary. Workflow collection locks improve safe concurrency but do not replace transaction serialization, atomicity, or expected-revision checks.
 
 ## Submission and recovery
 
 An authorized Agent may call `rp_data_submit`. A workflow may also submit exact declared outputs at node end. Both paths use the same transaction service; node-end handling must recognize an already committed batch rather than duplicate it.
 
+Trusted code nodes may supply an explicit historical binding to `data.submit` only for delayed work whose authoritative ownership belongs to an earlier visible message. The runtime validates the requested message ID against the current transcript, checks its stored turn and the workflow visibility boundary, and applies that single binding to the batch. Do not expose this override to ordinary Agents, accept arbitrary message IDs, or use it to bind data to content the workflow could not see.
+
+The single `binding` answers where a batch belongs in the story timeline. The separate runtime-owned `sourceReferences` answers which exact message revisions and retained artifacts were actually used as inputs. Workflow context assembly accumulates these references automatically. Trusted code may narrow delayed work to exact visible messages with `data.submit(batch, {sourceMessageIds:[...]})`; the runtime resolves current revisions and rejects unknown, duplicate, or future IDs. Ordinary Agents cannot submit this metadata themselves, and all Agent/node-end submissions inherit the run's recorded inputs.
+
+Receipts and record provenance retain the normalized source set. `inspectDataImpact()` is a read-only user-facing audit over receipts: it returns only installed/authorized module targets and identifies legacy receipts whose sources cannot be reconstructed. Editing a message creates a new message revision but never invalidates records, rolls back modules, reruns workflows, or blocks the next turn automatically. A user may use the reported batch/module range to explicitly start an authorized maintenance workflow; repair stays scoped to that chosen workflow and its declared module access.
+
+`inspectDataIntegrity()` may compare current authoritative message revisions with receipt sources and return module-scoped warnings. A module can acknowledge a reviewed range with its own guarded coverage record; the public diagnostic remains read-only and does not decide that a record is false. Declarative frontend alerts may prefill a statically allowed repair workflow, but only a user action starts it.
+
 Design receipt handling for validation failures, permission denial, revision conflicts, rollback, and corrected resubmission. Retrying a failed batch may reuse its identity only according to the runtime receipt contract; never turn a conflict into an unconditional overwrite.
 
-Message-suffix deletion removes bound revisions through the common store and restores the latest surviving effective state. Manual maintenance and migration also use the unified write service.
+Message-suffix deletion removes bound revisions through the common store and restores the latest surviving effective state. This structural suffix operation remains distinct from in-place editing. Manual repair, maintenance, and migration use explicitly selected workflows and the unified write service.
 
 ## Migration boundary
 

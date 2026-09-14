@@ -25,6 +25,12 @@ const state = {
   workflowPolicy: null,
   workflowRenderSignature: "",
   tokenRenderSignature: "",
+  imageGeneration: null,
+  imageGenerationRegion: null,
+  imagePromptRenderId: null,
+  imageViewerItems: [],
+  imageViewerIndex: 0,
+  imageViewerZoomed: false,
 };
 
 const elements = {
@@ -122,6 +128,36 @@ const elements = {
   tokenWorkflowList: document.querySelector("#token-workflow-list"),
   tokenNodeList: document.querySelector("#token-node-list"),
   tokenStatus: document.querySelector("#token-status"),
+  imageRunDialog: document.querySelector("#image-run-dialog"),
+  imageSourceKind: document.querySelector("#image-source-kind"),
+  imageTurnCount: document.querySelector("#image-turn-count"),
+  imageTargetKind: document.querySelector("#image-target-kind"),
+  imageCustomBrief: document.querySelector("#image-custom-brief"),
+  imageUserDirection: document.querySelector("#image-user-direction"),
+  imageRunConfirm: document.querySelector("#image-run-confirm"),
+  imageViewerDialog: document.querySelector("#image-viewer-dialog"),
+  imageViewerImage: document.querySelector("#image-viewer-image"),
+  imageViewerDownload: document.querySelector("#image-viewer-download"),
+  imageViewerPrevious: document.querySelector("#image-viewer-previous"),
+  imageViewerNext: document.querySelector("#image-viewer-next"),
+  imageViewerZoom: document.querySelector("#image-viewer-zoom"),
+  imagePromptDialog: document.querySelector("#image-prompt-dialog"),
+  imageContentPrompt: document.querySelector("#image-content-prompt"),
+  imagePositivePrompt: document.querySelector("#image-positive-prompt"),
+  imageNegativePrompt: document.querySelector("#image-negative-prompt"),
+  imageRegenerateScope: document.querySelector("#image-regenerate-scope"),
+  imageRegenerateConfirm: document.querySelector("#image-regenerate-confirm"),
+  comfyConnectionForm: document.querySelector("#comfy-connection-form"),
+  comfyConnectionSelect: document.querySelector("#comfy-connection-select"),
+  comfyConnectionId: document.querySelector("#comfy-connection-id"),
+  comfyConnectionTitle: document.querySelector("#comfy-connection-title"),
+  comfyConnectionUrl: document.querySelector("#comfy-connection-url"),
+  comfyConnectionToken: document.querySelector("#comfy-connection-token"),
+  comfyOutputPath: document.querySelector("#comfy-output-path"),
+  comfyInsecureRemote: document.querySelector("#comfy-insecure-remote"),
+  comfyTestConnection: document.querySelector("#comfy-test-connection"),
+  comfyConnectionStatus: document.querySelector("#comfy-connection-status"),
+  comfyProfileDocuments: document.querySelector("#comfy-profile-documents"),
 };
 
 function showHandoff(title, description) {
@@ -262,7 +298,450 @@ function appendModuleJsonNode(container, node, root = false) {
   container.append(tree);
 }
 
-function createModuleRegion(region, data) {
+function appendInteractiveValue(container, value) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "module-json-fields";
+  appendModuleJsonNode(wrapper, buildModuleJsonTree(value), true);
+  container.append(wrapper);
+}
+
+function inputForDeclaration(field, value) {
+  let input;
+  if (field.type === "textarea" || field.type === "json") input = document.createElement("textarea");
+  else if (field.type === "select") {
+    input = document.createElement("select");
+    if (!field.required) input.append(new Option("—", ""));
+    for (const option of field.options || []) input.append(new Option(option, option));
+  } else {
+    input = document.createElement("input");
+    input.type = field.type === "boolean" ? "checkbox" : ["integer", "number"].includes(field.type) ? "number" : "text";
+    if (field.type === "integer") input.step = "1";
+    if (field.minimum != null) input.min = String(field.minimum);
+    if (field.maximum != null) input.max = String(field.maximum);
+  }
+  input.dataset.fieldPath = field.path || `/${field.name}`;
+  input.required = field.required === true;
+  if (field.type === "boolean") input.checked = value === true;
+  else if (value !== undefined && value !== null) input.value = field.type === "json" ? JSON.stringify(value, null, 2) : String(value);
+  return input;
+}
+
+function declaredInputValue(input, field) {
+  if (field.type === "boolean") return input.checked;
+  if (["integer", "number"].includes(field.type)) return input.value === "" ? null : Number(input.value);
+  if (field.type === "json") return JSON.parse(input.value);
+  return input.value;
+}
+
+function createDeclaredField(field, value) {
+  const label = document.createElement("label");
+  label.className = "module-interactive-field";
+  const title = document.createElement("span"); title.textContent = field.label;
+  const input = inputForDeclaration(field, value);
+  label.append(title, input);
+  if (field.help) { const help = document.createElement("small"); help.textContent = field.help; label.append(help); }
+  return { label, input };
+}
+
+async function renderRecordHistory(container, module, region, recordId) {
+  container.replaceChildren();
+  appendModuleEmpty(container, "正在读取修订历史……");
+  async function load(cursor = null, reset = false) {
+    try {
+      const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records/${encodeURIComponent(recordId)}/history${suffix}`);
+      if (reset || cursor === null) container.replaceChildren();
+      for (const item of payload.items || []) {
+        const article = document.createElement("article"); article.className = "module-history-record";
+        const heading = document.createElement("strong"); heading.textContent = `修订 ${item.revision} · 第${item.turn}轮 · ${item.status}`;
+        article.append(heading); appendInteractiveValue(article, item.value); container.append(article);
+      }
+      if (!(payload.items || []).length && cursor === null) appendModuleEmpty(container, "没有可显示的修订历史。");
+      if (payload.nextCursor) {
+        const more = document.createElement("button"); more.type = "button"; more.className = "module-file-button"; more.textContent = "更多修订";
+        more.addEventListener("click", () => { more.remove(); void load(payload.nextCursor); }); container.append(more);
+      }
+    } catch (error) { if (cursor === null) container.replaceChildren(); appendModuleEmpty(container, error.message); }
+  }
+  await load(null, true);
+}
+
+async function renderRecordBrowserRegion(section, module, region) {
+  const controls = document.createElement("form"); controls.className = "module-interactive-controls";
+  const search = document.createElement("input"); search.type = "search"; search.placeholder = "搜索记录内容"; search.setAttribute("aria-label", "搜索记录内容"); controls.append(search);
+  const filterInputs = [];
+  for (const filter of region.filters || []) {
+    const field = { ...filter, type: filter.control, path: `/${filter.id}`, required: false, options: filter.control === "boolean" ? ["true", "false"] : filter.options };
+    if (filter.control === "boolean") field.type = "select";
+    const built = createDeclaredField(field, ""); filterInputs.push({ filter, input: built.input }); controls.append(built.label);
+  }
+  const searchButton = document.createElement("button"); searchButton.type = "submit"; searchButton.textContent = "查询"; controls.append(searchButton);
+  const results = document.createElement("div"); results.className = "module-record-list";
+  const paging = document.createElement("div"); paging.className = "module-pagination";
+  const previous = document.createElement("button"); previous.type = "button"; previous.className = "secondary-button"; previous.textContent = "上一页";
+  const next = document.createElement("button"); next.type = "button"; next.className = "secondary-button"; next.textContent = "下一页";
+  const pageLabel = document.createElement("span"); paging.append(previous, pageLabel, next);
+  section.append(controls, results, paging);
+  const cursors = [null]; let page = 0;
+  async function loadPage(reset = false) {
+    if (reset) { cursors.splice(0, cursors.length, null); page = 0; }
+    results.replaceChildren(); appendModuleEmpty(results, "正在读取记录……"); previous.disabled = true; next.disabled = true;
+    const params = new URLSearchParams(); if (cursors[page]) params.set("cursor", cursors[page]); if (search.value.trim()) params.set("search", search.value.trim());
+    for (const { filter, input } of filterInputs) if (input.value !== "") params.set(`filter.${filter.id}`, input.value);
+    try {
+      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records?${params}`);
+      results.replaceChildren();
+      for (const item of payload.items || []) {
+        const article = document.createElement("article"); article.className = "module-record module-browser-record";
+        const heading = document.createElement("div"); heading.className = "module-browser-heading";
+        const title = document.createElement("strong"); title.textContent = item.id;
+        const meta = document.createElement("span"); meta.textContent = `${item.recordType} · r${item.revision} · 第${item.turn}轮${item.status === "active" ? "" : ` · ${item.status}`}`;
+        const historyButton = document.createElement("button"); historyButton.type = "button"; historyButton.className = "module-file-button"; historyButton.textContent = "修订历史";
+        const history = document.createElement("div"); history.className = "module-record-history"; history.hidden = true;
+        historyButton.addEventListener("click", () => { history.hidden = !history.hidden; if (!history.hidden && !history.dataset.loaded) { history.dataset.loaded = "true"; void renderRecordHistory(history, module, region, item.id); } });
+        heading.append(title, meta, historyButton); article.append(heading); appendInteractiveValue(article, item.value); article.append(history); results.append(article);
+      }
+      if (!(payload.items || []).length) appendModuleEmpty(results, region.empty);
+      if (payload.nextCursor) cursors[page + 1] = payload.nextCursor; else cursors.splice(page + 1);
+      previous.disabled = page === 0; next.disabled = !payload.nextCursor; pageLabel.textContent = `第 ${page + 1} 页 · ${payload.returned || 0} 条`;
+    } catch (error) { results.replaceChildren(); appendModuleEmpty(results, error.message); pageLabel.textContent = "读取失败"; }
+  }
+  controls.addEventListener("submit", event => { event.preventDefault(); void loadPage(true); });
+  previous.addEventListener("click", () => { if (page > 0) { page -= 1; void loadPage(); } });
+  next.addEventListener("click", () => { if (cursors[page + 1]) { page += 1; void loadPage(); } });
+  await loadPage();
+}
+
+async function renderStoryBrowserRegion(section, module, region) {
+  const controls = document.createElement("div"); controls.className = "module-interactive-controls";
+  const mode = document.createElement("select");
+  for (const [value, label] of [["newest", "最新发布"], ["series", "按系列"]]) { const option = document.createElement("option"); option.value = value; option.textContent = label; if (value === "series" && !region.allowSeriesGrouping) option.disabled = true; mode.append(option); }
+  controls.append(mode);
+  const results = document.createElement("div"); results.className = "module-story-list";
+  const more = document.createElement("button"); more.type = "button"; more.className = "secondary-button"; more.textContent = "更多故事";
+  section.append(controls, results, more);
+  let cursor = null; let items = [];
+  const valueOf = (value, key) => value?.[key] ?? value?.[key.replace(/[A-Z]/g, letter => ` ${letter.toLowerCase()}`)] ?? null;
+  async function load(reset = false) {
+    if (reset) { cursor = null; items = []; results.replaceChildren(); }
+    more.disabled = true;
+    try {
+      const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records${suffix}`);
+      items.push(...(payload.items || [])); cursor = payload.nextCursor || null;
+      const ordered = mode.value === "series" ? [...items].sort((a, b) => String(valueOf(a.value, "seriesId") || "").localeCompare(String(valueOf(b.value, "seriesId") || "")) || Number(valueOf(a.value, "sequence") || 0) - Number(valueOf(b.value, "sequence") || 0)) : [...items];
+      results.replaceChildren();
+      for (const item of ordered) {
+        const value = item.value || {}; const article = document.createElement("article"); article.className = "module-story-card";
+        const heading = document.createElement("strong");
+        const time = valueOf(value, "timeRange") || "时间未标明"; const locations = valueOf(value, "locations") || [];
+        heading.textContent = `${Array.isArray(locations) ? locations.join("、") : locations} · ${typeof time === "string" ? time : `${time.start || "?"}—${time.end || "?"}`}`;
+        const summary = document.createElement("p"); summary.textContent = valueOf(value, "summary") || "";
+        const cast = document.createElement("small"); const characters = valueOf(value, "characters") || []; cast.textContent = Array.isArray(characters) ? characters.join("、") : String(characters);
+        const actions = document.createElement("div"); actions.className = "module-interactive-actions";
+        const read = document.createElement("button"); read.type = "button"; read.textContent = "阅读全文";
+        const full = document.createElement("div"); full.className = "module-story-full"; full.hidden = true;
+        read.addEventListener("click", async () => {
+          if (!full.hidden) { full.hidden = true; read.textContent = "阅读全文"; return; }
+          read.disabled = true;
+          try { const story = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/stories/${encodeURIComponent(item.id)}`); full.replaceChildren(); appendInteractiveValue(full, story.value); full.hidden = false; read.textContent = "收起全文"; }
+          catch (error) { full.replaceChildren(); appendModuleEmpty(full, error.message); full.hidden = false; }
+          finally { read.disabled = false; }
+        });
+        actions.append(read);
+        if (region.allowOpenAuthoritySource) { const source = document.createElement("button"); source.type = "button"; source.className = "module-file-button"; source.textContent = "打开源文件"; source.title = "高级 DIY：直接编辑将绕过版本、索引、归档和一致性保障"; source.addEventListener("click", async () => { source.disabled = true; try { await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/stories/${encodeURIComponent(item.id)}/open-source`, { method: "POST", body: "{}" }); } catch (error) { showError(error); } finally { source.disabled = false; } }); actions.append(source); }
+        article.append(heading, summary, cast, actions, full); results.append(article);
+      }
+      if (!items.length) appendModuleEmpty(results, region.empty || "暂无故事。");
+      more.hidden = !cursor; more.disabled = !cursor;
+    } catch (error) { appendModuleEmpty(results, error.message); more.hidden = true; }
+  }
+  mode.addEventListener("change", () => { void load(true); }); more.addEventListener("click", () => { void load(false); });
+  await load(true);
+}
+
+async function renderSettingsFormRegion(section, module, region) {
+  appendModuleEmpty(section, "正在读取设置……");
+  try {
+    const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/settings`);
+    section.replaceChildren();
+    if (region.title) { const title = document.createElement("h4"); title.textContent = region.title; section.append(title); }
+    if (region.description) { const description = document.createElement("p"); description.className = "module-description"; description.textContent = region.description; section.append(description); }
+    const form = document.createElement("form"); form.className = "module-settings-form";
+    const inputs = [];
+    for (const field of region.fields || []) { const built = createDeclaredField(field, payload.values?.[field.path]); inputs.push({ field, input: built.input }); form.append(built.label); }
+    const action = document.createElement("div"); action.className = "module-interactive-actions";
+    const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = region.submitLabel || "保存设置";
+    const status = document.createElement("span"); status.className = "setting-status"; action.append(submit, status); form.append(action); section.append(form);
+    form.addEventListener("submit", async event => {
+      event.preventDefault(); submit.disabled = true; status.textContent = "保存中……";
+      try {
+        const values = Object.fromEntries(inputs.map(({ field, input }) => [field.path, declaredInputValue(input, field)]));
+        await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/settings`, { method: "PUT", body: JSON.stringify({ expectedRevision: payload.record.revision, values }) });
+        status.textContent = "已保存"; await renderSettingsFormRegion(section, module, region);
+      } catch (error) { status.textContent = `保存失败：${error.message}`; submit.disabled = false; }
+    });
+  } catch (error) { section.replaceChildren(); appendModuleEmpty(section, error.message); }
+}
+
+async function renderIntegrityAlertsRegion(section, module, region) {
+  appendModuleEmpty(section, "正在检查归档状态……");
+  try {
+    const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/integrity`);
+    section.querySelector(".module-empty")?.remove();
+    const issues = payload.issues || [];
+    for (const issue of issues) {
+      const article = document.createElement("article"); article.className = `module-integrity-alert severity-${issue.severity || "warning"}`;
+      const title = document.createElement("strong");
+      const range = issue.startTurn === issue.endTurn ? `第 ${issue.startTurn} 轮` : `第 ${issue.startTurn}—${issue.endTurn} 轮`;
+      title.textContent = issue.type === "source-revised" ? `${range}的正文在归档后被修改` : `${range}尚未完成归档覆盖`;
+      const detail = document.createElement("p");
+      detail.textContent = issue.type === "source-revised"
+        ? `记录依据为修订 ${(issue.recordedRevisions || [issue.recordedRevision]).filter(value => value != null).join("、")}，当前正文为修订 ${issue.currentRevision}。现有记忆不会自动失效，请由你决定是否复核。`
+        : "该范围已经越过保护期和归档冷却，但没有成功覆盖；没有独立事件记录本身不算遗漏。";
+      const repair = document.createElement("button"); repair.type = "button"; repair.textContent = "修复此范围";
+      repair.addEventListener("click", async () => {
+        repair.disabled = true;
+        try {
+          const action = payload.action;
+          const workflowPayload = { [action.startTurnParameter]: issue.startTurn, [action.endTurnParameter]: issue.endTurn };
+          if (action.operationParameter) workflowPayload[action.operationParameter] = action.operationValue;
+          const result = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(action.workflowRegionId)}/workflows/${encodeURIComponent(action.workflowId)}/run`, { method: "POST", body: JSON.stringify({ payload: workflowPayload }) });
+          detail.textContent = `已启动限定修复：${result.run?.id || action.workflowId}。`;
+        } catch (error) { detail.textContent = `启动失败：${error.message}`; repair.disabled = false; }
+      });
+      article.append(title, detail, repair); section.append(article);
+    }
+    if (!issues.length) appendModuleEmpty(section, payload.empty || region.empty || "未发现需要处理的归档问题。");
+    if (payload.untrackedReceipts) {
+      const legacy = document.createElement("p"); legacy.className = "module-integrity-note";
+      legacy.textContent = `另有 ${payload.untrackedReceipts} 个旧事务缺少精确来源修订，系统不能自动判断是否需要复核。`;
+      section.append(legacy);
+    }
+  } catch (error) { section.querySelector(".module-empty")?.remove(); appendModuleEmpty(section, error.message); }
+}
+
+async function renderWorkflowControlsRegion(section, module, region) {
+  const status = document.createElement("div"); status.className = "module-workflow-status";
+  async function refreshStatus() {
+    try {
+      const payload = await request("/api/workflow-runs");
+      const allowed = new Set((region.workflows || []).map(item => item.id));
+      const runs = (payload.runs || []).filter(run => allowed.has(run.workflowId)).slice(-8).reverse();
+      const fragment = document.createDocumentFragment();
+      for (const run of runs) {
+        const row = document.createElement("div"); row.className = "module-workflow-run";
+        const label = document.createElement("span"); label.textContent = `${run.workflowTitle || run.workflowId} · ${run.status}`; row.append(label);
+        if (!["completed", "skipped", "failed", "cancelled"].includes(run.status) && run.live !== false) {
+          const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "module-file-button"; cancel.textContent = "取消";
+          cancel.addEventListener("click", async () => { cancel.disabled = true; try { await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/cancel`, { method: "POST" }); await refreshStatus(); } catch (error) { showError(error); cancel.disabled = false; } });
+          row.append(cancel);
+        }
+        fragment.append(row);
+      }
+      status.replaceChildren(fragment);
+      if (!runs.length) appendModuleEmpty(status, "当前聊天还没有这些工作流的运行记录。");
+    } catch (error) { status.replaceChildren(); appendModuleEmpty(status, error.message); }
+  }
+  for (const workflow of region.workflows || []) {
+    const form = document.createElement("form"); form.className = "module-workflow-control";
+    const heading = document.createElement("strong"); heading.textContent = workflow.title; form.append(heading);
+    if (workflow.description) { const description = document.createElement("p"); description.textContent = workflow.description; form.append(description); }
+    const inputs = [];
+    for (const field of workflow.parameters || []) { const built = createDeclaredField(field, field.default); inputs.push({ field, input: built.input }); form.append(built.label); }
+    const button = document.createElement("button"); button.type = "submit"; button.textContent = "启动"; form.append(button);
+    form.addEventListener("submit", async event => {
+      event.preventDefault(); if (workflow.confirm && !window.confirm(workflow.confirm)) return; button.disabled = true; status.textContent = "正在启动……";
+      try {
+        const payload = Object.fromEntries(inputs.map(({ field, input }) => [field.name, declaredInputValue(input, field)]));
+        const result = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/workflows/${encodeURIComponent(workflow.id)}/run`, { method: "POST", body: JSON.stringify({ payload }) });
+        status.textContent = `已启动：${result.run?.id || workflow.id}（${result.run?.status || "pending"}）`; await refreshStatus();
+      } catch (error) { status.textContent = `启动失败：${error.message}`; }
+      finally { button.disabled = false; }
+    });
+    section.append(form);
+  }
+  section.append(status);
+  await refreshStatus();
+}
+
+async function saveImagePreferences(next) {
+  const current = state.imageGeneration?.preferences?.data || { selectedProfileIds: [], quickMode: false, inputPolicy: { kind: "recent-turns", turnCount: 3, target: "latest" } };
+  const payload = { ...current, ...next };
+  await request("/api/image-generation/preferences", { method: "PUT", body: JSON.stringify(payload) });
+  state.imageGeneration.preferences = { ...(state.imageGeneration.preferences || {}), data: payload };
+}
+
+function imageRunPayload(custom = false) {
+  const preferences = state.imageGeneration?.preferences?.data || {};
+  const inputPolicy = custom ? {
+    kind: elements.imageSourceKind.value,
+    turnCount: Number(elements.imageTurnCount.value) || 3,
+    target: elements.imageTargetKind.value,
+  } : preferences.inputPolicy;
+  return {
+    operationId: crypto.randomUUID(),
+    profileIds: preferences.selectedProfileIds || [],
+    inputPolicy,
+    customBrief: custom ? elements.imageCustomBrief.value.trim() : "",
+    userDirection: custom ? elements.imageUserDirection.value.trim() : "",
+  };
+}
+
+function openImageRunDialog() {
+  const policy = state.imageGeneration?.preferences?.data?.inputPolicy || { kind: "recent-turns", turnCount: 3, target: "latest" };
+  elements.imageSourceKind.value = ["recent-turns", "custom-brief"].includes(policy.kind) ? policy.kind : "recent-turns";
+  elements.imageTurnCount.value = policy.turnCount || 3;
+  elements.imageTargetKind.value = ["latest", "all"].includes(policy.target) ? policy.target : "latest";
+  elements.imageCustomBrief.value = "";
+  elements.imageUserDirection.value = "";
+  elements.imageRunDialog.showModal();
+}
+
+async function startImageRun(custom = false) {
+  const payload = imageRunPayload(custom);
+  if (!payload.profileIds.length) throw new Error("请至少选择一个已适配工作流。");
+  if (custom && payload.inputPolicy?.kind === "recent-turns") await saveImagePreferences({ inputPolicy: payload.inputPolicy });
+  await request("/api/image-generation/run", { method: "POST", body: JSON.stringify(payload) });
+  elements.imageUserDirection.value = "";
+  if (custom) elements.imageRunDialog.close();
+}
+
+function renderImageViewer() {
+  const url = state.imageViewerItems[state.imageViewerIndex];
+  elements.imageViewerImage.src = url;
+  elements.imageViewerDownload.href = url.replace(/\?preview=.*$/, "");
+  elements.imageViewerImage.classList.toggle("zoomed", state.imageViewerZoomed);
+  elements.imageViewerZoom.textContent = state.imageViewerZoomed ? "缩小" : "放大";
+  elements.imageViewerPrevious.disabled = state.imageViewerIndex <= 0;
+  elements.imageViewerNext.disabled = state.imageViewerIndex >= state.imageViewerItems.length - 1;
+}
+
+function openImageViewer(items, index) {
+  state.imageViewerItems = items;
+  state.imageViewerIndex = index;
+  state.imageViewerZoomed = false;
+  renderImageViewer();
+  elements.imageViewerDialog.showModal();
+}
+
+function openImagePrompt(render) {
+  state.imagePromptRenderId = render.id;
+  elements.imageContentPrompt.value = render.data.contentPrompt || "";
+  elements.imagePositivePrompt.value = render.data.positivePrompt || "";
+  elements.imageNegativePrompt.value = render.data.negativePrompt || "";
+  elements.imagePromptDialog.showModal();
+}
+
+function loadComfyConnectionForm() {
+  const connection = state.imageGeneration?.connections?.find(item => item.id === elements.comfyConnectionSelect.value);
+  if (!connection) return;
+  elements.comfyConnectionId.value = connection.id;
+  elements.comfyConnectionTitle.value = connection.title;
+  elements.comfyConnectionUrl.value = connection.baseUrl;
+  elements.comfyConnectionToken.value = "";
+  elements.comfyOutputPath.value = connection.outputDirectoryPath || "";
+  elements.comfyInsecureRemote.checked = connection.allowInsecureRemote === true;
+}
+
+function renderComfySettings() {
+  const payload = state.imageGeneration;
+  const connections = payload?.connections || [];
+  const selected = elements.comfyConnectionSelect.value || connections[0]?.id || "local";
+  elements.comfyConnectionSelect.replaceChildren(...connections.map(item => new Option(`${item.title}${item.hasToken ? " · 已保存凭据" : ""}`, item.id)));
+  if (connections.some(item => item.id === selected)) elements.comfyConnectionSelect.value = selected;
+  loadComfyConnectionForm();
+  const fragment = document.createDocumentFragment();
+  for (const profile of payload?.profiles || []) {
+    const row = document.createElement("div"); row.className = "comfy-profile-document"; const name = document.createElement("strong"); name.textContent = `${profile.title}${profile.overrideStale ? " · 覆盖已过期" : ""}`; row.append(name);
+    for (const [target, label] of [["profile", "固定提示词"], ["workflow", "API 工作流"], ["guide", "模型指导"]]) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "module-file-button"; button.textContent = label;
+      button.addEventListener("click", () => request(`/api/image-generation/profiles/${encodeURIComponent(profile.id)}/open`, { method: "POST", body: JSON.stringify({ target }) }).catch(showError)); row.append(button);
+    }
+    fragment.append(row);
+  }
+  if (!fragment.childNodes.length) appendModuleEmpty(fragment, "没有适配配置。请在项目根目录用 adapt-comfyui-workflow 添加。");
+  elements.comfyProfileDocuments.replaceChildren(fragment);
+}
+
+async function renderImageGenerationRegion(section) {
+  state.imageGenerationRegion = section;
+  let payload;
+  try { payload = await request("/api/image-generation"); }
+  catch (error) { appendModuleEmpty(section, error.message); return; }
+  if (state.imageGenerationRegion !== section) return;
+  state.imageGeneration = payload;
+  renderComfySettings();
+  const preferences = payload.preferences?.data || { selectedProfileIds: [], quickMode: false, inputPolicy: { kind: "recent-turns", turnCount: 3, target: "latest" } };
+  const controls = document.createElement("div"); controls.className = "image-generation-controls";
+  const profiles = document.createElement("fieldset"); profiles.className = "image-profile-list";
+  const legend = document.createElement("legend"); legend.textContent = "生图工作流"; profiles.append(legend);
+  for (const profile of payload.profiles || []) {
+    const label = document.createElement("label"); const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = preferences.selectedProfileIds.includes(profile.id);
+    checkbox.addEventListener("change", async () => {
+      const selected = new Set(preferences.selectedProfileIds); if (checkbox.checked) selected.add(profile.id); else selected.delete(profile.id);
+      preferences.selectedProfileIds = [...selected]; try { await saveImagePreferences({ selectedProfileIds: preferences.selectedProfileIds }); } catch (error) { showError(error); }
+    });
+    label.append(checkbox, document.createTextNode(profile.title)); profiles.append(label);
+  }
+  if (!(payload.profiles || []).length) appendModuleEmpty(profiles, "没有已适配工作流。请在项目根目录运行 adapt-comfyui-workflow。");
+  const quickLabel = document.createElement("label"); quickLabel.className = "image-quick-toggle"; const quick = document.createElement("input"); quick.type = "checkbox"; quick.checked = preferences.quickMode === true;
+  quick.addEventListener("change", async () => { preferences.quickMode = quick.checked; try { await saveImagePreferences({ quickMode: quick.checked }); } catch (error) { showError(error); } });
+  quickLabel.append(quick, document.createTextNode(" 快速模式"));
+  const actions = document.createElement("div"); actions.className = "image-generation-actions";
+  const generate = document.createElement("button"); generate.type = "button"; generate.textContent = "生成图片"; generate.disabled = !(payload.profiles || []).length || !payload.sessionId;
+  generate.addEventListener("click", async () => { try { if (preferences.quickMode) await startImageRun(false); else openImageRunDialog(); } catch (error) { showError(error); } });
+  const customize = document.createElement("button"); customize.type = "button"; customize.className = "secondary-button"; customize.textContent = "定制本次"; customize.disabled = generate.disabled; customize.addEventListener("click", openImageRunDialog);
+  actions.append(generate, customize); controls.append(profiles, quickLabel, actions);
+  const gallery = document.createElement("div"); gallery.className = "image-gallery";
+  const displayRenders = [...(payload.renders || [])].reverse();
+  const viewerItems = displayRenders.filter(render => render.data.outputs?.[0]).map(render => `/api/image-generation/renders/${encodeURIComponent(render.id)}/images/0`);
+  const summarizedRequests = new Set();
+  for (const render of displayRenders) {
+    if (!summarizedRequests.has(render.data.requestId)) {
+      summarizedRequests.add(render.data.requestId);
+      const siblings = displayRenders.filter(item => item.data.requestId === render.data.requestId);
+      const completedCount = siblings.filter(item => item.data.state === "completed").length;
+      const failedCount = siblings.filter(item => item.data.state === "failed").length;
+      const recoveryCount = siblings.filter(item => ["submitting", "submitted"].includes(item.data.state) || item.data.errorKind === "submission-uncertain").length;
+      const summary = document.createElement("p"); summary.className = "image-card-status image-request-summary";
+      summary.textContent = recoveryCount
+        ? (completedCount || failedCount ? `部分完成 · ${completedCount} 已完成 · ${failedCount} 确定失败 · ${recoveryCount} 等待恢复` : `${recoveryCount} 项等待恢复原任务`)
+        : failedCount
+          ? (completedCount ? `部分完成 · ${completedCount} 已完成 · ${failedCount} 确定失败` : `${failedCount} 项确定失败`)
+          : completedCount === siblings.length
+            ? `${completedCount} 项全部完成`
+            : `${completedCount}/${siblings.length} 项已完成`;
+      gallery.append(summary);
+    }
+    const card = document.createElement("article"); card.className = `image-card state-${render.data.state}`;
+    const head = document.createElement("div"); head.className = "image-card-head"; const title = document.createElement("strong"); title.textContent = `#${render.data.ordinal} · ${render.data.profileId}`; const stateLabel = document.createElement("span"); stateLabel.textContent = ({ pending: "等待生成", submitting: "提交结果待确认", submitted: "生成中", completed: "已完成", failed: "确定失败", cancelled: "已取消" })[render.data.state] || render.data.state; head.append(title, stateLabel); card.append(head);
+    const output = render.data.outputs?.[0];
+    if (output) {
+      const figure = document.createElement("button"); figure.type = "button"; figure.className = "image-thumbnail-button";
+      const image = document.createElement("img"); image.loading = "lazy"; image.alt = `${render.data.profileId} 生成图`; const original = `/api/image-generation/renders/${encodeURIComponent(render.id)}/images/0`; image.src = `${original}?preview=webp;80`;
+      image.addEventListener("error", () => { figure.replaceChildren(Object.assign(document.createElement("span"), { textContent: "源文件找不到；提示词仍可重新生成" })); });
+      figure.append(image); figure.addEventListener("click", () => openImageViewer(viewerItems, viewerItems.indexOf(original))); card.append(figure);
+    } else { const status = document.createElement("p"); status.className = "image-card-status"; status.textContent = render.data.error || (render.data.state === "pending" ? "等待生成" : "暂时没有图片输出"); card.append(status); }
+    const prompt = document.createElement("button"); prompt.type = "button"; prompt.className = "module-file-button"; prompt.textContent = "查看提示词"; prompt.addEventListener("click", () => openImagePrompt(render)); card.append(prompt);
+    if (["submitting", "submitted"].includes(render.data.state) || render.data.errorKind === "submission-uncertain") {
+      const recover = document.createElement("button"); recover.type = "button"; recover.className = "secondary-button"; recover.textContent = "恢复原任务";
+      recover.addEventListener("click", async () => {
+        try {
+          recover.disabled = true;
+          await request(`/api/image-generation/requests/${encodeURIComponent(render.data.requestId)}/recover`, { method: "POST" });
+          await renderImageGenerationRegion(section);
+        } catch (error) { recover.disabled = false; showError(error); }
+      });
+      card.append(recover);
+    }
+    gallery.append(card);
+  }
+  if (!gallery.children.length) appendModuleEmpty(gallery, "当前聊天还没有生图记录。");
+  section.replaceChildren(controls, gallery);
+}
+
+function createModuleRegion(region, data, module = null) {
   const section = document.createElement("section");
   section.className = `module-region module-region-${region.type || "text"}`;
   if (region.title) {
@@ -271,6 +750,19 @@ function createModuleRegion(region, data) {
     section.append(title);
   }
   const value = valueAtPath(data, region.path);
+
+  if (region.spoiler) section.classList.add("module-region-spoiler");
+  if (region.type === "record-browser") { appendModuleEmpty(section, "正在载入分页档案……"); void renderRecordBrowserRegion(section, module, region); return section; }
+  if (region.type === "story-browser") { appendModuleEmpty(section, "正在载入故事目录……"); section.querySelector(".module-empty")?.remove(); void renderStoryBrowserRegion(section, module, region); return section; }
+  if (region.type === "settings-form") { void renderSettingsFormRegion(section, module, region); return section; }
+  if (region.type === "integrity-alerts") { void renderIntegrityAlertsRegion(section, module, region); return section; }
+  if (region.type === "workflow-controls") { void renderWorkflowControlsRegion(section, module, region); return section; }
+
+  if (region.type === "image-generation") {
+    appendModuleEmpty(section, "正在读取生图配置……");
+    void renderImageGenerationRegion(section);
+    return section;
+  }
 
   if (region.type === "json") {
     if (value === undefined) {
@@ -507,7 +999,7 @@ function renderFeatureModules(payload) {
     } else {
       const regions = Array.isArray(module.view?.regions) ? module.view.regions : [];
       if (!regions.length) appendModuleEmpty(content, "此模块没有可显示区域。");
-      for (const region of regions) content.append(createModuleRegion(region, module.data));
+      for (const region of regions) content.append(createModuleRegion(region, module.data, module));
     }
     section.append(heading, content);
     fragment.append(section);
@@ -766,10 +1258,13 @@ function applySnapshot(snapshot) {
   elements.chatView.hidden = !started;
   elements.chooseChatButton.hidden = !started;
   elements.chooseChatButton.disabled = snapshot.busy || state.switching;
-  elements.connectionStatus.textContent = snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
+  const blockingWorkflows = snapshot.blockingWorkflows || [];
+  elements.connectionStatus.textContent = blockingWorkflows.length
+    ? `等待后台工作流：${blockingWorkflows.map(item => item.workflowTitle || item.workflowId).join("、")}`
+    : snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
   elements.input.disabled = snapshot.busy;
   elements.sendButton.disabled = snapshot.busy || state.sending;
-  elements.sendButton.textContent = snapshot.busy ? "等待 Pi" : "发送";
+  elements.sendButton.textContent = blockingWorkflows.length ? "等待后台任务" : snapshot.busy ? "等待 Pi" : "发送";
   if (!state.playerNameDirty) elements.playerName.value = snapshot.playerName || "玩家";
 
   const messagesChanged = snapshot.messages.length !== previousCount || snapshot.messages.some((message, index) => {
@@ -1318,7 +1813,7 @@ async function saveAgent(scope) {
 }
 
 function workflowKindLabel(kind) { return ({ foreground: "前台", "turn-background": "当前回合后台", "global-background": "全局后台" })[kind] || kind; }
-function statusLabel(status) { return ({ pending: "等待", running: "执行中", completed: "完成", skipped: "跳过", failed: "失败", cancelled: "已取消", "awaiting-retry": "等待重试", "awaiting-model-choice": "等待选择模型" })[status] || status; }
+function statusLabel(status) { return ({ pending: "等待", running: "执行中", completed: "完成", skipped: "跳过", failed: "失败", cancelled: "已取消", "awaiting-retry": "等待重试", "awaiting-model-choice": "等待选择模型", "awaiting-recovery": "等待恢复原任务" })[status] || status; }
 function selectedWorkflow() { return state.workflows.find(item => item.id === elements.workflowSelect.value); }
 function workflowPanelHasFocus() {
   const active = document.activeElement;
@@ -1347,6 +1842,24 @@ function renderWorkflow() {
   const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${workflow.source === "card" ? "当前卡副本" : "全局模板"}${workflow.id === state.activeWorkflowId ? " · 当前前台工作流" : ""}`;
   const summaryDescription = document.createElement("p"); summaryDescription.textContent = workflow.description || "无简介";
   elements.workflowSummary.replaceChildren(summaryTitle, summaryMeta, summaryDescription);
+  if (workflow.kind !== "foreground") {
+    const triggerControls = document.createElement("div"); triggerControls.className = "workflow-trigger-controls";
+    const triggerType = document.createElement("select"); triggerType.className = "setting-select"; triggerType.append(new Option("手动触发", "manual"), new Option("开场选定后", "after-opening"), new Option("工作流完成后", "after-workflow"), new Option("节点完成后", "node")); triggerType.value = workflow.trigger?.type || "manual";
+    const targetWorkflow = document.createElement("select"); targetWorkflow.className = "setting-select";
+    const targetNode = document.createElement("select"); targetNode.className = "setting-select";
+    const fillTargets = () => {
+      targetWorkflow.replaceChildren(...state.workflows.filter(item => item.id !== workflow.id && !item.invalid).map(item => new Option(item.title, item.id)));
+      targetWorkflow.value = workflow.trigger?.workflowId || targetWorkflow.options[0]?.value || "";
+      const selected = state.workflows.find(item => item.id === targetWorkflow.value);
+      targetNode.replaceChildren(...(selected?.nodes || []).map(item => new Option(item.title, item.id)));
+      targetNode.value = workflow.trigger?.nodeId || targetNode.options[0]?.value || "";
+    };
+    const syncVisibility = () => { targetWorkflow.hidden = !["after-workflow", "node"].includes(triggerType.value); targetNode.hidden = triggerType.value !== "node"; };
+    fillTargets(); syncVisibility(); triggerType.addEventListener("change", syncVisibility); targetWorkflow.addEventListener("change", () => { workflow.trigger = { ...workflow.trigger, workflowId: targetWorkflow.value, nodeId: "" }; fillTargets(); });
+    const saveTrigger = document.createElement("button"); saveTrigger.type = "button"; saveTrigger.textContent = "保存触发方式";
+    saveTrigger.addEventListener("click", async () => { try { await request(`/api/workflows/${encodeURIComponent(workflow.id)}/trigger`, { method: "PUT", body: JSON.stringify({ type: triggerType.value, workflowId: targetWorkflow.value, nodeId: targetNode.value }) }); await refreshWorkflowData(workflow.id, true); } catch (error) { showError(error); } });
+    triggerControls.append(triggerType, targetWorkflow, targetNode, saveTrigger); elements.workflowSummary.append(triggerControls);
+  }
   const fragment = document.createDocumentFragment();
   for (const node of workflow.nodes || []) {
     const card = document.createElement("article"); card.className = "workflow-node-card";
@@ -1384,7 +1897,7 @@ function renderWorkflowRuns() {
     const card = document.createElement("article"); card.className = `workflow-run-card status-${run.status}`;
     const head = document.createElement("div"); head.className = "workflow-run-head";
     const runTitle = document.createElement("strong"); runTitle.textContent = run.workflowId;
-    const runMeta = document.createElement("span"); runMeta.textContent = `${statusLabel(run.status)} · 回合 ${run.turn ?? "—"}`;
+    const runMeta = document.createElement("span"); runMeta.textContent = `${statusLabel(run.status)} · 回合 ${run.turn ?? "—"}${run.blocksNextTurn ? " · 正在阻止下一轮" : ""}`;
     head.append(runTitle, runMeta); card.append(head);
     if (run.status === "completed") {
       const usage = document.createElement("p"); usage.className = "workflow-run-usage";
@@ -1427,9 +1940,23 @@ function renderWorkflowRuns() {
         const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true));
         row.append(model, retry, saveAndRetry);
       }
+      if (run.live && node.status === "awaiting-recovery") {
+        const recover = document.createElement("button"); recover.type = "button"; recover.textContent = "恢复原任务";
+        recover.addEventListener("click", async () => { recover.disabled = true; try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/recover`, { method: "POST" }); await refreshWorkflowData(); } catch (error) { showError(error); recover.disabled = false; } });
+        row.append(recover);
+      }
       card.append(row);
     }
-    if (run.live && !["completed", "failed", "cancelled"].includes(run.status)) { const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary-danger run-cancel"; cancel.textContent = "取消实例"; cancel.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/cancel`, { method: "POST" }); await refreshWorkflowData(); }); card.append(cancel); }
+    if (run.live && !["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
+      if (run.blocksNextTurn) {
+        const skip = document.createElement("button"); skip.type = "button"; skip.className = "run-skip"; skip.textContent = "跳过并放行";
+        skip.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/skip`, { method: "POST" }); await refreshWorkflowData(); });
+        card.append(skip);
+      }
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary-danger run-cancel"; cancel.textContent = "取消实例";
+      cancel.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/cancel`, { method: "POST" }); await refreshWorkflowData(); });
+      card.append(cancel);
+    }
     fragment.append(card);
   }
   if (!fragment.childNodes.length) { const empty = document.createElement("p"); empty.className = "module-settings-empty"; empty.textContent = "当前 Pi 会话还没有工作流实例。"; fragment.append(empty); }
@@ -1649,6 +2176,33 @@ elements.refreshWorkflows.addEventListener("click", () => refreshWorkflowData(un
 elements.showActiveWorkflow.addEventListener("click", () => { elements.workflowSelect.value = state.activeWorkflowId; renderWorkflow(); });
 elements.workflowPolicyForm.addEventListener("submit", saveWorkflowPolicy);
 elements.refreshTokens.addEventListener("click", () => refreshTokenUsage(true).catch(showError));
+elements.imageRunConfirm.addEventListener("click", event => {
+  event.preventDefault();
+  startImageRun(true).catch(showError);
+});
+elements.imageViewerDialog.addEventListener("close", () => { elements.imageViewerImage.removeAttribute("src"); });
+elements.imageViewerPrevious.addEventListener("click", () => { if (state.imageViewerIndex > 0) { state.imageViewerIndex -= 1; renderImageViewer(); } });
+elements.imageViewerNext.addEventListener("click", () => { if (state.imageViewerIndex < state.imageViewerItems.length - 1) { state.imageViewerIndex += 1; renderImageViewer(); } });
+elements.imageViewerZoom.addEventListener("click", () => { state.imageViewerZoomed = !state.imageViewerZoomed; renderImageViewer(); });
+elements.imageRegenerateConfirm.addEventListener("click", async event => {
+  event.preventDefault();
+  try {
+    await request(`/api/image-generation/renders/${encodeURIComponent(state.imagePromptRenderId)}/regenerate`, { method: "POST", body: JSON.stringify({ operationId: crypto.randomUUID(), contentPrompt: elements.imageContentPrompt.value.trim(), scope: elements.imageRegenerateScope.value }) });
+    elements.imagePromptDialog.close();
+  } catch (error) { showError(error); }
+});
+elements.comfyConnectionSelect.addEventListener("change", loadComfyConnectionForm);
+elements.comfyConnectionForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await request("/api/image-generation/connections", { method: "POST", body: JSON.stringify({ id: elements.comfyConnectionId.value.trim(), title: elements.comfyConnectionTitle.value.trim(), baseUrl: elements.comfyConnectionUrl.value.trim(), token: elements.comfyConnectionToken.value, outputDirectoryPath: elements.comfyOutputPath.value.trim(), allowInsecureRemote: elements.comfyInsecureRemote.checked }) });
+    state.imageGeneration = await request("/api/image-generation"); renderComfySettings(); elements.comfyConnectionStatus.textContent = "连接配置已保存。";
+  } catch (error) { showError(error); }
+});
+elements.comfyTestConnection.addEventListener("click", async () => {
+  try { const result = await request(`/api/image-generation/connections/${encodeURIComponent(elements.comfyConnectionSelect.value)}/test`, { method: "POST" }); elements.comfyConnectionStatus.textContent = `连接正常 · ${result.elapsedMs} ms`; }
+  catch (error) { elements.comfyConnectionStatus.textContent = "连接失败"; showError(error); }
+});
 
 async function refreshState() {
   if (state.switching) return;
@@ -1679,6 +2233,7 @@ async function initialize() {
   renderSavedProfiles();
   renderPlayerAvatarPreview();
   renderFeatureModules(await request("/api/modules"));
+  try { state.imageGeneration = await request("/api/image-generation"); renderComfySettings(); } catch {}
   const modelPayload = await request("/api/models");
   state.models = [modelPayload.current, ...(modelPayload.profiles || [])];
   renderModelSelectors();

@@ -1,0 +1,4 @@
+{
+  "type": "object", "required": ["turn", "summary", "activeConcerns", "publicationSummary", "deepRecommendation"],
+  "properties": { "turn": { "type": "integer", "minimum": 0 }, "summary": { "type": "string" }, "activeConcerns": { "type": "array", "items": { "type": "string" } }, "publicationSummary": { "type": "array", "items": { "type": "string" } }, "deepRecommendation": { "type": "object", "required": ["shouldStart", "reasonCodes"], "properties": { "shouldStart": { "type": "boolean" }, "reasonCodes": { "type": "array", "items": { "enum": ["plan-obsolete", "major-event-unguided", "meaningful-cooldown", "manual"] }, "uniqueItems": true } }, "additionalProperties": false } }, "additionalProperties": false
+}

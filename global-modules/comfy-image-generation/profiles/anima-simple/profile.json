@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "anima-simple",
+  "title": "Anima 简易方形工作流",
+  "revision": "1",
+  "guideId": "anima",
+  "connectionId": "local",
+  "workflowFile": "workflow.api.json",
+  "bindings": {
+    "positive": [
+      { "nodeId": "508", "input": "text_a" }
+    ],
+    "negative": [
+      { "nodeId": "768", "input": "text" }
+    ],
+    "seed": [
+      { "nodeId": "720", "input": "seed" }
+    ],
+    "filenamePrefix": [
+      { "nodeId": "702", "input": "filename_prefix" }
+    ]
+  },
+  "prompt": {
+    "separator": ", ",
+    "positivePrefix": "masterpiece, best quality, score_9, score_8, score_7, absurdres, newest, very aesthetic, amazing quality, highres, sensitive, @gpt-image-2",
+    "positiveSuffix": "",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, lowres, censor"
+  },
+  "output": {
+    "nodeIds": ["702"]
+  }
+}

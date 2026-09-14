@@ -18,7 +18,7 @@
    pi config -l --approve
    ```
 
-3. 切换到项目级配置范围，将根目录发现的 `st-card-to-pi-rp`、`design-pi-rp-data`、`create-pi-rp-feature-module`、`audit-and-upgrade-pi-rp-card` 和 `codex-delegate-bounded-tasks` 设为 `unload`/禁用。只保留 `play-pi-rp`、`play-pi-rp-web` 和卡片自身用于游玩的 module Skills。
+3. 切换到项目级配置范围，将根目录发现的 `st-card-to-pi-rp`、`design-pi-rp-data`、`create-pi-rp-feature-module`、`adapt-comfyui-workflow`、`audit-and-upgrade-pi-rp-card` 和 `codex-delegate-bounded-tasks` 设为 `unload`/禁用。只保留 `play-pi-rp`、`play-pi-rp-web` 和卡片自身用于游玩的 module Skills。
 
 4. 保存并退出配置界面。Pi 会把覆盖写入 `play/.pi/settings.json`。该文件属于本地游玩环境，不应移动到仓库根目录。
 

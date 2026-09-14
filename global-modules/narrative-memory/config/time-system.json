@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "configured": false,
+  "timeRuleVersion": "unconfigured",
+  "trueTimeFormat": "",
+  "allowedGranularities": [],
+  "sortValueFormat": "lexicographically-sortable-string",
+  "ambiguityPolicy": "保留自然语言展示时间；trueTime只取已定义的精确单位或整日粒度，不虚构小时。",
+  "auxiliaryRecordId": null,
+  "examples": []
+}

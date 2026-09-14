@@ -27,6 +27,18 @@ test("layers card agent overrides without changing the global profile", async ()
   assert.equal((await store.getAgent("writer")).effective.prompt, "global-next");
 });
 
+test("loads a complete card-owned companion agent", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const store = testStore(root);
+  await store.ensure();
+  const path = resolve(root, "cards", "demo", "agents", "image-prompt-writer", "agent.json");
+  await mkdir(resolve(path, ".."), { recursive: true });
+  await writeFile(path, JSON.stringify({ schemaVersion: 1, id: "image-prompt-writer", name: "Image", prompt: "scene only", tools: [], contextPermissions: ["workflow:scoped-output"], outputMode: "json", defaultModelId: "pi:current" }));
+  const agent = await store.getAgent("image-prompt-writer");
+  assert.equal(agent.source, "card");
+  assert.equal(agent.effective.outputMode, "json");
+});
+
 test("keeps API keys outside the project and redacts them from list responses", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
   const store = testStore(root);
@@ -58,12 +70,29 @@ test("prefers a card workflow copy over the global template", async () => {
   const store = testStore(root);
   await store.ensure();
   const workflow = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: "standard",
     kind: "foreground",
     title: "Global",
-    nodes: [{ id: "story", type: "narrative" }, { id: "done", type: "turn-finalize", dependsOn: ["story"] }],
+    nodes: [
+      { id: "story", type: "agent", outputs: { narrative: { path: "narrative.md", format: "narrative" } } },
+      { id: "done", type: "turn-finalize", dependsOn: ["story"], narrative: { fromNode: "story", output: "narrative" } },
+    ],
   };
   await store.saveCardWorkflow({ ...workflow, title: "Card" });
   assert.equal((await store.getWorkflow("standard")).title, "Card");
+});
+
+test("keeps module workflows out of the top-level workflow store", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const store = testStore(root);
+  await store.ensure();
+  await assert.rejects(() => store.saveCardWorkflow({
+    schemaVersion: 3,
+    id: "lookup",
+    ownerModuleId: "memory",
+    kind: "module-external",
+    interface: { inputs: {}, exports: {} },
+    nodes: [{ id: "return", type: "workflow-return", exports: {} }],
+  }), /cannot be saved as top-level/);
 });

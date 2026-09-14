@@ -26,7 +26,7 @@ class InventoryCardTests(unittest.TestCase):
         self.write(web / "public/new.js", "new")
         self.write(runtime / ".pi/lib/shared.mjs", "shared")
         self.write(runtime / "agents/writer/agent.json", "{}")
-        workflow = {"schemaVersion": 2, "id": "standard-rp", "kind": "foreground", "nodes": [{"id": "narrative", "type": "narrative"}, {"id": "finish", "type": "turn-finalize", "dependsOn": ["narrative"]}]}
+        workflow = {"schemaVersion": 3, "id": "standard-rp", "kind": "foreground", "nodes": [{"id": "narrative", "type": "agent", "outputs": {"narrative": {"path": "narrative.md", "format": "narrative"}}}, {"id": "finish", "type": "turn-finalize", "dependsOn": ["narrative"], "narrative": {"fromNode": "narrative", "output": "narrative"}}]}
         workflow_text = json.dumps(workflow)
         self.write(runtime / "workflows/standard-rp/workflow.json", workflow_text)
         self.write(root / "play/.pi/lib/shared.mjs", "shared")
@@ -36,9 +36,9 @@ class InventoryCardTests(unittest.TestCase):
         global_module = root / "global-modules/mood"
         card = root / "play/cards/test-card"
         module_definition = {
-            "schemaVersion": 4, "id": "mood", "basedOn": "global:mood", "title": "Mood", "description": "Tracks mood",
+            "schemaVersion": 6, "id": "mood", "moduleKind": "data", "basedOn": None, "title": "Mood", "description": "Tracks mood",
             "surface": "frontend", "contextOrder": 10, "displayOrder": 10,
-            "dataContractFile": "data-contract.json", "frontendViewFile": "view.json", "skillFile": "skill/SKILL.md",
+            "dataContractFile": "data-contract.json", "resourceCatalogFile": None, "frontendViewFile": "view.json", "skillFile": "skill/SKILL.md", "workflowFiles": [],
         }
         data_contract = {
             "schemaVersion": 1,
@@ -64,8 +64,8 @@ class InventoryCardTests(unittest.TestCase):
         manifest = {
             "id": "test-card",
             "name": "Test Card",
-            "fixed_context": ["core/story.md", "core/missing.md"],
-            "primary_characters": [],
+            "schema_version": 2,
+            "fixed_context": "core/missing.md",
             "context_processors": [],
             "feature_modules": ["features/mood/module.json"],
             "openings": [],

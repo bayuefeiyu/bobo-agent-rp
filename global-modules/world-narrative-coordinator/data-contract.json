@@ -1,0 +1,2399 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "world-narrative-coordinator",
+  "collections": {
+    "private-state": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/private-state/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "director.incubation": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/private-item.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "incubation"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "lifecycleStatus": {
+              "path": "/data/lifecycleStatus",
+              "type": "enum",
+              "values": [
+                "watching",
+                "developing",
+                "dormant",
+                "closed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "subjectRefs": {
+              "path": "/data/subjectRefs",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.actor-plan": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/private-item.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "actor-plan"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "lifecycleStatus": {
+              "path": "/data/lifecycleStatus",
+              "type": "enum",
+              "values": [
+                "active",
+                "dormant",
+                "closed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "subjectRefs": {
+              "path": "/data/subjectRefs",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.story-plan": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/private-item.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "story-plan"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "lifecycleStatus": {
+              "path": "/data/lifecycleStatus",
+              "type": "enum",
+              "values": [
+                "active",
+                "dormant",
+                "closed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "subjectRefs": {
+              "path": "/data/subjectRefs",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            },
+            "authorIntentRefs": {
+              "path": "/data/authorIntentRefs",
+              "type": "string-list",
+              "operators": [
+                "contains"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/authorIntentRefs",
+                  "label": "authorIntentRefs"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/authorIntentRefs",
+                  "label": "authorIntentRefs"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.world-trajectory": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/private-item.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "world-trajectory"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "lifecycleStatus": {
+              "path": "/data/lifecycleStatus",
+              "type": "enum",
+              "values": [
+                "active",
+                "dormant",
+                "closed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "subjectRefs": {
+              "path": "/data/subjectRefs",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/lifecycleStatus",
+                  "label": "lifecycleStatus"
+                },
+                {
+                  "path": "/data/resolution",
+                  "label": "resolution"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/reviewSignals",
+                  "label": "reviewSignals"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.watch": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/watch.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "watch"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "stage": {
+              "path": "/data/stage",
+              "type": "enum",
+              "values": [
+                "observe",
+                "warn",
+                "intervene"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "category": {
+              "path": "/data/category",
+              "type": "string",
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "subjectRefs": {
+              "path": "/data/subjectRefs",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/problem"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/stage",
+                  "label": "stage"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/category",
+                  "label": "category"
+                },
+                {
+                  "path": "/data/stage",
+                  "label": "stage"
+                },
+                {
+                  "path": "/data/problem",
+                  "label": "problem"
+                },
+                {
+                  "path": "/data/signals",
+                  "label": "signals"
+                },
+                {
+                  "path": "/data/recommendedResponse",
+                  "label": "recommendedResponse"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/category",
+                  "label": "category"
+                },
+                {
+                  "path": "/data/stage",
+                  "label": "stage"
+                },
+                {
+                  "path": "/data/problem",
+                  "label": "problem"
+                },
+                {
+                  "path": "/data/signals",
+                  "label": "signals"
+                },
+                {
+                  "path": "/data/recommendedResponse",
+                  "label": "recommendedResponse"
+                },
+                {
+                  "path": "/data/subjectRefs",
+                  "label": "subjectRefs"
+                },
+                {
+                  "path": "/data/subjectLabels",
+                  "label": "subjectLabels"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.player-signal": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/player-signal.schema.json",
+          "indexes": {
+            "recordFamily": {
+              "path": "/data/recordFamily",
+              "type": "enum",
+              "values": [
+                "player-signal"
+              ],
+              "operators": [
+                "eq"
+              ]
+            },
+            "signalLevel": {
+              "path": "/data/signalLevel",
+              "type": "enum",
+              "values": [
+                "tentative",
+                "recurring",
+                "explicit"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/evidence"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/signalLevel",
+                  "label": "signalLevel"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/signalLevel",
+                  "label": "signalLevel"
+                },
+                {
+                  "path": "/data/evidence",
+                  "label": "evidence"
+                },
+                {
+                  "path": "/data/implication",
+                  "label": "implication"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordFamily",
+                  "label": "recordFamily"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/signalLevel",
+                  "label": "signalLevel"
+                },
+                {
+                  "path": "/data/evidence",
+                  "label": "evidence"
+                },
+                {
+                  "path": "/data/implication",
+                  "label": "implication"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.guidance": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/guidance.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": [
+                "active",
+                "paused",
+                "closed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "channels": {
+              "path": "/data/channels",
+              "type": "string-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "kind": {
+              "path": "/data/kind",
+              "type": "enum",
+              "values": [
+                "context",
+                "direction",
+                "constraint",
+                "correction"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "strength": {
+              "path": "/data/strength",
+              "type": "enum",
+              "values": [
+                "advisory",
+                "priority",
+                "guardrail"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "lastReviewedTurn": {
+              "path": "/data/lastReviewedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/title",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/channels",
+                  "label": "channels"
+                },
+                {
+                  "path": "/data/kind",
+                  "label": "kind"
+                },
+                {
+                  "path": "/data/strength",
+                  "label": "strength"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/channels",
+                  "label": "channels"
+                },
+                {
+                  "path": "/data/kind",
+                  "label": "kind"
+                },
+                {
+                  "path": "/data/contextNature",
+                  "label": "contextNature"
+                },
+                {
+                  "path": "/data/strength",
+                  "label": "strength"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "guidance-publish": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/channels",
+                  "label": "channels"
+                },
+                {
+                  "path": "/data/kind",
+                  "label": "kind"
+                },
+                {
+                  "path": "/data/contextNature",
+                  "label": "contextNature"
+                },
+                {
+                  "path": "/data/strength",
+                  "label": "strength"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/channels",
+                  "label": "channels"
+                },
+                {
+                  "path": "/data/kind",
+                  "label": "kind"
+                },
+                {
+                  "path": "/data/contextNature",
+                  "label": "contextNature"
+                },
+                {
+                  "path": "/data/strength",
+                  "label": "strength"
+                },
+                {
+                  "path": "/data/lastReviewedTurn",
+                  "label": "lastReviewedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/channels",
+                  "label": "channels"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.publication": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/publication.schema.json",
+          "indexes": {
+            "channel": {
+              "path": "/data/channel",
+              "type": "string",
+              "operators": [
+                "eq",
+                "in"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/channel",
+                  "label": "channel"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/channel",
+                  "label": "channel"
+                },
+                {
+                  "path": "/data/items",
+                  "label": "items"
+                }
+              ]
+            },
+            "guidance-publish": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/channel",
+                  "label": "channel"
+                },
+                {
+                  "path": "/data/items",
+                  "label": "items"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/channel",
+                  "label": "channel"
+                },
+                {
+                  "path": "/data/items",
+                  "label": "items"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/channel",
+                  "label": "channel"
+                },
+                {
+                  "path": "/data/items",
+                  "label": "items"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        },
+        "director.turn-brief": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/turn-brief.schema.json",
+          "indexes": {
+            "lastReviewedTurn": {
+              "path": "/data/turn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/turn",
+                  "label": "turn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/activeConcerns",
+                  "label": "activeConcerns"
+                },
+                {
+                  "path": "/data/publicationSummary",
+                  "label": "publicationSummary"
+                },
+                {
+                  "path": "/data/deepRecommendation",
+                  "label": "deepRecommendation"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/turn",
+                  "label": "turn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/activeConcerns",
+                  "label": "activeConcerns"
+                },
+                {
+                  "path": "/data/publicationSummary",
+                  "label": "publicationSummary"
+                },
+                {
+                  "path": "/data/deepRecommendation",
+                  "label": "deepRecommendation"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/turn",
+                  "label": "turn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        },
+        "director.bootstrap-state": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/bootstrap-state.schema.json",
+          "indexes": {
+            "openingId": {
+              "path": "/data/openingId",
+              "type": "string",
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/initialized",
+                  "label": "initialized"
+                }
+              ]
+            },
+            "director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/initialized",
+                  "label": "initialized"
+                },
+                {
+                  "path": "/data/openingId",
+                  "label": "openingId"
+                },
+                {
+                  "path": "/data/initializedTurn",
+                  "label": "initializedTurn"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/initialized",
+                  "label": "initialized"
+                },
+                {
+                  "path": "/data/openingId",
+                  "label": "openingId"
+                },
+                {
+                  "path": "/data/initializedTurn",
+                  "label": "initializedTurn"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/initialized",
+                  "label": "initialized"
+                },
+                {
+                  "path": "/data/openingId",
+                  "label": "openingId"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        }
+      }
+    },
+    "deep-workbench": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/deep-workbench/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "director.deep-report": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/deep-report.schema.json",
+          "indexes": {
+            "basisTurn": {
+              "path": "/data/basisTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/summary",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            },
+            "deep-director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/basisTurn",
+                  "label": "basisTurn"
+                },
+                {
+                  "path": "/data/basisWorldTime",
+                  "label": "basisWorldTime"
+                },
+                {
+                  "path": "/data/previousRevision",
+                  "label": "previousRevision"
+                },
+                {
+                  "path": "/data/coverage",
+                  "label": "coverage"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/invalidatingSignals",
+                  "label": "invalidatingSignals"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/worldNarrativeTopics",
+                  "label": "worldNarrativeTopics"
+                },
+                {
+                  "path": "/data/nextReviewTriggers",
+                  "label": "nextReviewTriggers"
+                }
+              ]
+            },
+            "daily-director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/basisTurn",
+                  "label": "basisTurn"
+                },
+                {
+                  "path": "/data/basisWorldTime",
+                  "label": "basisWorldTime"
+                },
+                {
+                  "path": "/data/coverage",
+                  "label": "coverage"
+                },
+                {
+                  "path": "/data/assumptions",
+                  "label": "assumptions"
+                },
+                {
+                  "path": "/data/invalidatingSignals",
+                  "label": "invalidatingSignals"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/worldNarrativeTopics",
+                  "label": "worldNarrativeTopics"
+                },
+                {
+                  "path": "/data/nextReviewTriggers",
+                  "label": "nextReviewTriggers"
+                }
+              ]
+            },
+            "deep-status": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/basisTurn",
+                  "label": "basisTurn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/nextReviewTriggers",
+                  "label": "nextReviewTriggers"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/basisTurn",
+                  "label": "basisTurn"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        },
+        "director.deep-state": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/deep-state.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": [
+                "idle",
+                "running",
+                "failed"
+              ],
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                }
+              ]
+            },
+            "deep-director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/currentRunId",
+                  "label": "currentRunId"
+                },
+                {
+                  "path": "/data/lastTriggerTurn",
+                  "label": "lastTriggerTurn"
+                },
+                {
+                  "path": "/data/lastTriggerWorldTime",
+                  "label": "lastTriggerWorldTime"
+                },
+                {
+                  "path": "/data/lastCompletedTurn",
+                  "label": "lastCompletedTurn"
+                },
+                {
+                  "path": "/data/lastCompletedWorldTime",
+                  "label": "lastCompletedWorldTime"
+                },
+                {
+                  "path": "/data/currentReportRevision",
+                  "label": "currentReportRevision"
+                },
+                {
+                  "path": "/data/triggerReasons",
+                  "label": "triggerReasons"
+                },
+                {
+                  "path": "/data/failure",
+                  "label": "failure"
+                }
+              ]
+            },
+            "daily-director": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/lastTriggerTurn",
+                  "label": "lastTriggerTurn"
+                },
+                {
+                  "path": "/data/lastCompletedTurn",
+                  "label": "lastCompletedTurn"
+                },
+                {
+                  "path": "/data/currentReportRevision",
+                  "label": "currentReportRevision"
+                },
+                {
+                  "path": "/data/failure",
+                  "label": "failure"
+                }
+              ]
+            },
+            "deep-status": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/currentRunId",
+                  "label": "currentRunId"
+                },
+                {
+                  "path": "/data/lastTriggerTurn",
+                  "label": "lastTriggerTurn"
+                },
+                {
+                  "path": "/data/lastCompletedTurn",
+                  "label": "lastCompletedTurn"
+                },
+                {
+                  "path": "/data/currentReportRevision",
+                  "label": "currentReportRevision"
+                },
+                {
+                  "path": "/data/triggerReasons",
+                  "label": "triggerReasons"
+                },
+                {
+                  "path": "/data/failure",
+                  "label": "failure"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/lastCompletedTurn",
+                  "label": "lastCompletedTurn"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        }
+      }
+    },
+    "archive-outbox": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "turn-range",
+          "size": 50
+        },
+        "initialRecordsFile": "collections/archive-outbox/initial/records.json"
+      },
+      "recordTypes": {
+        "director.archive-handoff": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/archive-handoff.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": [
+                "ready",
+                "captured",
+                "cancelled"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "sourceCaptureId": {
+              "path": "/data/sourceCaptureId",
+              "type": "id",
+              "operators": [
+                "eq"
+              ]
+            },
+            "sourceTurn": {
+              "path": "/data/sourceTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            },
+            "dedupeKey": {
+              "path": "/data/dedupeKey",
+              "type": "string",
+              "operators": [
+                "eq"
+              ]
+            },
+            "recordKind": {
+              "path": "/data/recordKind",
+              "type": "enum",
+              "values": [
+                "entity",
+                "relationship",
+                "event",
+                "cognition"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/subject",
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/subject",
+                  "label": "subject"
+                }
+              ]
+            },
+            "archive-source": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/recordKind",
+                  "label": "recordKind"
+                },
+                {
+                  "path": "/data/intent",
+                  "label": "intent"
+                },
+                {
+                  "path": "/data/subject",
+                  "label": "subject"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/knowledgeScope",
+                  "label": "knowledgeScope"
+                },
+                {
+                  "path": "/data/sourceTurn",
+                  "label": "sourceTurn"
+                },
+                {
+                  "path": "/data/dedupeKey",
+                  "label": "dedupeKey"
+                },
+                {
+                  "path": "/data/contentVersion",
+                  "label": "contentVersion"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/sourceCaptureId",
+                  "label": "sourceCaptureId"
+                }
+              ]
+            },
+            "director-status": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/subject",
+                  "label": "subject"
+                },
+                {
+                  "path": "/data/sourceTurn",
+                  "label": "sourceTurn"
+                },
+                {
+                  "path": "/data/sourceCaptureId",
+                  "label": "sourceCaptureId"
+                },
+                {
+                  "path": "/data/contentVersion",
+                  "label": "contentVersion"
+                }
+              ]
+            },
+            "capture-confirm": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/sourceCaptureId",
+                  "label": "sourceCaptureId"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "settings": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/settings/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "director.settings": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/settings.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/enabled",
+                  "label": "enabled"
+                }
+              ]
+            },
+            "runtime": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/enabled",
+                  "label": "enabled"
+                },
+                {
+                  "path": "/data/deep",
+                  "label": "deep"
+                },
+                {
+                  "path": "/data/opening",
+                  "label": "opening"
+                },
+                {
+                  "path": "/data/healthReference",
+                  "label": "healthReference"
+                }
+              ]
+            },
+            "health": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/healthReference",
+                  "label": "healthReference"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/enabled",
+                  "label": "enabled"
+                },
+                {
+                  "path": "/data/deep",
+                  "label": "deep"
+                },
+                {
+                  "path": "/data/opening",
+                  "label": "opening"
+                },
+                {
+                  "path": "/data/healthReference",
+                  "label": "healthReference"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/enabled",
+                  "label": "enabled"
+                },
+                {
+                  "path": "/data/deep",
+                  "label": "deep"
+                },
+                {
+                  "path": "/data/opening",
+                  "label": "opening"
+                },
+                {
+                  "path": "/data/healthReference",
+                  "label": "healthReference"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "director.private.read": {
+      "collections": [
+        "private-state"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "director"
+      ]
+    },
+    "director.private.write": {
+      "collections": [
+        "private-state"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "director"
+      ]
+    },
+    "director.private.maintain": {
+      "collections": [
+        "private-state"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "maintenance"
+      ]
+    },
+    "director.guidance.materialize": {
+      "collections": [
+        "private-state"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "director"
+      ]
+    },
+    "director.deep.read": {
+      "collections": [
+        "deep-workbench"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "daily-director",
+        "deep-status"
+      ]
+    },
+    "director.deep.write": {
+      "collections": [
+        "deep-workbench"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "deep-director",
+        "deep-status"
+      ]
+    },
+    "director.archive.write": {
+      "collections": [
+        "archive-outbox"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "director-status",
+        "archive-source"
+      ]
+    },
+    "director.archive.source-read": {
+      "collections": [
+        "archive-outbox"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "archive-source"
+      ]
+    },
+    "director.archive.confirm": {
+      "collections": [
+        "archive-outbox"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "capture-confirm",
+        "director-status"
+      ]
+    },
+    "director.settings.read": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "runtime",
+        "health"
+      ]
+    },
+    "director.settings.update": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "runtime",
+        "maintenance"
+      ]
+    },
+    "director.frontend.read": {
+      "collections": [
+        "private-state",
+        "deep-workbench",
+        "archive-outbox",
+        "settings"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "frontend"
+      ]
+    }
+  }
+}

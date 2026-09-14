@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": ["name", "catalogSummary", "status", "templateMode", "templateId", "templateVersion", "partyIds", "relationTags", "overviewInformationControl", "informationBlocks", "sections", "summaryOverLimit"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "catalogSummary": { "type": "string" },
+    "status": { "enum": ["active", "ended"] },
+    "templateMode": { "enum": ["default", "custom"] },
+    "templateId": { "type": "string", "minLength": 1 },
+    "templateVersion": { "type": "integer", "minimum": 1 },
+    "partyIds": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "relationTags": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "overviewInformationControl": {
+      "type": "object",
+      "required": ["mode", "knowerIds"],
+      "properties": { "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true } },
+      "additionalProperties": false
+    },
+    "informationBlocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "mode", "knowerIds", "content"],
+        "properties": { "title": { "type": "string", "minLength": 1 }, "mode": { "enum": ["common", "restricted", "undiscovered", "unclassified"] }, "knowerIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "content": { "type": "object", "additionalProperties": true } },
+        "additionalProperties": false
+      }
+    },
+    "sections": { "type": "object", "additionalProperties": true },
+    "summaryOverLimit": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

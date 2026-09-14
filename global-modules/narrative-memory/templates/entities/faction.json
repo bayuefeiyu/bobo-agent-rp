@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.faction",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "faction",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、势力性质、活动范围、规模与知名度。", "recommendedFields": ["名称", "其他称谓", "势力性质", "活动范围", "规模", "知名度"] },
+    { "key": "理念与目标", "description": "公开或实际理念、长期目标和主要利益。", "recommendedFields": ["理念", "目标", "核心利益"] },
+    { "key": "组织与成员", "description": "组织结构、重要成员和成员构成。", "recommendedFields": ["组织结构", "重要成员"] },
+    { "key": "资源与能力", "description": "稳定资源、影响力和能力。", "recommendedFields": [] },
+    { "key": "关系与立场", "description": "对其他势力或角色的持续关系。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "仍影响当前状态的历史。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前持续状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的势力事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "factionType", "path": "/sections/基本信息/势力性质", "valueType": "string" },
+    { "facetId": "region", "path": "/sections/基本信息/活动范围", "valueType": "string-or-list" }
+  ]
+}

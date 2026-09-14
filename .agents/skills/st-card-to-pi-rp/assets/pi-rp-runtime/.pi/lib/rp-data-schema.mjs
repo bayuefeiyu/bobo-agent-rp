@@ -28,6 +28,7 @@ export function validateJsonSchema(value, schema, path = "/data") {
   if (Array.isArray(value)) {
     if (Number.isInteger(schema.minItems) && value.length < schema.minItems) errors.push({ path, code: "minItems", message: `Array has fewer than ${schema.minItems} items.` });
     if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) errors.push({ path, code: "maxItems", message: `Array has more than ${schema.maxItems} items.` });
+    if (schema.uniqueItems === true && new Set(value.map(item => JSON.stringify(item))).size !== value.length) errors.push({ path, code: "uniqueItems", message: "Array items must be unique." });
     if (schema.items && typeof schema.items === "object") value.forEach((item, index) => errors.push(...validateJsonSchema(item, schema.items, `${path}/${index}`)));
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 6,
+  "id": "narrative-memory",
+  "moduleKind": "data",
+  "basedOn": null,
+  "title": "叙事记忆",
+  "description": "按需检索并持续归档角色、地点、势力、物品、关系、事件、认知与知情范围。",
+  "surface": "frontend",
+  "contextOrder": 500,
+  "displayOrder": 500,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": null,
+  "frontendViewFile": "frontend-view.json",
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/narrative-memory-archive/workflow.json",
+    "workflows/narrative-memory-compression/workflow.json",
+    "workflows/narrative-memory-reference-snapshot/workflow.json",
+    "workflows/narrative-memory-retrieve/workflow.json",
+    "workflows/narrative-memory-entity-selection/workflow.json",
+    "workflows/narrative-memory-maintenance/workflow.json",
+    "workflows/narrative-memory-range-repair/workflow.json",
+    "workflows/narrative-memory-source-capture/workflow.json"
+  ]
+}

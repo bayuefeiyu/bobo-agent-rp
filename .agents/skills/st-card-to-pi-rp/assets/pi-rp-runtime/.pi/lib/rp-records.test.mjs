@@ -61,3 +61,18 @@ test("rebuilds message catalogs entirely from authoritative records", () => {
   assert.notEqual(rebuilt.entries[0].contentHash, first.entries[0].contentHash);
   assert.equal(Object.hasOwn(rebuilt.entries[0], "generated"), false);
 });
+
+test("stores narrative source metadata and treats missing legacy metadata conservatively", () => {
+  const current = createRecordEnvelope({
+    id: "message-current",
+    source: "messages",
+    sequence: 0,
+    binding: { turn: 1 },
+    metadata: { recordType: "message", entityIds: [], tags: ["user"], narrativeSource: { producerKind: "user", producerId: "player", layer: "in-world" } },
+    data: { role: "user", content: "我亲眼看见了。" },
+  });
+  assert.equal(current.metadata.narrativeSource.layer, "in-world");
+  const legacy = structuredClone(current);
+  delete legacy.metadata.narrativeSource;
+  assert.doesNotThrow(() => buildCatalog([legacy]));
+});

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "defaults": {
+    "memory.entity:generic": "entity.generic",
+    "memory.entity:character": "entity.character",
+    "memory.entity:location": "entity.location",
+    "memory.entity:faction": "entity.faction",
+    "memory.entity:item": "entity.item",
+    "memory.entity:ability": "entity.ability",
+    "memory.entity:species": "entity.species",
+    "memory.entity:concept": "entity.concept",
+    "memory.relationship": "relationship.default",
+    "memory.event": "event.default",
+    "memory.cognition": "cognition.default",
+    "memory.knower-group": "knower-group.default",
+    "memory.event-summary": "event-summary.default"
+  },
+  "templates": [
+    { "templateId": "entity.generic", "templateVersion": 1, "title": "通用实体", "recordType": "memory.entity", "entityKind": "generic", "file": "entities/generic.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.character", "templateVersion": 1, "title": "角色", "recordType": "memory.entity", "entityKind": "character", "file": "entities/character.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.location", "templateVersion": 1, "title": "地点", "recordType": "memory.entity", "entityKind": "location", "file": "entities/location.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.faction", "templateVersion": 1, "title": "势力", "recordType": "memory.entity", "entityKind": "faction", "file": "entities/faction.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.item", "templateVersion": 1, "title": "物品", "recordType": "memory.entity", "entityKind": "item", "file": "entities/item.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.ability", "templateVersion": 1, "title": "能力", "recordType": "memory.entity", "entityKind": "ability", "file": "entities/ability.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.species", "templateVersion": 1, "title": "种族", "recordType": "memory.entity", "entityKind": "species", "file": "entities/species.json", "builtIn": true, "enabled": true },
+    { "templateId": "entity.concept", "templateVersion": 1, "title": "概念", "recordType": "memory.entity", "entityKind": "concept", "file": "entities/concept.json", "builtIn": true, "enabled": true },
+    { "templateId": "relationship.default", "templateVersion": 1, "title": "关系", "recordType": "memory.relationship", "file": "relationships/default.json", "builtIn": true, "enabled": true },
+    { "templateId": "event.default", "templateVersion": 1, "title": "事件", "recordType": "memory.event", "file": "events/default.json", "builtIn": true, "enabled": true },
+    { "templateId": "cognition.default", "templateVersion": 1, "title": "认知与传闻", "recordType": "memory.cognition", "file": "cognitions/default.json", "builtIn": true, "enabled": true },
+    { "templateId": "knower-group.default", "templateVersion": 1, "title": "知情群体", "recordType": "memory.knower-group", "file": "knower-groups/default.json", "builtIn": true, "enabled": true },
+    { "templateId": "event-summary.default", "templateVersion": 1, "title": "事件摘要", "recordType": "memory.event-summary", "file": "event-summaries/default.json", "builtIn": true, "enabled": true }
+  ]
+}

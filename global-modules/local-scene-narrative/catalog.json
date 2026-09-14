@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "local-scene-narrative",
+  "categories": {
+    "creative-principle": { "title": "创作准则", "description": "近场叙事的题材、边界、节奏与收束原则。" },
+    "style": { "title": "文风", "description": "近场叙事独立文风。" },
+    "format": { "title": "格式", "description": "候选正文与最小元数据格式。" }
+  },
+  "selectionGroups": {},
+  "documents": [
+    { "id": "local-principles", "path": "documents/creative-principles.md", "title": "近场叙事创作准则", "summary": "近场故事的主体、节奏、边界和收束要求。", "categories": ["creative-principle"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["planning", "writing", "checking"], "priority": 100, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["local-style", "local-format"], "sources": [] },
+    { "id": "local-style", "path": "documents/style.md", "title": "近场叙事文风", "summary": "供作者在转卡时基于正文文风适配的独立近场文风。", "categories": ["style"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["writing", "checking"], "priority": 90, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["local-principles"], "sources": [] },
+    { "id": "local-format", "path": "documents/format.md", "title": "近场叙事格式", "summary": "近场故事正文与候选元数据输出格式。", "categories": ["format"], "subcategory": null, "readPolicy": "required", "authority": "binding", "appliesAt": ["writing", "checking"], "priority": 100, "selectionGroup": null, "readWhen": [], "perspective": "general", "aliases": [], "related": ["local-principles"], "sources": [] }
+  ]
+}

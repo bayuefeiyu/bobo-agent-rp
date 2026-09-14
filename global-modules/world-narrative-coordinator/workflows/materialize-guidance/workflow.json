@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 3, "id": "materialize-guidance", "ownerModuleId": "world-narrative-coordinator", "title": "组装导演频道指导", "description": "按频道发布清单和优先级确定性组装普通Markdown指导文档。", "kind": "module-external", "agentCallable": true,
+  "interface": { "inputs": { "publicationId": { "type": "parameter", "required": true, "valueType": "string", "description": "要发布的director.publication记录ID。" }, "channel": { "type": "parameter", "required": true, "valueType": "string", "description": "目标创作频道；必须与发布记录一致。" } }, "exports": { "guidance": { "format": "markdown", "kind": "file", "description": "仅含该频道允许披露的指导。" } } },
+  "revision": "1", "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 8 },
+  "nodes": [
+    { "id": "materialize", "type": "code", "outputs": { "guidance": { "path": "guidance.md", "format": "markdown", "scope": "workflow", "retain": "run" } }, "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.guidance.materialize"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } }], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/materialize-guidance.mjs" } },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["materialize"], "exports": { "guidance": { "fromNode": "materialize", "output": "guidance" } }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

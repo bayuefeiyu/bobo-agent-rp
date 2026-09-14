@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["compression", "lastDeterministicCheckAt", "lastDeterministicCheckStatus"],
+  "properties": {
+    "compression": {
+      "type": "object",
+      "required": ["triggerEntryCount", "targetEntryCount", "successfulCycleCount", "status", "lastRunAt", "lastRunId"],
+      "properties": {
+        "triggerEntryCount": { "type": "integer", "minimum": 2 },
+        "targetEntryCount": { "type": "integer", "minimum": 1 },
+        "successfulCycleCount": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["idle", "running", "succeeded", "failed", "skipped"] },
+        "lastRunAt": { "type": ["string", "null"] },
+        "lastRunId": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "lastDeterministicCheckAt": { "type": ["string", "null"] },
+    "lastDeterministicCheckStatus": { "enum": ["never", "succeeded", "failed"] }
+  },
+  "additionalProperties": false
+}

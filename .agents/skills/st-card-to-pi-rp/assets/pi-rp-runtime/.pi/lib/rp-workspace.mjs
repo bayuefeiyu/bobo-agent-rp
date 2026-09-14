@@ -119,6 +119,8 @@ export async function pruneWorkflowState(sessionDirectory, fromTurn) {
   for (const runId of removedRunIds) await rm(safeResolve(artifacts, runId), { recursive: true, force: true });
   const processRecords = safeResolve(workflowDirectory, "process-records");
   for (const runId of removedRunIds) await rm(safeResolve(processRecords, runId), { recursive: true, force: true });
+  const randomRecords = safeResolve(workflowDirectory, "random");
+  for (const runId of removedRunIds) await rm(safeResolve(randomRecords, runId), { recursive: true, force: true });
   const privateRoot = safeResolve(sessionDirectory, "workspace", "private");
   for (const kind of await readdir(privateRoot, { withFileTypes: true }).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error))) {
     if (!kind.isDirectory()) continue;

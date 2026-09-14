@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { normalizeNarrativeSource } from "./rp-narrative-source.mjs";
 
 const safeIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
 
@@ -24,6 +25,7 @@ export function createRecordEnvelope({ source, sequence, binding, metadata, data
       recordType: metadata?.recordType || "record",
       entityIds: Array.isArray(metadata?.entityIds) ? metadata.entityIds : [],
       tags: Array.isArray(metadata?.tags) ? metadata.tags : [],
+      narrativeSource: normalizeNarrativeSource(metadata?.narrativeSource),
       ...(typeof metadata?.title === "string" && metadata.title.trim() ? { title: metadata.title.trim() } : {}),
     },
     data,
@@ -60,6 +62,7 @@ export function validateRecordEnvelope(value) {
       throw new Error(`Record metadata.${field} must be a string array.`);
     }
   }
+  if (value.metadata.narrativeSource !== undefined) normalizeNarrativeSource(value.metadata.narrativeSource);
   if (!value.data || typeof value.data !== "object" || Array.isArray(value.data)) throw new Error("Record data must be an object.");
   return value;
 }

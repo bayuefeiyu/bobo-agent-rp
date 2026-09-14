@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.item",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "item",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、物品类型、外观、品质和知名度。", "recommendedFields": ["名称", "其他称谓", "物品类型", "外观", "品质", "知名度"] },
+    { "key": "能力与用途", "description": "功能、使用条件、代价和限制。", "recommendedFields": ["能力", "用途", "使用条件", "限制"] },
+    { "key": "归属与位置", "description": "当前持有者、所有权和所在地点。", "recommendedFields": ["持有者", "所有权", "所在地点"] },
+    { "key": "历史与来源", "description": "重要来源和历史。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "损坏、封印、消耗等持续状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的物品事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "itemType", "path": "/sections/基本信息/物品类型", "valueType": "string" },
+    { "facetId": "holder", "path": "/sections/归属与位置/持有者", "valueType": "string-or-list" }
+  ]
+}

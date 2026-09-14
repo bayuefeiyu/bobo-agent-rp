@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 
 const artifactQueues = new Map();
@@ -33,13 +33,22 @@ function nodeRoot(sessionDirectory, workflowId, runId, nodeId) {
 async function registerNodeArtifactsUnlocked({ sessionDirectory, workflow, run, node }) {
   const artifacts = {};
   const root = nodeRoot(sessionDirectory, workflow.id, run.id, node.id);
+  const handoffPathByOutput = new Map((node.workspaceHandoff?.include || []).map(entry => [
+    entry.output,
+    entry.as || node.outputs?.[entry.output]?.path,
+  ]));
   for (const [id, definition] of Object.entries(node.outputs || {})) {
     const path = safeResolve(root, definition.path);
-    const exists = await stat(path).then(value => value.isFile()).catch(error => {
-      if (error?.code === "ENOENT") return false;
+    const entry = await lstat(path).catch(error => {
+      if (error?.code === "ENOENT") return null;
       throw error;
     });
-    if (!exists) continue;
+    if (!entry) continue;
+    if (entry.isSymbolicLink()) throw new Error(`Node output ${id} cannot be a symbolic link.`);
+    const actualKind = entry.isFile() ? "file" : entry.isDirectory() ? "directory" : null;
+    if (!actualKind) throw new Error(`Node output ${id} must be a regular file or real directory.`);
+    const expectedKind = definition.kind || (definition.format === "document-set" ? "directory" : "file");
+    if (actualKind !== expectedKind) throw new Error(`Node output ${id} must be a ${expectedKind}.`);
     artifacts[id] = {
       schemaVersion: 1,
       id,
@@ -52,6 +61,9 @@ async function registerNodeArtifactsUnlocked({ sessionDirectory, workflow, run, 
       scope: definition.scope,
       retain: definition.retain,
       format: definition.format,
+      kind: expectedKind,
+      handoffPath: handoffPathByOutput.get(id) || null,
+      narrativeSource: structuredClone(run.nodes?.[node.id]?.narrativeSource || { producerKind: "unknown", producerId: null, layer: "unspecified", characterId: null }),
       createdAt: new Date().toISOString(),
     };
   }
@@ -75,7 +87,7 @@ export function artifactVisibleTo(artifact, target) {
   return false;
 }
 
-async function readVisibleArtifactsUnlocked({ sessionDirectory, target, fromNodeIds = [] }) {
+async function readVisibleArtifactsUnlocked({ sessionDirectory, target, fromNodeIds = [], sourceWorkflowRunId = null, handoffOnly = false }) {
   const registry = safeResolve(sessionDirectory, "workspace", "artifacts.jsonl");
   const records = await readFile(registry, "utf8").then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))).catch(error => {
     if (error?.code === "ENOENT") return [];
@@ -85,6 +97,8 @@ async function readVisibleArtifactsUnlocked({ sessionDirectory, target, fromNode
   const latest = new Map();
   for (const artifact of records) {
     if (allowedNodes.size && !allowedNodes.has(artifact.nodeId)) continue;
+    if (sourceWorkflowRunId && artifact.workflowRunId !== sourceWorkflowRunId) continue;
+    if (handoffOnly && !artifact.handoffPath) continue;
     if (!artifactVisibleTo(artifact, target)) continue;
     latest.set(`${artifact.workflowRunId}/${artifact.nodeId}/${artifact.id}`, artifact);
   }
@@ -109,7 +123,7 @@ async function cleanupArtifactsUnlocked(sessionDirectory, event) {
   };
   const removed = records.filter(shouldRemove);
   const kept = records.filter(artifact => !shouldRemove(artifact));
-  for (const artifact of removed) await rm(safeResolve(sessionDirectory, artifact.path), { force: true });
+  for (const artifact of removed) await rm(safeResolve(sessionDirectory, artifact.path), { force: true, recursive: artifact.kind === "directory" });
   await mkdir(dirname(registry), { recursive: true });
   await writeFile(registry, kept.map(item => JSON.stringify(item)).join("\n") + (kept.length ? "\n" : ""), "utf8");
   return removed;

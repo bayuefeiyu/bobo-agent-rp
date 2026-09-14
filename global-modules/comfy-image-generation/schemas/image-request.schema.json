@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "required": ["ordinal", "sourceKind", "triggerKind", "referenceContext", "imageTarget", "userDirection", "promptState", "invocationIntent", "invocationFingerprint", "resolvedInputFingerprint", "inputFingerprint", "contentPrompts", "selectedProfileIds", "profileBindings", "effectiveProfileSnapshots", "continuityContext", "chatFolder", "derivedFrom", "dedupeKey", "createdAt"],
+  "properties": {
+    "ordinal": { "type": "integer", "minimum": 1 },
+    "sourceKind": { "enum": ["recent-turns", "selected-messages", "workflow-output", "custom-brief"] },
+    "triggerKind": { "enum": ["manual", "after-workflow", "node"] },
+    "referenceContext": { "type": "string", "maxLength": 100000 },
+    "imageTarget": { "type": "string", "minLength": 1, "maxLength": 100000 },
+    "userDirection": { "type": "string", "maxLength": 4000 },
+    "promptState": { "enum": ["preparing", "ready"] },
+    "invocationIntent": { "type": "object" },
+    "invocationFingerprint": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "resolvedInputFingerprint": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "inputFingerprint": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "contentPrompts": { "type": "array", "maxItems": 20, "items": { "type": "object", "required": ["guideId", "content"], "properties": { "guideId": { "type": "string" }, "content": { "type": "string", "minLength": 1, "maxLength": 20000 } }, "additionalProperties": false } },
+    "selectedProfileIds": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string" } },
+    "profileBindings": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "object", "required": ["id", "revision", "digest", "effectiveDigest", "snapshotId", "guideId", "connectionId", "connectionBaseUrl", "workflowDigest", "outputNodeIds"], "properties": { "id": { "type": "string" }, "revision": { "type": "string" }, "digest": { "type": "string" }, "effectiveDigest": { "type": "string" }, "snapshotId": { "type": "string" }, "guideId": { "type": "string" }, "connectionId": { "type": "string" }, "connectionBaseUrl": { "type": "string", "minLength": 1 }, "workflowDigest": { "type": "string" }, "outputNodeIds": { "type": "array", "items": { "type": "string" } } }, "additionalProperties": false } },
+    "effectiveProfileSnapshots": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "object", "required": ["schemaVersion", "id", "revision", "guideId", "baseProfileDigest", "overrideDigest", "effectiveDigest", "snapshotId", "workflowDigest", "guideDigest", "connectionId", "connectionBaseUrl", "workflow", "bindings", "prompt", "guide", "outputNodeIds"], "properties": { "schemaVersion": { "const": 1 }, "id": { "type": "string" }, "title": { "type": "string" }, "revision": { "type": "string" }, "guideId": { "type": "string" }, "baseProfileDigest": { "type": "string" }, "overrideDigest": { "type": ["string", "null"] }, "effectiveDigest": { "type": "string" }, "snapshotId": { "type": "string" }, "workflowDigest": { "type": "string" }, "guideDigest": { "type": "string" }, "connectionId": { "type": "string" }, "connectionBaseUrl": { "type": "string", "minLength": 1 }, "workflow": { "type": "object" }, "bindings": { "type": "object" }, "prompt": { "type": "object" }, "guide": { "type": "string" }, "outputNodeIds": { "type": "array", "items": { "type": "string" } } }, "additionalProperties": false } },
+    "continuityContext": { "type": "object", "required": ["playerName", "playerDescription", "primaryCharacters"], "properties": { "playerName": { "type": "string" }, "playerDescription": { "type": "string" }, "primaryCharacters": { "type": "string" } }, "additionalProperties": false },
+    "chatFolder": { "type": "string", "minLength": 1 },
+    "derivedFrom": { "type": ["string", "object", "null"] },
+    "dedupeKey": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string" }
+  },
+  "oneOf": [
+    { "type": "object", "required": ["promptState", "contentPrompts"], "properties": { "promptState": { "const": "preparing" }, "contentPrompts": { "type": "array", "maxItems": 0 } } },
+    { "type": "object", "required": ["promptState", "contentPrompts"], "properties": { "promptState": { "const": "ready" }, "contentPrompts": { "type": "array", "minItems": 1 } } }
+  ],
+  "additionalProperties": false
+}

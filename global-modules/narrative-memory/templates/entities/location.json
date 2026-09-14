@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.location",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "location",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、地点类型、所属地域、规模和知名度。", "recommendedFields": ["名称", "其他称谓", "地点类型", "所属地域", "规模", "知名度"] },
+    { "key": "环境与布局", "description": "稳定环境、区域划分、出入口与空间联系。", "recommendedFields": ["环境", "区域", "出入口"] },
+    { "key": "规则与风险", "description": "当地持续规则、危险、限制和进入条件。", "recommendedFields": ["规则", "危险", "进入条件"] },
+    { "key": "居民与势力", "description": "长期存在的居民、管理者和势力。", "recommendedFields": [] },
+    { "key": "资源与功能", "description": "地点长期提供的资源和功能。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "对地点当前形态仍有影响的历史。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前持续状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的地点相关事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "locationType", "path": "/sections/基本信息/地点类型", "valueType": "string" },
+    { "facetId": "region", "path": "/sections/基本信息/所属地域", "valueType": "string-or-list" }
+  ]
+}

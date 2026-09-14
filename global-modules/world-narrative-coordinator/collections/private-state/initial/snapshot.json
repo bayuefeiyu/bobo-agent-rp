@@ -1,0 +1,22 @@
+[
+  {
+    "protocolVersion": 2, "id": "turn-brief-current", "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "recordType": "director.turn-brief", "dataSchemaVersion": 1, "sequence": 0, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "turn": 0, "summary": "尚未完成开场初始化。", "activeConcerns": [], "publicationSummary": [], "deepRecommendation": { "shouldStart": false, "reasonCodes": [] } }, "note": null, "provenance": {}
+  },
+  {
+    "protocolVersion": 2, "id": "publication-narrative", "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "recordType": "director.publication", "dataSchemaVersion": 1, "sequence": 1, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "channel": "narrative", "items": [] }, "note": null, "provenance": {}
+  },
+  {
+    "protocolVersion": 2, "id": "director-bootstrap-current", "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "recordType": "director.bootstrap-state", "dataSchemaVersion": 1, "sequence": 2, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "initialized": false, "openingId": null, "initializedTurn": null }, "note": null, "provenance": {}
+  },
+  {
+    "protocolVersion": 2, "id": "publication-local-scene-narrative", "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "recordType": "director.publication", "dataSchemaVersion": 1, "sequence": 3, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "channel": "local-scene-narrative", "items": [] }, "note": null, "provenance": {}
+  },
+  {
+    "protocolVersion": 2, "id": "publication-world-scope-narrative", "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "recordType": "director.publication", "dataSchemaVersion": 1, "sequence": 4, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
+    "data": { "channel": "world-scope-narrative", "items": [] }, "note": null, "provenance": {}
+  }
+]

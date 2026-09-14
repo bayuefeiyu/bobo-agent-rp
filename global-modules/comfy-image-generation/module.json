@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 6,
+  "id": "comfy-image-generation",
+  "moduleKind": "data",
+  "basedOn": null,
+  "title": "剧情生图",
+  "description": "使用已适配的 ComfyUI 工作流，把剧情或自定义材料转成图片。",
+  "surface": "frontend",
+  "contextOrder": 900,
+  "displayOrder": 900,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": null,
+  "frontendViewFile": "frontend-view.json",
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/agent-image-generation/workflow.json"
+  ]
+}

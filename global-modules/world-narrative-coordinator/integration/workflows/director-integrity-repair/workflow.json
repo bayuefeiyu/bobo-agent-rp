@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "id": "director-integrity-repair",
+  "title": "手动修复导演数据完整性",
+  "description": "先生成只读诊断，再按用户明确范围修复导演私有数据。",
+  "kind": "global-background",
+  "revision": "1",
+  "defaults": { "agentId": "world-narrative-integrity-repairer", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual" },
+  "nodes": [{
+    "id": "repair",
+    "type": "code",
+    "outputs": {},
+    "moduleAccess": [],
+    "workflowCalls": ["world-narrative-coordinator/director-health-report", "world-narrative-coordinator/director-integrity-repair"],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-integrity-repair.mjs" }
+  }]
+}

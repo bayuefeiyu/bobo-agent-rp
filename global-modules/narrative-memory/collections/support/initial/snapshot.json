@@ -1,0 +1,58 @@
+[
+  {
+    "protocolVersion": 2,
+    "id": "narrative-memory-settings",
+    "moduleId": "narrative-memory",
+    "collectionId": "support",
+    "recordType": "memory.settings",
+    "dataSchemaVersion": 1,
+    "sequence": 0,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-09-06T00:00:00.000Z",
+    "updatedAt": "2026-09-06T00:00:00.000Z",
+    "binding": { "messageId": null, "turn": 0 },
+    "data": {
+      "archive": { "enabled": true, "archiveEveryTurns": 1, "protectRecentTurns": 0, "referenceEarlierTurns": 3 },
+      "retrieval": { "entityQueryLimit": 20, "initialInspectLimit": 30, "supplementalInspectLimit": 5, "informationLimit": 20, "elasticInformationLimit": 5, "possiblePerQueryLimit": 2, "customBudgetInterfaceEnabled": true },
+      "compression": { "enabled": true, "initialTriggerEntryCount": 150, "initialTargetEntryCount": 90, "growthPerSuccessfulCycle": 10, "allowManualTrigger": true },
+      "maintenance": { "deterministicAfterCommit": true, "injectOverLimitRepairsIntoArchive": true, "automaticSemanticAudit": false, "manualWorkflowEnabled": true }
+    },
+    "note": null,
+    "provenance": {}
+  },
+  {
+    "protocolVersion": 2,
+    "id": "narrative-memory-archive-state",
+    "moduleId": "narrative-memory",
+    "collectionId": "support",
+    "recordType": "memory.archive-state",
+    "dataSchemaVersion": 1,
+    "sequence": 1,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-09-06T00:00:00.000Z",
+    "updatedAt": "2026-09-06T00:00:00.000Z",
+    "binding": { "messageId": null, "turn": 0 },
+    "data": { "lastArchivedTurn": 0, "lastArchiveStatus": "never", "lastArchiveAt": null, "lastArchiveRunId": null, "lastCoveredMessageId": null },
+    "note": null,
+    "provenance": {}
+  },
+  {
+    "protocolVersion": 2,
+    "id": "narrative-memory-maintenance-state",
+    "moduleId": "narrative-memory",
+    "collectionId": "support",
+    "recordType": "memory.maintenance-state",
+    "dataSchemaVersion": 1,
+    "sequence": 2,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-09-06T00:00:00.000Z",
+    "updatedAt": "2026-09-06T00:00:00.000Z",
+    "binding": { "messageId": null, "turn": 0 },
+    "data": { "compression": { "triggerEntryCount": 150, "targetEntryCount": 90, "successfulCycleCount": 0, "status": "idle", "lastRunAt": null, "lastRunId": null }, "lastDeterministicCheckAt": null, "lastDeterministicCheckStatus": "never" },
+    "note": null,
+    "provenance": {}
+  }
+]

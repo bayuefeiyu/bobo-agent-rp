@@ -1,0 +1,3039 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "narrative-memory",
+  "collections": {
+    "entities": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "index",
+          "index": "entityKind",
+          "fallback": "generic"
+        },
+        "initialRecordsFile": "collections/entities/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.entity": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/entity.schema.json",
+          "identity": {
+            "namePath": "/data/name",
+            "aliasesPath": "/data/aliases"
+          },
+          "indexes": {
+            "name": {
+              "path": "/data/name",
+              "type": "string",
+              "operators": [
+                "eq",
+                "contains"
+              ]
+            },
+            "aliases": {
+              "path": "/data/aliases",
+              "type": "string-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "entityKind": {
+              "path": "/data/entityKind",
+              "type": "enum",
+              "values": [
+                "generic",
+                "character",
+                "location",
+                "faction",
+                "item",
+                "ability",
+                "species",
+                "concept"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "templateId": {
+              "path": "/data/templateId",
+              "type": "string",
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/aliases",
+            "/data/catalogSummary"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "别名"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "实体类型"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "模板"
+                }
+              ]
+            },
+            "selection": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "实体类型"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "模板"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "模板版本"
+                },
+                {
+                  "path": "/data/derivedFacets",
+                  "label": "筛选面"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "entityKind"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/derivedFacets",
+                  "label": "derivedFacets"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "entityKind"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/derivedFacets",
+                  "label": "derivedFacets"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "entityKind"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/derivedFacets",
+                  "label": "derivedFacets"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/entityKind",
+                  "label": "entityKind"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/derivedFacets",
+                  "label": "derivedFacets"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "relationships": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "single"
+        },
+        "initialRecordsFile": "collections/relationships/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.relationship": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/relationship.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": [
+                "active",
+                "ended"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "partyIds": {
+              "path": "/data/partyIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "relationTags": {
+              "path": "/data/relationTags",
+              "type": "string-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "informationMode": {
+              "path": "/data/overviewInformationControl/mode",
+              "type": "enum",
+              "values": [
+                "common",
+                "restricted",
+                "undiscovered",
+                "unclassified"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/catalogSummary",
+            "/data/relationTags"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "状态"
+                },
+                {
+                  "path": "/data/partyIds",
+                  "label": "参与方"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/partyIds",
+                  "label": "partyIds"
+                },
+                {
+                  "path": "/data/relationTags",
+                  "label": "relationTags"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/partyIds",
+                  "label": "partyIds"
+                },
+                {
+                  "path": "/data/relationTags",
+                  "label": "relationTags"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/partyIds",
+                  "label": "partyIds"
+                },
+                {
+                  "path": "/data/relationTags",
+                  "label": "relationTags"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/partyIds",
+                  "label": "partyIds"
+                },
+                {
+                  "path": "/data/relationTags",
+                  "label": "relationTags"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "events": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "turn-range",
+          "size": 100
+        },
+        "initialRecordsFile": "collections/events/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.event": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/event.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": [
+                "ongoing",
+                "completed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "sortValue": {
+              "path": "/data/time/sortValue",
+              "type": "time",
+              "operators": [
+                "eq",
+                "gt",
+                "gte",
+                "lt",
+                "lte"
+              ]
+            },
+            "participantIds": {
+              "path": "/data/participantIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "locationIds": {
+              "path": "/data/locationIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "relatedEntityIds": {
+              "path": "/data/relatedEntityIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "informationMode": {
+              "path": "/data/overviewInformationControl/mode",
+              "type": "enum",
+              "values": [
+                "common",
+                "restricted",
+                "undiscovered",
+                "unclassified"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/catalogSummary"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "状态"
+                },
+                {
+                  "path": "/data/time",
+                  "label": "时间"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "地点"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/time",
+                  "label": "time"
+                },
+                {
+                  "path": "/data/participantIds",
+                  "label": "participantIds"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/relatedEntityIds",
+                  "label": "relatedEntityIds"
+                },
+                {
+                  "path": "/data/precedingEventIds",
+                  "label": "precedingEventIds"
+                },
+                {
+                  "path": "/data/relatedEventIds",
+                  "label": "relatedEventIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/time",
+                  "label": "time"
+                },
+                {
+                  "path": "/data/participantIds",
+                  "label": "participantIds"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/relatedEntityIds",
+                  "label": "relatedEntityIds"
+                },
+                {
+                  "path": "/data/precedingEventIds",
+                  "label": "precedingEventIds"
+                },
+                {
+                  "path": "/data/relatedEventIds",
+                  "label": "relatedEventIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/time",
+                  "label": "time"
+                },
+                {
+                  "path": "/data/participantIds",
+                  "label": "participantIds"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/relatedEntityIds",
+                  "label": "relatedEntityIds"
+                },
+                {
+                  "path": "/data/precedingEventIds",
+                  "label": "precedingEventIds"
+                },
+                {
+                  "path": "/data/relatedEventIds",
+                  "label": "relatedEventIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/time",
+                  "label": "time"
+                },
+                {
+                  "path": "/data/participantIds",
+                  "label": "participantIds"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/relatedEntityIds",
+                  "label": "relatedEntityIds"
+                },
+                {
+                  "path": "/data/precedingEventIds",
+                  "label": "precedingEventIds"
+                },
+                {
+                  "path": "/data/relatedEventIds",
+                  "label": "relatedEventIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/informationBlocks",
+                  "label": "informationBlocks"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        },
+        "memory.event-summary": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/event-summary.schema.json",
+          "indexes": {
+            "sortValue": {
+              "path": "/data/timeRange/startSortValue",
+              "type": "time",
+              "operators": [
+                "eq",
+                "gt",
+                "gte",
+                "lt",
+                "lte"
+              ]
+            },
+            "coveredEventIds": {
+              "path": "/data/coveredEventIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "sourceEntryIds": {
+              "path": "/data/sourceEntryIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "locationIds": {
+              "path": "/data/locationIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "informationMode": {
+              "path": "/data/overviewInformationControl/mode",
+              "type": "enum",
+              "values": [
+                "common",
+                "restricted",
+                "undiscovered",
+                "unclassified"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/catalogSummary"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/timeRange",
+                  "label": "时间范围"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "地点"
+                },
+                {
+                  "path": "/data/sourceEntryIds",
+                  "label": "直接来源"
+                },
+                {
+                  "path": "/data/coveredEventIds",
+                  "label": "覆盖事件"
+                },
+                {
+                  "path": "/data/precedingSummaryIds",
+                  "label": "前置摘要"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "概况知情范围"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/sourceEntryIds",
+                  "label": "sourceEntryIds"
+                },
+                {
+                  "path": "/data/coveredEventIds",
+                  "label": "coveredEventIds"
+                },
+                {
+                  "path": "/data/precedingSummaryIds",
+                  "label": "precedingSummaryIds"
+                },
+                {
+                  "path": "/data/timeRange",
+                  "label": "timeRange"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/sourceEntryIds",
+                  "label": "sourceEntryIds"
+                },
+                {
+                  "path": "/data/coveredEventIds",
+                  "label": "coveredEventIds"
+                },
+                {
+                  "path": "/data/precedingSummaryIds",
+                  "label": "precedingSummaryIds"
+                },
+                {
+                  "path": "/data/timeRange",
+                  "label": "timeRange"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/sourceEntryIds",
+                  "label": "sourceEntryIds"
+                },
+                {
+                  "path": "/data/coveredEventIds",
+                  "label": "coveredEventIds"
+                },
+                {
+                  "path": "/data/precedingSummaryIds",
+                  "label": "precedingSummaryIds"
+                },
+                {
+                  "path": "/data/timeRange",
+                  "label": "timeRange"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/sourceEntryIds",
+                  "label": "sourceEntryIds"
+                },
+                {
+                  "path": "/data/coveredEventIds",
+                  "label": "coveredEventIds"
+                },
+                {
+                  "path": "/data/precedingSummaryIds",
+                  "label": "precedingSummaryIds"
+                },
+                {
+                  "path": "/data/timeRange",
+                  "label": "timeRange"
+                },
+                {
+                  "path": "/data/locationIds",
+                  "label": "locationIds"
+                },
+                {
+                  "path": "/data/overviewInformationControl",
+                  "label": "overviewInformationControl"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "cognitions": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "turn-range",
+          "size": 100
+        },
+        "initialRecordsFile": "collections/cognitions/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.cognition": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/cognition.schema.json",
+          "indexes": {
+            "subjectRecordIds": {
+              "path": "/data/subjectRecordIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "relatedRecordIds": {
+              "path": "/data/relatedRecordIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "knowerIds": {
+              "path": "/data/knowerScope/knowerIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "informationMode": {
+              "path": "/data/knowerScope/mode",
+              "type": "enum",
+              "values": [
+                "common",
+                "restricted",
+                "unclassified"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "propagationStage": {
+              "path": "/data/propagation/stage",
+              "type": "enum",
+              "values": [
+                "sealed",
+                "selective",
+                "incidental",
+                "active",
+                "broadcast",
+                "unclassified"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/claim",
+            "/data/catalogSummary"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/subjectRecordIds",
+                  "label": "主题"
+                },
+                {
+                  "path": "/data/propagation/stage",
+                  "label": "传播阶段"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/claim",
+                  "label": "claim"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/subjectRecordIds",
+                  "label": "subjectRecordIds"
+                },
+                {
+                  "path": "/data/relatedRecordIds",
+                  "label": "relatedRecordIds"
+                },
+                {
+                  "path": "/data/knowerScope",
+                  "label": "knowerScope"
+                },
+                {
+                  "path": "/data/propagation",
+                  "label": "propagation"
+                },
+                {
+                  "path": "/data/source",
+                  "label": "source"
+                },
+                {
+                  "path": "/data/precedingCognitionIds",
+                  "label": "precedingCognitionIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/claim",
+                  "label": "claim"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/subjectRecordIds",
+                  "label": "subjectRecordIds"
+                },
+                {
+                  "path": "/data/relatedRecordIds",
+                  "label": "relatedRecordIds"
+                },
+                {
+                  "path": "/data/knowerScope",
+                  "label": "knowerScope"
+                },
+                {
+                  "path": "/data/propagation",
+                  "label": "propagation"
+                },
+                {
+                  "path": "/data/source",
+                  "label": "source"
+                },
+                {
+                  "path": "/data/precedingCognitionIds",
+                  "label": "precedingCognitionIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/claim",
+                  "label": "claim"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/subjectRecordIds",
+                  "label": "subjectRecordIds"
+                },
+                {
+                  "path": "/data/relatedRecordIds",
+                  "label": "relatedRecordIds"
+                },
+                {
+                  "path": "/data/knowerScope",
+                  "label": "knowerScope"
+                },
+                {
+                  "path": "/data/propagation",
+                  "label": "propagation"
+                },
+                {
+                  "path": "/data/source",
+                  "label": "source"
+                },
+                {
+                  "path": "/data/precedingCognitionIds",
+                  "label": "precedingCognitionIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/claim",
+                  "label": "claim"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/subjectRecordIds",
+                  "label": "subjectRecordIds"
+                },
+                {
+                  "path": "/data/relatedRecordIds",
+                  "label": "relatedRecordIds"
+                },
+                {
+                  "path": "/data/knowerScope",
+                  "label": "knowerScope"
+                },
+                {
+                  "path": "/data/propagation",
+                  "label": "propagation"
+                },
+                {
+                  "path": "/data/source",
+                  "label": "source"
+                },
+                {
+                  "path": "/data/precedingCognitionIds",
+                  "label": "precedingCognitionIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "knower-groups": {
+      "storage": {
+        "kind": "hybrid",
+        "partition": {
+          "mode": "single"
+        },
+        "initialRecordsFile": "collections/knower-groups/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.knower-group": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/knower-group.schema.json",
+          "identity": {
+            "namePath": "/data/name",
+            "aliasesPath": "/data/aliases"
+          },
+          "indexes": {
+            "membershipMode": {
+              "path": "/data/membershipMode",
+              "type": "enum",
+              "values": [
+                "dynamic",
+                "fixed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "includeIds": {
+              "path": "/data/includeIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "excludeIds": {
+              "path": "/data/excludeIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "resolvedMemberIds": {
+              "path": "/data/resolvedMemberIds",
+              "type": "id-list",
+              "operators": [
+                "contains"
+              ]
+            },
+            "summaryOverLimit": {
+              "path": "/data/summaryOverLimit",
+              "type": "boolean",
+              "default": false,
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name",
+            "/data/catalogSummary",
+            "/data/membershipDefinition"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                }
+              ]
+            },
+            "catalog": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "名称"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "摘要"
+                },
+                {
+                  "path": "/data/membershipMode",
+                  "label": "成员模式"
+                },
+                {
+                  "path": "/data/membershipDefinition",
+                  "label": "成员定义"
+                }
+              ]
+            },
+            "retrieval": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/membershipMode",
+                  "label": "membershipMode"
+                },
+                {
+                  "path": "/data/membershipDefinition",
+                  "label": "membershipDefinition"
+                },
+                {
+                  "path": "/data/fixedBasis",
+                  "label": "fixedBasis"
+                },
+                {
+                  "path": "/data/includeIds",
+                  "label": "includeIds"
+                },
+                {
+                  "path": "/data/excludeIds",
+                  "label": "excludeIds"
+                },
+                {
+                  "path": "/data/resolvedMemberIds",
+                  "label": "resolvedMemberIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/membershipMode",
+                  "label": "membershipMode"
+                },
+                {
+                  "path": "/data/membershipDefinition",
+                  "label": "membershipDefinition"
+                },
+                {
+                  "path": "/data/fixedBasis",
+                  "label": "fixedBasis"
+                },
+                {
+                  "path": "/data/includeIds",
+                  "label": "includeIds"
+                },
+                {
+                  "path": "/data/excludeIds",
+                  "label": "excludeIds"
+                },
+                {
+                  "path": "/data/resolvedMemberIds",
+                  "label": "resolvedMemberIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/membershipMode",
+                  "label": "membershipMode"
+                },
+                {
+                  "path": "/data/membershipDefinition",
+                  "label": "membershipDefinition"
+                },
+                {
+                  "path": "/data/fixedBasis",
+                  "label": "fixedBasis"
+                },
+                {
+                  "path": "/data/includeIds",
+                  "label": "includeIds"
+                },
+                {
+                  "path": "/data/excludeIds",
+                  "label": "excludeIds"
+                },
+                {
+                  "path": "/data/resolvedMemberIds",
+                  "label": "resolvedMemberIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/aliases",
+                  "label": "aliases"
+                },
+                {
+                  "path": "/data/catalogSummary",
+                  "label": "catalogSummary"
+                },
+                {
+                  "path": "/data/templateMode",
+                  "label": "templateMode"
+                },
+                {
+                  "path": "/data/templateId",
+                  "label": "templateId"
+                },
+                {
+                  "path": "/data/templateVersion",
+                  "label": "templateVersion"
+                },
+                {
+                  "path": "/data/membershipMode",
+                  "label": "membershipMode"
+                },
+                {
+                  "path": "/data/membershipDefinition",
+                  "label": "membershipDefinition"
+                },
+                {
+                  "path": "/data/fixedBasis",
+                  "label": "fixedBasis"
+                },
+                {
+                  "path": "/data/includeIds",
+                  "label": "includeIds"
+                },
+                {
+                  "path": "/data/excludeIds",
+                  "label": "excludeIds"
+                },
+                {
+                  "path": "/data/resolvedMemberIds",
+                  "label": "resolvedMemberIds"
+                },
+                {
+                  "path": "/data/sections",
+                  "label": "sections"
+                },
+                {
+                  "path": "/data/summaryOverLimit",
+                  "label": "summaryOverLimit"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "support": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/support/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "memory.settings": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/settings.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/retrieval",
+                  "label": "检索默认值"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/archive",
+                  "label": "archive"
+                },
+                {
+                  "path": "/data/retrieval",
+                  "label": "retrieval"
+                },
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/maintenance",
+                  "label": "maintenance"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/archive",
+                  "label": "archive"
+                },
+                {
+                  "path": "/data/retrieval",
+                  "label": "retrieval"
+                },
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/maintenance",
+                  "label": "maintenance"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/archive",
+                  "label": "archive"
+                },
+                {
+                  "path": "/data/retrieval",
+                  "label": "retrieval"
+                },
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/maintenance",
+                  "label": "maintenance"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update",
+            "revise"
+          ]
+        },
+        "memory.archive-state": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/archive-state.schema.json",
+          "indexes": {
+            "lastArchivedTurn": {
+              "path": "/data/lastArchivedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/lastArchivedTurn",
+                  "label": "已归档至"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/lastArchivedTurn",
+                  "label": "lastArchivedTurn"
+                },
+                {
+                  "path": "/data/lastArchiveStatus",
+                  "label": "lastArchiveStatus"
+                },
+                {
+                  "path": "/data/lastArchiveAt",
+                  "label": "lastArchiveAt"
+                },
+                {
+                  "path": "/data/lastArchiveRunId",
+                  "label": "lastArchiveRunId"
+                },
+                {
+                  "path": "/data/lastCoveredMessageId",
+                  "label": "lastCoveredMessageId"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/lastArchivedTurn",
+                  "label": "lastArchivedTurn"
+                },
+                {
+                  "path": "/data/lastArchiveStatus",
+                  "label": "lastArchiveStatus"
+                },
+                {
+                  "path": "/data/lastArchiveAt",
+                  "label": "lastArchiveAt"
+                },
+                {
+                  "path": "/data/lastArchiveRunId",
+                  "label": "lastArchiveRunId"
+                },
+                {
+                  "path": "/data/lastCoveredMessageId",
+                  "label": "lastCoveredMessageId"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/lastArchivedTurn",
+                  "label": "lastArchivedTurn"
+                },
+                {
+                  "path": "/data/lastArchiveStatus",
+                  "label": "lastArchiveStatus"
+                },
+                {
+                  "path": "/data/lastArchiveAt",
+                  "label": "lastArchiveAt"
+                },
+                {
+                  "path": "/data/lastArchiveRunId",
+                  "label": "lastArchiveRunId"
+                },
+                {
+                  "path": "/data/lastCoveredMessageId",
+                  "label": "lastCoveredMessageId"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update",
+            "revise"
+          ]
+        },
+        "memory.archive-coverage": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/archive-coverage.schema.json",
+          "indexes": {
+            "startTurn": {
+              "path": "/data/startTurn",
+              "type": "number",
+              "operators": ["eq", "gte", "lte"]
+            },
+            "endTurn": {
+              "path": "/data/endTurn",
+              "type": "number",
+              "operators": ["eq", "gte", "lte"]
+            },
+            "operation": {
+              "path": "/data/operation",
+              "type": "enum",
+              "values": ["automatic", "repair", "supplement"],
+              "operators": ["eq"]
+            }
+          },
+          "searchableFields": ["/data/userInstruction"],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/startTurn", "label": "开始回合" },
+                { "path": "/data/endTurn", "label": "结束回合" },
+                { "path": "/data/operation", "label": "处理方式" }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/startTurn", "label": "startTurn" },
+                { "path": "/data/endTurn", "label": "endTurn" },
+                { "path": "/data/operation", "label": "operation" },
+                { "path": "/data/workflowRunId", "label": "workflowRunId" },
+                { "path": "/data/batchId", "label": "batchId" },
+                { "path": "/data/coveredMessageIds", "label": "coveredMessageIds" },
+                { "path": "/data/completedAt", "label": "completedAt" },
+                { "path": "/data/userInstruction", "label": "userInstruction" }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/startTurn", "label": "startTurn" },
+                { "path": "/data/endTurn", "label": "endTurn" },
+                { "path": "/data/operation", "label": "operation" },
+                { "path": "/data/workflowRunId", "label": "workflowRunId" },
+                { "path": "/data/batchId", "label": "batchId" },
+                { "path": "/data/coveredMessageIds", "label": "coveredMessageIds" },
+                { "path": "/data/completedAt", "label": "completedAt" },
+                { "path": "/data/userInstruction", "label": "userInstruction" }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/startTurn", "label": "开始回合" },
+                { "path": "/data/endTurn", "label": "结束回合" },
+                { "path": "/data/operation", "label": "处理方式" },
+                { "path": "/data/completedAt", "label": "完成时间" },
+                { "path": "/data/userInstruction", "label": "用户要求" }
+              ]
+            }
+          },
+          "actions": ["create", "retract", "archive", "restore"]
+        },
+        "memory.maintenance-state": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/maintenance-state.schema.json",
+          "indexes": {
+            "compressionTrigger": {
+              "path": "/data/compression/triggerEntryCount",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/compression",
+                  "label": "压缩状态"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckAt",
+                  "label": "lastDeterministicCheckAt"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckStatus",
+                  "label": "lastDeterministicCheckStatus"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckAt",
+                  "label": "lastDeterministicCheckAt"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckStatus",
+                  "label": "lastDeterministicCheckStatus"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/compression",
+                  "label": "compression"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckAt",
+                  "label": "lastDeterministicCheckAt"
+                },
+                {
+                  "path": "/data/lastDeterministicCheckStatus",
+                  "label": "lastDeterministicCheckStatus"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update",
+            "revise"
+          ]
+        },
+        "memory.time-auxiliary": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/time-auxiliary.schema.json",
+          "indexes": {
+            "timeRuleVersion": {
+              "path": "/data/timeRuleVersion",
+              "type": "string",
+              "operators": [
+                "eq"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/name"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "时间辅助数据"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/timeRuleVersion",
+                  "label": "timeRuleVersion"
+                },
+                {
+                  "path": "/data/mappings",
+                  "label": "mappings"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/timeRuleVersion",
+                  "label": "timeRuleVersion"
+                },
+                {
+                  "path": "/data/mappings",
+                  "label": "mappings"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/name",
+                  "label": "name"
+                },
+                {
+                  "path": "/data/timeRuleVersion",
+                  "label": "timeRuleVersion"
+                },
+                {
+                  "path": "/data/mappings",
+                  "label": "mappings"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    },
+    "source-captures": {
+      "storage": {
+        "kind": "record-log",
+        "partition": {
+          "mode": "turn-range",
+          "size": 100
+        },
+        "initialRecordsFile": "collections/source-captures/initial/records.json"
+      },
+      "recordTypes": {
+        "memory.source-capture": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/source-capture.schema.json",
+          "indexes": {
+            "sourceModuleId": {
+              "path": "/data/sourceModuleId",
+              "type": "string",
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "adapterId": {
+              "path": "/data/adapterId",
+              "type": "string",
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "capturedTurn": {
+              "path": "/data/capturedTurn",
+              "type": "number",
+              "operators": [
+                "eq",
+                "gte",
+                "lte"
+              ]
+            },
+            "historyMode": {
+              "path": "/data/historyMode",
+              "type": "enum",
+              "values": [
+                "snapshot",
+                "per-turn"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            },
+            "captureStatus": {
+              "path": "/data/captureStatus",
+              "type": "enum",
+              "values": [
+                "succeeded",
+                "failed"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/sourceModuleId",
+            "/data/adapterId",
+            "/data/title"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/title",
+                  "label": "来源"
+                },
+                {
+                  "path": "/data/captureStatus",
+                  "label": "状态"
+                }
+              ]
+            },
+            "archive": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/sourceModuleId",
+                  "label": "sourceModuleId"
+                },
+                {
+                  "path": "/data/adapterId",
+                  "label": "adapterId"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/capturedTurn",
+                  "label": "capturedTurn"
+                },
+                {
+                  "path": "/data/historyMode",
+                  "label": "historyMode"
+                },
+                {
+                  "path": "/data/captureStatus",
+                  "label": "captureStatus"
+                },
+                {
+                  "path": "/data/format",
+                  "label": "format"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sourceReferences",
+                  "label": "sourceReferences"
+                },
+                {
+                  "path": "/data/error",
+                  "label": "error"
+                }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/sourceModuleId",
+                  "label": "sourceModuleId"
+                },
+                {
+                  "path": "/data/adapterId",
+                  "label": "adapterId"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/capturedTurn",
+                  "label": "capturedTurn"
+                },
+                {
+                  "path": "/data/historyMode",
+                  "label": "historyMode"
+                },
+                {
+                  "path": "/data/captureStatus",
+                  "label": "captureStatus"
+                },
+                {
+                  "path": "/data/format",
+                  "label": "format"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sourceReferences",
+                  "label": "sourceReferences"
+                },
+                {
+                  "path": "/data/error",
+                  "label": "error"
+                }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/sourceModuleId",
+                  "label": "sourceModuleId"
+                },
+                {
+                  "path": "/data/adapterId",
+                  "label": "adapterId"
+                },
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/capturedTurn",
+                  "label": "capturedTurn"
+                },
+                {
+                  "path": "/data/historyMode",
+                  "label": "historyMode"
+                },
+                {
+                  "path": "/data/captureStatus",
+                  "label": "captureStatus"
+                },
+                {
+                  "path": "/data/format",
+                  "label": "format"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sourceReferences",
+                  "label": "sourceReferences"
+                },
+                {
+                  "path": "/data/error",
+                  "label": "error"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "revise",
+            "retract",
+            "archive",
+            "restore"
+          ]
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "memory.catalog.query": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "catalog"
+      ]
+    },
+    "memory.records.inspect": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "retrieval"
+      ]
+    },
+    "memory.archive.read": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "archive"
+      ]
+    },
+    "memory.archive.write": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "revise",
+        "retract",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "archive"
+      ]
+    },
+    "memory.support.read": {
+      "collections": [
+        "support"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "archive",
+        "maintenance"
+      ]
+    },
+    "memory.support.update": {
+      "collections": [
+        "support"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "revise",
+        "retract",
+        "restore"
+      ],
+      "views": [
+        "archive",
+        "maintenance"
+      ]
+    },
+    "memory.source.read": {
+      "collections": [
+        "source-captures"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "archive",
+        "maintenance"
+      ]
+    },
+    "memory.source.capture": {
+      "collections": [
+        "source-captures"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "revise",
+        "retract",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "archive",
+        "maintenance"
+      ]
+    },
+    "memory.compression.read": {
+      "collections": [
+        "events",
+        "support"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "maintenance"
+      ]
+    },
+    "memory.compression.write": {
+      "collections": [
+        "events",
+        "support"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "revise"
+      ],
+      "views": [
+        "maintenance"
+      ]
+    },
+    "memory.maintain": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups",
+        "support",
+        "source-captures"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "revise",
+        "retract",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "maintenance"
+      ]
+    },
+    "memory.entities.select": {
+      "collections": [
+        "entities"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "selection"
+      ]
+    },
+    "memory.frontend.read": {
+      "collections": [
+        "entities",
+        "relationships",
+        "events",
+        "cognitions",
+        "knower-groups",
+        "support",
+        "source-captures"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "frontend"
+      ]
+    }
+  }
+}

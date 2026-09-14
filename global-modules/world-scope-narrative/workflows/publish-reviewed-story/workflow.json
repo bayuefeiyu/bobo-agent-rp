@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 3, "id": "publish-reviewed-story", "ownerModuleId": "world-scope-narrative", "title": "发布已审核广域故事", "description": "确定性校验并幂等发布统审后的广域故事。", "kind": "module-internal", "agentCallable": false,
+  "interface": { "inputs": { "package": { "type": "document", "required": true, "kind": "directory", "formats": ["reviewed-story-package"], "description": "含最终正文、元数据、控制字段和批准回执的发布包。" } }, "exports": {} },
+  "revision": "1", "defaults": { "agentId": null, "modelId": null, "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 }, "writeLocks": [{ "moduleId": "world-scope-narrative", "collectionId": "story-publications" }],
+  "nodes": [
+    { "id": "publish", "type": "code", "outputs": {}, "moduleAccess": [{ "moduleId": "world-scope-narrative", "collectionId": "story-publications", "capabilities": ["world-story.publish"], "views": ["publish"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 200000 } }], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-scope-narrative/runtime/workflow/publish-story.mjs", "callInputs": ["package"] } },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["publish"], "exports": {}, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

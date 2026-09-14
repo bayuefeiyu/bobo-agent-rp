@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 3,
+  "id": "director-manual-maintenance",
+  "title": "手动维护导演数据",
+  "description": "仅在用户手动启动并明确给出维护目标时整理导演私有数据。",
+  "kind": "global-background",
+  "revision": "1",
+  "defaults": { "agentId": "world-narrative-maintainer", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual" },
+  "nodes": [{
+    "id": "maintain",
+    "type": "code",
+    "outputs": {},
+    "moduleAccess": [],
+    "workflowCalls": ["world-narrative-coordinator/director-data-maintenance"],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-manual-maintenance.mjs" }
+  }]
+}

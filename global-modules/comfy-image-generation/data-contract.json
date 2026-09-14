@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "comfy-image-generation",
+  "collections": {
+    "settings": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": { "mode": "single" },
+        "initialSnapshotFile": "collections/settings/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "image.preferences": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/image-preferences.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "rp": { "format": "object", "fields": [{ "path": "/data/selectedProfileIds", "label": "工作流" }, { "path": "/data/inputPolicy", "label": "输入范围" }] },
+            "maintenance": { "format": "object", "fields": [{ "path": "/data", "label": "设置" }] }
+          },
+          "actions": ["update"]
+        }
+      }
+    },
+    "requests": {
+      "storage": {
+        "kind": "record-log",
+        "partition": { "mode": "single" },
+        "initialRecordsFile": "collections/requests/initial/records.json"
+      },
+      "recordTypes": {
+        "image.request": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/image-request.schema.json",
+          "indexes": {
+            "ordinal": { "path": "/data/ordinal", "type": "number", "operators": ["eq", "gte", "lte"] },
+            "sourceKind": { "path": "/data/sourceKind", "type": "enum", "values": ["recent-turns", "selected-messages", "workflow-output", "custom-brief"], "operators": ["eq", "in"] },
+            "triggerKind": { "path": "/data/triggerKind", "type": "enum", "values": ["manual", "after-workflow", "node"], "operators": ["eq", "in"] },
+            "derivedFrom": { "path": "/data/derivedFrom", "type": "id", "operators": ["eq"] },
+            "dedupeKey": { "path": "/data/dedupeKey", "type": "string", "operators": ["eq"] }
+          },
+          "searchableFields": ["/data/userDirection", "/data/imageTarget"],
+          "views": {
+            "rp": { "format": "object", "fields": [{ "path": "/data/ordinal", "label": "序号" }, { "path": "/data/contentPrompts", "label": "画面提示词" }] },
+            "regenerate": { "format": "object", "fields": [{ "path": "/data/contentPrompts", "label": "可修改画面片段" }, { "path": "/data/selectedProfileIds", "label": "工作流" }, { "path": "/data/derivedFrom", "label": "来源请求" }] },
+            "maintenance": { "format": "object", "fields": [{ "path": "/data", "label": "请求" }] }
+          },
+          "actions": ["create", "update"]
+        }
+      }
+    },
+    "renders": {
+      "storage": {
+        "kind": "record-log",
+        "partition": { "mode": "single" },
+        "initialRecordsFile": "collections/renders/initial/records.json"
+      },
+      "recordTypes": {
+        "image.render": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/image-render.schema.json",
+          "indexes": {
+            "requestId": { "path": "/data/requestId", "type": "id", "operators": ["eq"] },
+            "profileId": { "path": "/data/profileId", "type": "string", "operators": ["eq", "in"] },
+            "state": { "path": "/data/state", "type": "enum", "values": ["pending", "submitting", "submitted", "completed", "failed", "cancelled"], "operators": ["eq", "in"] },
+            "promptId": { "path": "/data/promptId", "type": "string", "operators": ["eq"] }
+          },
+          "searchableFields": ["/data/contentPrompt"],
+          "views": {
+            "rp": { "format": "object", "fields": [{ "path": "/data/requestId", "label": "请求" }, { "path": "/data/profileId", "label": "工作流" }, { "path": "/data/state", "label": "状态" }, { "path": "/data/outputs", "label": "图片" }] },
+            "prompt": { "format": "object", "fields": [{ "path": "/data/contentPrompt", "label": "画面内容" }, { "path": "/data/positivePrompt", "label": "完整正面提示词" }, { "path": "/data/negativePrompt", "label": "完整负面提示词" }] },
+            "maintenance": { "format": "object", "fields": [{ "path": "/data", "label": "生成记录" }] }
+          },
+          "actions": ["create", "transition"],
+          "processors": {
+            "transition": { "file": "runtime/render-state.mjs", "export": "transitionRender" }
+          }
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "image.preferences.read": { "collections": ["settings"], "actions": ["query"], "views": ["rp"] },
+    "image.preferences.configure": { "collections": ["settings"], "actions": ["query", "update"], "views": ["rp", "maintenance"] },
+    "image.requests.query": { "collections": ["requests"], "actions": ["query"], "views": ["rp", "regenerate", "maintenance"] },
+    "image.requests.create": { "collections": ["requests"], "actions": ["create"], "views": [] },
+    "image.requests.prepare": { "collections": ["requests"], "actions": ["query", "create", "update"], "views": ["maintenance"] },
+    "image.renders.query": { "collections": ["renders"], "actions": ["query"], "views": ["rp", "prompt"] },
+    "image.renders.execute": { "collections": ["renders"], "actions": ["query", "create", "transition"], "views": ["rp", "prompt", "maintenance"] }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-archive",
+  "title": "叙事记忆归档入口",
+  "description": "顶层手动入口；同步调用叙事记忆内部归档工作流。",
+  "kind": "turn-background",
+  "revision": "2",
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual", "blockNextTurnUntilReady": true },
+  "nodes": [{
+    "id": "archive",
+    "type": "call",
+    "target": "narrative-memory/narrative-memory-archive",
+    "arguments": {},
+    "documents": {},
+    "outputPaths": {},
+    "outputs": {},
+    "moduleAccess": [],
+    "dataCommit": { "onNodeEnd": [] },
+    "metadata": { "argumentSources": { "request": "$" } }
+  }]
+}

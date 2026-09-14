@@ -16,6 +16,121 @@ export async function readDataReceipt(sessionDirectory, batchId) {
   });
 }
 
+export async function listDataReceipts(sessionDirectory) {
+  const receiptRoot = safeResolve(sessionDirectory, "workspace", "receipts");
+  const names = await readdir(receiptRoot).catch(error => error?.code === "ENOENT" ? [] : Promise.reject(error));
+  const receipts = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith(".json")) continue;
+    const receipt = await readFile(safeResolve(receiptRoot, name), "utf8").then(JSON.parse);
+    if (receipt && typeof receipt === "object" && typeof receipt.batchId === "string") receipts.push(receipt);
+  }
+  return receipts;
+}
+
+export async function inspectDataImpact(sessionDirectory, { messageId, revision = null, allowedModuleIds = null } = {}) {
+  if (typeof messageId !== "string" || !messageId) throw new Error("Impact inspection requires a messageId.");
+  if (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) throw new Error("Impact inspection revision must be a positive integer or null.");
+  const allowed = Array.isArray(allowedModuleIds) ? new Set(allowedModuleIds) : null;
+  const receipts = await listDataReceipts(sessionDirectory);
+  const batches = [];
+  let untrackedReceipts = 0;
+  for (const receipt of receipts) {
+    if (!Array.isArray(receipt.sourceReferences)) {
+      untrackedReceipts += 1;
+      continue;
+    }
+    const references = receipt.sourceReferences.filter(source => source?.kind === "message" && source.id === messageId && (revision === null || source.revision === revision));
+    if (!references.length) continue;
+    const targets = (Array.isArray(receipt.targets) ? receipt.targets : [])
+      .filter(target => !allowed || allowed.has(target.moduleId))
+      .map(target => ({ moduleId: target.moduleId, collectionId: target.collectionId, recordType: target.recordType, recordId: target.recordId || null }));
+    if (allowed && !targets.length) continue;
+    batches.push({
+      batchId: receipt.batchId,
+      status: receipt.status,
+      committedAt: receipt.committedAt || null,
+      workflowId: receipt.workflowId || null,
+      workflowRunId: receipt.workflowRunId || null,
+      nodeId: receipt.nodeId || null,
+      binding: receipt.binding || null,
+      matchedRevisions: [...new Set(references.map(source => source.revision))],
+      targets,
+    });
+  }
+  batches.sort((left, right) => String(left.committedAt || "").localeCompare(String(right.committedAt || "")) || left.batchId.localeCompare(right.batchId));
+  return {
+    schemaVersion: 1,
+    messageId,
+    revision,
+    matched: batches.length > 0,
+    batches,
+    scannedReceipts: receipts.length,
+    untrackedReceipts,
+    note: untrackedReceipts ? "Some legacy receipts have no source revisions and cannot be assessed automatically." : null,
+  };
+}
+
+export async function inspectDataIntegrity(sessionDirectory, { messages = [], allowedModuleIds = null } = {}) {
+  if (!Array.isArray(messages)) throw new Error("Data integrity inspection requires an authoritative message array.");
+  const currentMessages = new Map();
+  for (const message of messages) {
+    if (!message || typeof message.id !== "string" || !Number.isSafeInteger(message.revision) || message.revision < 1) continue;
+    currentMessages.set(message.id, { revision: message.revision, turn: Number.isSafeInteger(message.binding?.turn) ? message.binding.turn : 0 });
+  }
+  const allowed = Array.isArray(allowedModuleIds) ? new Set(allowedModuleIds) : null;
+  const receipts = (await listDataReceipts(sessionDirectory)).filter(receipt => ["committed", "partial"].includes(receipt?.status));
+  const grouped = new Map();
+  let untrackedReceipts = 0;
+  for (const receipt of receipts) {
+    const targets = (Array.isArray(receipt.targets) ? receipt.targets : []).filter(target => target?.moduleId && (!allowed || allowed.has(target.moduleId)));
+    if (!targets.length) continue;
+    if (!Array.isArray(receipt.sourceReferences)) {
+      untrackedReceipts += 1;
+      continue;
+    }
+    const modules = new Set(targets.map(target => target.moduleId));
+    for (const source of receipt.sourceReferences) {
+      if (source?.kind !== "message") continue;
+      const current = currentMessages.get(source.id);
+      if (!current || current.revision === source.revision) continue;
+      for (const moduleId of modules) {
+        const key = `${moduleId}:${source.id}:${current.revision}`;
+        const issue = grouped.get(key) || {
+          id: key,
+          type: "source-revised",
+          severity: "warning",
+          moduleId,
+          messageId: source.id,
+          startTurn: current.turn,
+          endTurn: current.turn,
+          recordedRevisions: [],
+          currentRevision: current.revision,
+          batchIds: [],
+          targets: [],
+        };
+        issue.recordedRevisions.push(source.revision);
+        issue.batchIds.push(receipt.batchId);
+        issue.targets.push(...targets.filter(target => target.moduleId === moduleId));
+        grouped.set(key, issue);
+      }
+    }
+  }
+  const issues = [...grouped.values()].map(issue => ({
+    ...issue,
+    recordedRevisions: [...new Set(issue.recordedRevisions)].sort((left, right) => left - right),
+    batchIds: [...new Set(issue.batchIds)].sort(),
+    targets: [...new Map(issue.targets.map(target => [`${target.collectionId}/${target.recordType}/${target.recordId || ""}`, target])).values()],
+  })).sort((left, right) => left.startTurn - right.startTurn || left.moduleId.localeCompare(right.moduleId) || left.messageId.localeCompare(right.messageId));
+  return {
+    schemaVersion: 1,
+    issues,
+    scannedReceipts: receipts.length,
+    untrackedReceipts,
+    note: untrackedReceipts ? "Some legacy receipts have no source revisions and cannot be assessed automatically." : null,
+  };
+}
+
 export async function writeDataReceipt(sessionDirectory, receipt) {
   const receiptRoot = safeResolve(sessionDirectory, "workspace", "receipts");
   await mkdir(receiptRoot, { recursive: true });

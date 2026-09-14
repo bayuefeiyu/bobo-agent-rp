@@ -165,6 +165,16 @@ export class RpDataStore {
     return { history, records };
   }
 
+  async authorityFileForRecord(moduleId, collectionId, recordId) {
+    const module = this.module(moduleId);
+    const collection = module.contract.collections[collectionId];
+    if (!collection || collection.storage.kind === "snapshot") throw new Error(`Collection ${moduleId}/${collectionId} has no record-log authority file.`);
+    const state = await this.readCollection(moduleId, collectionId);
+    const record = state.records.find(item => item.id === recordId);
+    if (!record) throw new Error(`Record ${recordId} was not found.`);
+    return safeResolve(this.collectionRoot(moduleId, collectionId), "records", `${partitionName(record, module.contract, collectionId)}.jsonl`);
+  }
+
   stateFiles(moduleId, collectionId, state) {
     const module = this.module(moduleId);
     const collection = module.contract.collections[collectionId];

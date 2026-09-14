@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "image-prompt-writer",
+  "name": "生图提示词 Agent",
+  "description": "按工作流提供的模型指导，仅生成随场景变化的画面内容片段。",
+  "prompt": "先读取WORKSPACE-DOCUMENTS.md，再读取其中标为required的生图提示词任务资料。只为资料中每个guideId生成画面内容提示词，严格遵守其中的使用说明和模型规则，返回 {\"prompts\":[{\"guideId\":\"...\",\"content\":\"...\"}]}，不输出解释。",
+  "tools": ["read"],
+  "contextPermissions": ["workflow:scoped-output"],
+  "outputMode": "json",
+  "defaultModelId": "pi:current"
+}

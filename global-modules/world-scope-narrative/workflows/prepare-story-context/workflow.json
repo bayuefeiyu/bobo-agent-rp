@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 3, "id": "prepare-story-context", "ownerModuleId": "world-scope-narrative", "title": "准备广域故事资料", "description": "导出模块独立创作要求、系列目录和上一篇全文。", "kind": "module-external", "agentCallable": false,
+  "interface": { "inputs": { "assignment": { "type": "parameter", "required": false, "valueType": "object", "description": "可选系列与委托信息。" } }, "exports": { "context": { "format": "document-set", "kind": "directory", "description": "广域创作资料集。" } } },
+  "revision": "1", "defaults": { "agentId": null, "modelId": null, "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 10 },
+  "nodes": [
+    { "id": "prepare", "type": "code", "outputs": { "context": { "path": "story-context", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "moduleAccess": [{ "moduleId": "world-scope-narrative", "collectionId": "story-publications", "capabilities": ["world-story.creative.read"], "views": ["creative-index", "creative-full"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 1000000 } }], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-scope-narrative/runtime/workflow/prepare-story-context.mjs" } },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["prepare"], "exports": { "context": { "fromNode": "prepare", "output": "context" } }, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+  ]
+}

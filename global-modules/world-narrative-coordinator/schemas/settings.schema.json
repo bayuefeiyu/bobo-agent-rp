@@ -1,0 +1,9 @@
+{
+  "type": "object", "required": ["enabled", "deep", "opening", "healthReference"],
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "deep": { "type": "object", "required": ["turnCooldown", "worldTimeCooldown", "retrievalBudget"], "properties": { "turnCooldown": { "type": "integer", "minimum": 1 }, "worldTimeCooldown": { "type": "string" }, "retrievalBudget": { "type": "object", "required": ["maxRecords", "maxCharacters"], "properties": { "maxRecords": { "type": "integer", "minimum": 1, "maximum": 200 }, "maxCharacters": { "type": "integer", "minimum": 1000, "maximum": 500000 } }, "additionalProperties": false } }, "additionalProperties": false },
+    "opening": { "type": "object", "required": ["deepMode"], "properties": { "deepMode": { "enum": ["false", "background", "required"] } }, "additionalProperties": false },
+    "healthReference": { "type": "object", "required": ["recordCount", "characters"], "properties": { "recordCount": { "type": "integer", "minimum": 1 }, "characters": { "type": "integer", "minimum": 1000 } }, "additionalProperties": false }
+  }, "additionalProperties": false
+}

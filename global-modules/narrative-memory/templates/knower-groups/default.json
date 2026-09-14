@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "templateId": "knower-group.default",
+  "templateVersion": 1,
+  "recordType": "memory.knower-group",
+  "summaryLimit": 25,
+  "sections": [
+    { "key": "群体概况", "description": "对外显示名称、成员模式和成员定义。", "recommendedFields": ["名称", "成员模式", "成员定义"] },
+    { "key": "包含与排除", "description": "可嵌套实体或群体；排除优先。", "recommendedFields": ["包含", "排除"] },
+    { "key": "固定依据", "description": "fixed群体形成时的历史范围；允许后来补入新登场但本来就属于该范围的旧人。", "recommendedFields": [] },
+    { "key": "维护说明", "description": "dynamic群体随当前成员变化更新，fixed群体不自动吸收后来加入者。", "recommendedFields": [] }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "card-context-library",
+  "categories": {
+    "world": { "title": "世界观", "description": "世界事实、历史、地理、社会、体系、势力、地点、物品及其他静态设定。" },
+    "character": { "title": "人物资料", "description": "人物档案、关系、认知、秘密、语言和行为依据。" },
+    "narrative-guidance": { "title": "创作指导", "description": "当前与通用的剧情构思、节奏、主题、冲突和场景组织原则。" },
+    "director-future": { "title": "导演未来资料", "description": "仅供世界叙事统筹读取的未发生未来事件、世界形势、作者意图与处理建议；正文工作流不得直接导出。" },
+    "rule": { "title": "创作规则", "description": "作者要求遵守的创作规则、条件规则、禁则和人物塑造边界。" },
+    "style": { "title": "文风", "description": "叙述声音、视角、语言习惯、描写方法和风格范例。" },
+    "format": { "title": "格式", "description": "输出结构、段落、标记、长度和特殊排版要求。" },
+    "reference": { "title": "参考资料", "description": "用于查漏补缺、提供灵感和开拓思路的示例、术语表及补充材料。" }
+  },
+  "selectionGroups": {},
+  "documents": []
+}

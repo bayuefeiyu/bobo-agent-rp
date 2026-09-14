@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.species",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "species",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、种族类别、分布和知名度。", "recommendedFields": ["名称", "其他称谓", "种族类别", "分布", "知名度"] },
+    { "key": "生理与能力", "description": "稳定生理特征、天赋、寿命和弱点。", "recommendedFields": ["生理特征", "天赋", "寿命", "弱点"] },
+    { "key": "社会与文化", "description": "社会结构、文化、习俗和价值倾向。", "recommendedFields": [] },
+    { "key": "关系与分布", "description": "与其他群体的持续关系及主要区域。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "仍影响当前的历史。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前持续状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的种族事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "speciesType", "path": "/sections/基本信息/种族类别", "valueType": "string" },
+    { "facetId": "region", "path": "/sections/基本信息/分布", "valueType": "string-or-list" }
+  ]
+}

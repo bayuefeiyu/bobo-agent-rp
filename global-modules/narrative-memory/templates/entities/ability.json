@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "templateId": "entity.ability",
+  "templateVersion": 1,
+  "recordType": "memory.entity",
+  "entityKind": "ability",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "基本信息", "description": "名称、能力类型、体系归属与知名度。", "recommendedFields": ["名称", "其他称谓", "能力类型", "体系", "知名度"] },
+    { "key": "效果与表现", "description": "稳定效果、作用范围与外在表现。", "recommendedFields": ["效果", "范围", "表现"] },
+    { "key": "条件与限制", "description": "掌握、发动、维持条件以及代价和弱点。", "recommendedFields": ["条件", "代价", "限制", "弱点"] },
+    { "key": "持有者与传承", "description": "持有者、来源和传承关系。", "recommendedFields": [] },
+    { "key": "历史与变化", "description": "能力发生的重要变化。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前有效状态。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的能力事项。", "recommendedFields": [] }
+  ],
+  "filterFacets": [
+    { "facetId": "abilityType", "path": "/sections/基本信息/能力类型", "valueType": "string" },
+    { "facetId": "system", "path": "/sections/基本信息/体系", "valueType": "string" }
+  ]
+}

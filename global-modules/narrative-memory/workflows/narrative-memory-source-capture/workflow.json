@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-source-capture",
+  "title": "叙事记忆来源捕获",
+  "description": "每轮确定性保存已经适配的其他模块资料；导入卡时必须接入实际来源节点和静态权限。",
+  "kind": "module-internal",
+  "revision": "1",
+  "defaults": {
+    "agentId": "background-worker",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "capture-sources",
+      "title": "保存来源快照",
+      "description": "保存由目标卡适配节点按配置提供的snapshot或per-turn资料；没有适配来源时立即跳过。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.capture"
+          ],
+          "views": [
+            "archive",
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 200,
+            "maxCharacters": 200000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/capture-sources.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "capture-sources"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

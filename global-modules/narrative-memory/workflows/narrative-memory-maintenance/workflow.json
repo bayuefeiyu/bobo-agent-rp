@@ -1,0 +1,425 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-maintenance",
+  "title": "叙事记忆手动维护",
+  "description": "只对用户明确指定的记录和任务执行语义维护。",
+  "kind": "module-internal",
+  "revision": "2",
+  "defaults": {
+    "agentId": "narrative-memory-maintainer",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "prepare-reference-snapshot",
+      "title": "准备完整记忆目录",
+      "description": "通过公共快照工作流取得维护所需的完整目录。",
+      "type": "call",
+      "target": "narrative-memory/narrative-memory-reference-snapshot",
+      "arguments": { "catalog": {} },
+      "documents": {},
+      "outputPaths": { "snapshot": "reference-snapshot" },
+      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "完整记忆目录；先读其中DOCUMENTS.md。" } } }
+    },
+    {
+      "id": "prepare-maintenance",
+      "title": "限定维护范围",
+      "description": "校验任务类型和目标，并读取目标完整记录。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/prepare-maintenance.mjs"
+      }
+    },
+    {
+      "id": "materialize-maintenance-task",
+      "title": "生成维护任务资料",
+      "description": "把用户请求与按ID读取的目标完整记录组装为文档集。",
+      "type": "code",
+      "dependsOn": ["prepare-maintenance"],
+      "retry": { "maxAttempts": 1 },
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-maintenance"] },
+      "outputs": { "task": { "path": "maintenance-task", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "task" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/materialize-maintenance-task.mjs",
+        "documentIndex": { "task": { "readPolicy": "required", "authority": "canonical", "appliesAt": "maintenance", "priority": 100, "description": "本次维护请求和带revision的目标记录。" } }
+      }
+    },
+    {
+      "id": "maintenance-model",
+      "title": "生成限定维护变更",
+      "description": "只处理指定目标，输出原子统一变更批次。",
+      "type": "agent",
+      "agentId": "narrative-memory-maintainer",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "prepare-reference-snapshot",
+        "materialize-maintenance-task"
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-reference-snapshot",
+          "materialize-maintenance-task"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 100,
+            "maxCharacters": 100000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true }
+    },
+    {
+      "id": "commit-maintenance",
+      "title": "校验并提交维护",
+      "description": "检查目标版本、模板、引用和派生字段后原子提交。",
+      "type": "code",
+      "dependsOn": [
+        "maintenance-model"
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-maintenance",
+          "maintenance-model"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.maintain"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/commit-maintenance.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit-maintenance"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": ["lastArchivedTurn", "lastArchiveStatus", "lastArchiveAt", "lastArchiveRunId", "lastCoveredMessageId"],
+  "properties": {
+    "lastArchivedTurn": { "type": "integer", "minimum": 0 },
+    "lastArchiveStatus": { "enum": ["never", "succeeded", "failed", "skipped"] },
+    "lastArchiveAt": { "type": ["string", "null"] },
+    "lastArchiveRunId": { "type": ["string", "null"] },
+    "lastCoveredMessageId": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

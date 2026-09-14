@@ -1,0 +1,528 @@
+{
+  "schemaVersion": 3,
+  "id": "narrative-memory-range-repair",
+  "title": "叙事记忆回合范围修复与补充",
+  "description": "由用户选择已完成回合范围，复核修复或主动补充记忆；运行期间阻止下一轮输入。",
+  "kind": "module-internal",
+  "revision": "2",
+  "defaults": {
+    "agentId": "narrative-memory-archive-indexer",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "prepare-reference-snapshot",
+      "title": "准备完整记忆目录",
+      "description": "通过公共快照工作流取得范围修复所需的完整目录。",
+      "type": "call",
+      "target": "narrative-memory/narrative-memory-reference-snapshot",
+      "arguments": { "catalog": {} },
+      "documents": {},
+      "outputPaths": { "snapshot": "reference-snapshot" },
+      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": { "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "完整记忆目录；先读其中DOCUMENTS.md。" } } }
+    },
+    {
+      "id": "prepare-range",
+      "title": "校验回合范围并组装上下文",
+      "description": "读取所选范围、早期参考、来源捕获和现有归档状态。",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 200000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/prepare-range-repair.mjs"
+      }
+    },
+    {
+      "id": "materialize-range-task",
+      "title": "生成范围处理资料",
+      "description": "把已校验的范围、用户要求、剧情和其他模块来源组装为文档集。",
+      "type": "code",
+      "dependsOn": ["prepare-range"],
+      "retry": { "maxAttempts": 1 },
+      "context": { "mode": "previous-output", "fromNodes": ["prepare-range"] },
+      "outputs": { "task": { "path": "range-task", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "task" }] },
+      "moduleAccess": [],
+      "dataCommit": { "onNodeEnd": [] },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/materialize-range-task.mjs",
+        "documentIndex": { "task": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "用户指定范围、要求、剧情及来源说明。" } }
+      }
+    },
+    {
+      "id": "range-checklist",
+      "title": "列出范围归档清单",
+      "description": "依据用户选择的修复或补充意图，客观列出该范围需要新增或修改的记录。",
+      "type": "agent",
+      "agentId": "narrative-memory-archive-indexer",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "prepare-reference-snapshot",
+        "materialize-range-task"
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-reference-snapshot",
+          "materialize-range-task"
+        ]
+      },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料和完整目录。repair表示复核当前正文与既有记录是否矛盾或遗漏；supplement表示不预设既有记录错误，重新审视并补充。仍只输出客观Markdown清单，不解释、不分析、不输出JSON。",
+      "outputs": { "checklist": { "path": "range-checklist.md", "format": "markdown", "kind": "file", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "checklist" }] },
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true, "textOutput": "checklist", "documentIndex": { "checklist": { "readPolicy": "required", "authority": "advisory", "appliesAt": "archiving", "priority": 90, "description": "一级Agent生成的范围处理清单。" } } }
+    },
+    {
+      "id": "range-model",
+      "title": "审查并生成范围变更",
+      "description": "根据当前正文、既有记录和一级清单完成限定语义修复或补充。",
+      "type": "agent",
+      "agentId": "narrative-memory-archive-editor",
+      "modelId": "pi:current",
+      "dependsOn": [
+        "range-checklist"
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-reference-snapshot",
+          "materialize-range-task",
+          "range-checklist"
+        ]
+      },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料、完整目录和一级清单，只处理其中给出的回合范围和用户要求，不扩大到未指定历史。允许在确认现有记忆已经充分准确时输出operations为空的atomic unified-change-batch；覆盖确认由后续代码记录。",
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": { "documentWorkspace": true }
+    },
+    {
+      "id": "commit-range",
+      "title": "提交范围修复与覆盖记录",
+      "description": "校验并原子提交领域变更、覆盖记录和必要的连续归档进度。",
+      "type": "code",
+      "dependsOn": [
+        "range-model"
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-range",
+          "range-model"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.archive.write"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "support",
+          "capabilities": [
+            "memory.support.read",
+            "memory.support.update"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "source-captures",
+          "capabilities": [
+            "memory.source.read"
+          ],
+          "views": [
+            "archive"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "features/narrative-memory/runtime/workflow/commit-range-repair.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "title": "返回调用结果",
+      "description": "通过统一模块工作流返回节点结束调用。",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit-range"
+      ],
+      "exports": {},
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "ownerModuleId": "narrative-memory",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "object",
+        "description": "Caller-supplied workflow parameters."
+      }
+    },
+    "exports": {}
+  }
+}

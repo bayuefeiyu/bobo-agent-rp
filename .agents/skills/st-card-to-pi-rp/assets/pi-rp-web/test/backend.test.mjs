@@ -60,6 +60,13 @@ test("card-local server only transports view state and player input", async () =
         available: Boolean(openingId), view: { schemaVersion: 1, regions: [] }, data: openingId ? { memories: [] } : null,
       }],
     }),
+    inspectDataImpact: async (messageId, revision, moduleId) => ({ messageId, revision, moduleId, matched: true, batches: [{ batchId: "batch-1" }] }),
+    queryModuleFrontendRegion: async (moduleId, regionId, value) => ({ moduleId, regionId, value, returned: 1, items: [{ id: "record.one", revision: 1, value: { name: "One" } }] }),
+    getModuleFrontendHistory: async (moduleId, regionId, recordId, cursor) => ({ moduleId, regionId, recordId, cursor, items: [{ revision: 1 }] }),
+    getModuleFrontendSettings: async (moduleId, regionId) => ({ moduleId, regionId, record: { revision: 2 }, values: { "/enabled": true } }),
+    updateModuleFrontendSettings: async (moduleId, regionId, value) => ({ moduleId, regionId, value, saved: true }),
+    runModuleFrontendWorkflow: async (moduleId, regionId, workflowId, value) => ({ moduleId, regionId, workflowId, value, run: { id: "run-module" } }),
+    inspectModuleFrontendIntegrity: async (moduleId, regionId) => ({ moduleId, regionId, issues: [{ type: "coverage-gap", startTurn: 3, endTurn: 4 }] }),
     openFeatureModuleDocument: async (moduleId, target) => {
       openedModuleDocument = { moduleId, target };
       return { opened: true, moduleId, target, path: `sessions/test/${moduleId}/${target}.json` };
@@ -82,8 +89,21 @@ test("card-local server only transports view state and player input", async () =
     saveWorkflowPolicy: async value => { workflowPolicy = value; return value; },
     activateWorkflow: async workflowId => ({ activated: workflowId }),
     updateWorkflowNodeBinding: async (workflowId, nodeId, binding) => ({ workflowId, nodeId, binding }),
+    updateWorkflowTrigger: async (workflowId, trigger) => ({ workflowId, trigger }),
     retryWorkflowNode: async (runId, nodeId, value) => ({ runId, nodeId, ...value }),
+    recoverWorkflowNode: async (runId, nodeId) => ({ runId, nodeId, status: "running" }),
     cancelWorkflowRun: async runId => ({ id: runId, status: "cancelled" }),
+    skipWorkflowRun: async runId => ({ id: runId, status: "skipped" }),
+    getImageGeneration: async () => ({ available: true, sessionId: "test-session", profiles: [{ id: "demo", title: "Demo" }], connections: [], preferences: null, requests: [], renders: [] }),
+    saveImagePreferences: async preferences => ({ saved: true, preferences }),
+    startImageGeneration: async () => ({ accepted: true, runId: "image-run-1" }),
+    recoverImageGeneration: async requestId => ({ accepted: true, requestId }),
+    saveComfyConnection: async value => ({ ...value, hasToken: Boolean(value.token), token: undefined }),
+    testComfyConnection: async () => ({ ok: true, elapsedMs: 2 }),
+    saveComfyProfileOverride: async () => ({ saved: true }),
+    openComfyProfileDocument: async () => ({ opened: true }),
+    getComfyRenderImage: async () => ({ body: Buffer.from([1, 2, 3]), mimeType: "image/png" }),
+    regenerateComfyRender: async () => ({ accepted: true, requestId: "image-request-2" }),
     listCards: async () => [{ id: "test-card", name: "沈月", hasCover: true }],
     getCardCover: async () => ({ body: Buffer.from([1, 2, 3]), mimeType: "image/png" }),
     getUserAvatar: async () => ({ body: avatarBody, mimeType: avatarMimeType }),
@@ -173,9 +193,29 @@ test("card-local server only transports view state and player input", async () =
     const initialModules = await fetch(`${base}/api/modules`).then(response => response.json());
     assert.equal(initialModules.modules[0].id, "character-memory");
     assert.equal(initialModules.modules[0].available, false);
+    const impact = await fetch(`${base}/api/data-impact?messageId=message.one&revision=2&moduleId=character-memory`).then(response => response.json());
+    assert.deepEqual({ messageId: impact.messageId, revision: impact.revision, moduleId: impact.moduleId }, { messageId: "message.one", revision: 2, moduleId: "character-memory" });
+    const records = await fetch(`${base}/api/modules/character-memory/regions/entries/records?search=one&filter.kind=a`).then(response => response.json());
+    assert.equal(records.items[0].id, "record.one");
+    assert.deepEqual(records.value.filters, { kind: "a" });
+    const history = await fetch(`${base}/api/modules/character-memory/regions/entries/records/record.one/history`).then(response => response.json());
+    assert.equal(history.recordId, "record.one");
+    const frontendSettings = await fetch(`${base}/api/modules/character-memory/regions/settings/settings`).then(response => response.json());
+    assert.equal(frontendSettings.record.revision, 2);
+    const savedFrontendSettings = await fetch(`${base}/api/modules/character-memory/regions/settings/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: 2, values: { "/enabled": false } }) }).then(response => response.json());
+    assert.equal(savedFrontendSettings.saved, true);
+    const integrity = await fetch(`${base}/api/modules/character-memory/regions/integrity/integrity`).then(response => response.json());
+    assert.deepEqual([integrity.moduleId, integrity.regionId, integrity.issues[0].startTurn], ["character-memory", "integrity", 3]);
+    const moduleRun = await fetch(`${base}/api/modules/character-memory/regions/tools/workflows/character-memory-maintain/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ payload: {} }) }).then(response => response.json());
+    assert.equal(moduleRun.run.id, "run-module");
     const openedDefinition = await fetch(`${base}/api/modules/character-memory/open`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target: "definition" }) }).then(response => response.json());
     assert.equal(openedDefinition.opened, true);
     assert.deepEqual(openedModuleDocument, { moduleId: "character-memory", target: "definition" });
+    const imageGeneration = await fetch(`${base}/api/image-generation`).then(response => response.json());
+    assert.equal(imageGeneration.profiles[0].id, "demo");
+    const imageRun = await fetch(`${base}/api/image-generation/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profileIds: ["demo"] }) });
+    assert.equal(imageRun.status, 202);
+    assert.equal((await imageRun.json()).runId, "image-run-1");
 
     const modelSaveResponse = await fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
     assert.equal(modelSaveResponse.status, 200);
@@ -188,6 +228,16 @@ test("card-local server only transports view state and player input", async () =
     const openedProcess = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
     assert.equal(openedProcess.opened, true);
     assert.deepEqual(openedProcessRecord, { runId: "run-1", nodeId: "story" });
+    const recoveredNodeResponse = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/recover`, { method: "POST" });
+    assert.equal(recoveredNodeResponse.status, 202);
+    const recoveredNode = await recoveredNodeResponse.json();
+    assert.deepEqual(recoveredNode, { runId: "run-1", nodeId: "story", status: "running" });
+    const recoveredImageResponse = await fetch(`${base}/api/image-generation/requests/image-request-one/recover`, { method: "POST" });
+    assert.equal(recoveredImageResponse.status, 202);
+    const recoveredImage = await recoveredImageResponse.json();
+    assert.deepEqual(recoveredImage, { accepted: true, requestId: "image-request-one" });
+    const skippedRun = await fetch(`${base}/api/workflow-runs/run-1/skip`, { method: "POST" }).then(response => response.json());
+    assert.equal(skippedRun.status, "skipped");
     const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) }).then(response => response.json());
     assert.equal(savedPolicy.maxConcurrency, 8);
 

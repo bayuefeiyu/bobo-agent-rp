@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "modules": [
+    "comfy-image-generation",
+    "local-scene-narrative",
+    "narrative-memory",
+    "world-narrative-coordinator",
+    "world-scope-narrative"
+  ],
+  "requiredPaths": [
+    ".gitignore",
+    "README.md",
+    "PROJECT_STATUS.md",
+    "PROJECT-RELEASE-MANIFEST.json",
+    ".agents/skills/create-pi-rp-feature-module/scripts/sync_story_mechanics.mjs",
+    ".agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs"
+  ],
+  "generatedChecks": [
+    ".agents/skills/create-pi-rp-feature-module/scripts/sync_story_mechanics.mjs"
+  ]
+}

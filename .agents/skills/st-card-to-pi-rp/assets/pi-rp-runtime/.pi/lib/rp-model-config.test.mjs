@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { composeNodePrompt, normalizeAgentProfile, normalizeModelProfile, normalizeRuntimePolicy, resolveNodeProfiles } from "./rp-model-config.mjs";
+import { composeNodePrompt, composeWorkflowNodeDynamicContext, normalizeAgentProfile, normalizeModelProfile, normalizeRuntimePolicy, resolveNodeProfiles } from "./rp-model-config.mjs";
 
 test("normalizes optional model head and tail prompts", () => {
   const model = normalizeModelProfile({
@@ -41,6 +41,18 @@ test("places the model head after Pi system text and the tail last", () => {
   });
   assert.equal(prompt.systemPrompt, "PI\n\nHEAD\n\nAGENT\n\nFIXED");
   assert.deepEqual(prompt.contextMessages, ["DYNAMIC", "UPSTREAM", "INPUT", "NODE", "TAIL"]);
+});
+
+test("keeps fixed prompts while limiting implicit chat history to foreground nodes", () => {
+  const fixed = composeNodePrompt({ piSystemPrompt: "PI", agentPrompt: "AGENT", fixedContext: "FIXED", dynamicContext: "", nodePrompt: "TASK" });
+  assert.equal(fixed.systemPrompt, "PI\n\nAGENT\n\nFIXED");
+  const foreground = composeWorkflowNodeDynamicContext({ workflowKind: "foreground", turn: 8, recentCompleteTurns: 2, recentContext: "TURN-6\nTURN-7" });
+  const background = composeWorkflowNodeDynamicContext({ workflowKind: "global-background", turn: 8, recentCompleteTurns: 2, recentContext: "TURN-6\nTURN-7", callContext: true, arguments: { target: "selected" }, documentWorkspace: true });
+  assert.match(foreground, /TURN-6/);
+  assert.doesNotMatch(background, /TURN-6|TURN-7/);
+  assert.match(background, /Module call inputs: CALL-INPUTS\.md/);
+  assert.doesNotMatch(background, /Parameters:/);
+  assert.match(background, /WORKSPACE-DOCUMENTS\.md/);
 });
 
 test("defaults to ten global workers and no silent fallback", () => {

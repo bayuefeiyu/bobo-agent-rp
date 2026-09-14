@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "templateId": "relationship.default",
+  "templateVersion": 1,
+  "recordType": "memory.relationship",
+  "summaryLimit": 30,
+  "sections": [
+    { "key": "关系概况", "description": "关系性质、参与方和当前状态。", "recommendedFields": ["关系性质", "参与方", "状态"] },
+    { "key": "关系基础", "description": "形成并维持这段关系的长期基础。", "recommendedFields": [] },
+    { "key": "相处与表现", "description": "稳定、反复出现的互动方式。", "recommendedFields": [] },
+    { "key": "利益与约束", "description": "持续利益、责任、承诺和约束。", "recommendedFields": [] },
+    { "key": "关键变化", "description": "真正改变关系性质的节点；临时合作不单独固化为关系。", "recommendedFields": [] },
+    { "key": "当前状态", "description": "当前持续状态。", "recommendedFields": [] },
+    { "key": "关系影响", "description": "对参与方选择产生的长期影响。", "recommendedFields": [] },
+    { "key": "未决事项", "description": "尚未解决的关系事项。", "recommendedFields": [] }
+  ]
+}

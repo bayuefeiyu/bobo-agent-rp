@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { normalizeDataContract } from "./rp-data-contracts.mjs";
 import { RpDataStore } from "./rp-data-store.mjs";
 import { readVisibleArtifacts, workflowNodeWorkspace } from "./rp-data-artifacts.mjs";
-import { finalizeNodeData } from "./rp-data-node-runtime.mjs";
+import { finalizeNodeData, resolveCodeSubmissionBinding, resolveCodeSubmissionSourceReferences } from "./rp-data-node-runtime.mjs";
 
 const contract = normalizeDataContract({
   schemaVersion: 1,
@@ -56,4 +56,30 @@ test("node-end commit reads only the explicitly declared output before success",
   const visible = await readVisibleArtifacts({ sessionDirectory, target: { workflowRunId: run.id, nodeId: "downstream", turn: 2 }, fromNodeIds: ["update"] });
   assert.equal(visible[0].id, "changes");
   assert.equal((await store.readCollection("state", "values")).records[0].data.value, "ready");
+});
+
+test("trusted code submissions may bind only to an existing visible historical message", () => {
+  const messages = [
+    { id: "m1", binding: { turn: 1 } },
+    { id: "m2", binding: { turn: 2 } },
+    { id: "m3", binding: { turn: 3 } },
+  ];
+  assert.deepEqual(resolveCodeSubmissionBinding({ turn: 2, messageId: "m2" }, { messages, visibleThroughTurn: 3 }), { turn: 2, messageId: "m2" });
+  assert.deepEqual(resolveCodeSubmissionBinding(undefined, { fallback: { turn: 3, messageId: "m3" } }), { turn: 3, messageId: "m3" });
+  assert.throws(() => resolveCodeSubmissionBinding({ turn: 3, messageId: "missing" }, { messages, visibleThroughTurn: 3 }), /unknown message/);
+  assert.throws(() => resolveCodeSubmissionBinding({ turn: 1, messageId: "m2" }, { messages, visibleThroughTurn: 3 }), /does not match/);
+  assert.throws(() => resolveCodeSubmissionBinding({ turn: 3, messageId: "m3" }, { messages, visibleThroughTurn: 2 }), /beyond/);
+  assert.throws(() => resolveCodeSubmissionBinding({ turn: 2, messageId: "m2", extra: true }, { messages, visibleThroughTurn: 3 }), /only turn and messageId/);
+});
+
+test("trusted code source selection resolves exact visible message revisions", () => {
+  const messages = [
+    { id: "m1", revision: 1, binding: { turn: 1 }, metadata: { narrativeSource: { producerKind: "user", layer: "in-world" } } },
+    { id: "m2", revision: 4, binding: { turn: 2 }, metadata: { narrativeSource: { producerKind: "agent", layer: "story" } } },
+    { id: "m3", revision: 2, binding: { turn: 3 }, metadata: { narrativeSource: { producerKind: "agent", layer: "story" } } },
+  ];
+  assert.deepEqual(resolveCodeSubmissionSourceReferences(["m1", "m2"], { messages, visibleThroughTurn: 2 }).map(item => [item.id, item.revision]), [["m1", 1], ["m2", 4]]);
+  assert.throws(() => resolveCodeSubmissionSourceReferences(["missing"], { messages, visibleThroughTurn: 3 }), /unknown message/);
+  assert.throws(() => resolveCodeSubmissionSourceReferences(["m3"], { messages, visibleThroughTurn: 2 }), /beyond/);
+  assert.throws(() => resolveCodeSubmissionSourceReferences(["m1", "m1"], { messages }), /duplicates/);
 });

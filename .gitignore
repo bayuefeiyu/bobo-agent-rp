@@ -1,4 +1,4 @@
-# This repository publishes only reusable project skills and root documentation.
+# This repository publishes reusable project skills, selected global modules, templates, and root documentation.
 /*
 !/.agents/
 !/.gitattributes
@@ -6,7 +6,22 @@
 !/README.md
 !/PI-PLAY-CONTEXT-ISOLATION.md
 !/PI-RP-DEVELOPMENT-SCOPE.md
+!/PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md
 !/PROJECT_STATUS.md
+!/PROJECT-RELEASE-MANIFEST.json
+!/PROJECT-REVIEW-*
+!/global-modules/
+/global-modules/*
+!/global-modules/comfy-image-generation/
+!/global-modules/comfy-image-generation/**
+!/global-modules/narrative-memory/
+!/global-modules/narrative-memory/**
+!/global-modules/local-scene-narrative/
+!/global-modules/local-scene-narrative/**
+!/global-modules/world-scope-narrative/
+!/global-modules/world-scope-narrative/**
+!/global-modules/world-narrative-coordinator/
+!/global-modules/world-narrative-coordinator/**
 !/.pi/
 /.pi/*
 !/.pi/APPEND_SYSTEM.md
@@ -19,6 +34,7 @@
 !/.agents/skills/create-pi-rp-feature-module/
 !/.agents/skills/codex-delegate-bounded-tasks/
 !/.agents/skills/audit-and-upgrade-pi-rp-card/
+!/.agents/skills/adapt-comfyui-workflow/
 
 **/__pycache__/
 **/*.py[cod]

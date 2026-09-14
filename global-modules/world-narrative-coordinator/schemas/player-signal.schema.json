@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["recordFamily", "title", "summary", "content", "signalLevel", "evidence", "implication", "lastReviewedTurn"],
+  "properties": {
+    "recordFamily": { "const": "player-signal" }, "title": { "type": "string", "minLength": 1 }, "summary": { "type": "string" }, "content": { "type": "string" },
+    "signalLevel": { "enum": ["tentative", "recurring", "explicit"] }, "evidence": { "type": "array", "items": { "type": "string" } },
+    "implication": { "type": "string" }, "lastReviewedTurn": { "type": "integer", "minimum": 0 }
+  }, "additionalProperties": false
+}

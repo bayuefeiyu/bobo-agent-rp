@@ -3,6 +3,7 @@ import { capabilityAllows, isSafeDataId, recordTypeDefinition } from "./rp-data-
 import { createDataRecord, reviseDataRecord } from "./rp-data-records.mjs";
 import { extractRecordIndexes } from "./rp-data-index.mjs";
 import { readDataReceipt, writeDataReceipt } from "./rp-data-transactions.mjs";
+import { mergeSourceReferences } from "./rp-narrative-source.mjs";
 
 const POLICIES = new Set(["atomic", "grouped", "best-effort"]);
 const LIFECYCLE = new Set(["create", "append", "update", "revise", "retract", "archive", "restore", "delete"]);
@@ -93,6 +94,7 @@ function provenance(context, batch, operation) {
     nodeId: context.nodeId || null,
     batchId: batch.batchId,
     operationId: operation.operationId,
+    sourceReferences: mergeSourceReferences(context.sourceReferences || []),
     appliedBy: "rp-data-runtime",
     createdAt: new Date().toISOString(),
   };
@@ -184,6 +186,10 @@ async function applyOperation(store, states, batch, operation, access, context, 
 function operationFailure(operation, error) {
   return {
     operationId: operation.operationId,
+    moduleId: operation.moduleId,
+    collectionId: operation.collectionId,
+    recordType: operation.recordType,
+    recordId: operation.targetId || null,
     status: "failed",
     code: error?.code || "operation_failed",
     error: String(error?.message || error),
@@ -197,7 +203,7 @@ async function applyGroup(store, baseStates, batch, operations, access, context,
   for (const operation of operations) {
     try {
       const record = await applyOperation(store, states, batch, operation, access, context, handlers);
-      results.push({ operationId: operation.operationId, status: "committed", recordId: record?.id || operation.targetId || null, revision: record?.revision || null });
+      results.push({ operationId: operation.operationId, moduleId: operation.moduleId, collectionId: operation.collectionId, recordType: operation.recordType, status: "committed", recordId: record?.id || operation.targetId || null, revision: record?.revision || null });
     } catch (error) {
       return { ok: false, states: baseStates, results: [...results, operationFailure(operation, error)] };
     }
@@ -207,6 +213,22 @@ async function applyGroup(store, baseStates, batch, operations, access, context,
 
 async function executeDataBatchUnlocked(store, value, { access = {}, context = {}, handlers = {}, allowBestEffort = false } = {}) {
   const batch = normalizeDataBatch(value);
+  const sourceReferences = mergeSourceReferences(context.sourceReferences || []);
+  context = { ...context, sourceReferences };
+  const targets = [...new Map(batch.operations.map(operation => [`${operation.moduleId}/${operation.collectionId}/${operation.recordType}/${operation.targetId || "new"}`, {
+    moduleId: operation.moduleId,
+    collectionId: operation.collectionId,
+    recordType: operation.recordType,
+    recordId: operation.targetId || null,
+  }])).values()];
+  const receiptContext = {
+    workflowId: context.workflowId || null,
+    workflowRunId: context.workflowRunId || null,
+    nodeId: context.nodeId || null,
+    binding: structuredClone(context.binding || { turn: 0, messageId: null }),
+    sourceReferences,
+    targets,
+  };
   if (batch.commitPolicy === "best-effort" && allowBestEffort !== true) {
     throw Object.assign(new Error("The current workflow node does not allow best-effort data commits."), { code: "best_effort_not_allowed" });
   }
@@ -214,14 +236,14 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
   const existing = await readDataReceipt(store.sessionDirectory, batch.batchId);
   if (existing) {
     if (existing.batchHash === batchHash) return { ...existing, idempotentReplay: true };
-    if (existing.status !== "failed") return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], runtimeReceiptId: randomUUID(), idempotentReplay: false };
+    if (existing.status !== "failed") return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
   }
   let states = new Map();
   const results = [];
   if (batch.commitPolicy === "atomic") {
     const applied = await applyGroup(store, states, batch, batch.operations, access, context, handlers);
     results.push(...applied.results);
-    if (!applied.ok) return writeDataReceipt(store.sessionDirectory, { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results, runtimeReceiptId: randomUUID() });
+    if (!applied.ok) return writeDataReceipt(store.sessionDirectory, { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results, ...receiptContext, runtimeReceiptId: randomUUID() });
     states = applied.states;
   } else if (batch.commitPolicy === "grouped") {
     const groups = new Map();
@@ -250,6 +272,7 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
     status: failed === 0 ? "committed" : committed ? "partial" : "failed",
     committedAt: committed ? new Date().toISOString() : null,
     results,
+    ...receiptContext,
     runtimeReceiptId: randomUUID(),
   };
   if (committed) {
@@ -281,4 +304,22 @@ export async function executeDataBatch(store, value, options = {}) {
     release();
     if (commitQueues.get(key) === queued) commitQueues.delete(key);
   }
+}
+
+export function assertCommittedDataReceipt(receipt, { label = "Data batch" } = {}) {
+  if (receipt?.status === "committed") return receipt;
+  const failure = Array.isArray(receipt?.results)
+    ? receipt.results.find(result => result?.status === "failed")
+    : null;
+  const batchId = receipt?.batchId || "unknown";
+  const status = receipt?.status || "unknown";
+  const detail = failure?.error || receipt?.error?.message || receipt?.error || null;
+  const error = new Error(`${label} ${batchId} completed with status ${status}${detail ? `: ${detail}` : "."}`);
+  error.code = failure?.code || `data_batch_${status}`;
+  error.receipt = receipt;
+  throw error;
+}
+
+export async function executeDataBatchOrThrow(store, value, options = {}) {
+  return assertCommittedDataReceipt(await executeDataBatch(store, value, options));
 }
