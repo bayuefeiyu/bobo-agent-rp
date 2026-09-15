@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>Pi RP</title>
-    <link rel="stylesheet" href="/styles.css?v=23" />
+    <link rel="stylesheet" href="/styles.css?v=24" />
+    <link rel="stylesheet" href="/config.css?v=5" />
   </head>
   <body>
     <div class="app-layout">
@@ -27,14 +28,17 @@
           <button id="tab-system" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-system" data-panel="system">
             <span class="tab-icon" aria-hidden="true">设</span><span>系统设置</span>
           </button>
-          <button id="tab-api" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-api" data-panel="api">
+          <button id="tab-api" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-api" data-panel="api" hidden>
             <span class="tab-icon" aria-hidden="true">模</span><span>API 与模型</span>
           </button>
-          <button id="tab-agents" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-agents" data-panel="agents">
+          <button id="tab-agents" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-agents" data-panel="agents" hidden>
             <span class="tab-icon" aria-hidden="true">A</span><span>Agent 配置</span>
           </button>
           <button id="tab-workflows" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-workflows" data-panel="workflows">
             <span class="tab-icon" aria-hidden="true">流</span><span>工作流</span>
+          </button>
+          <button id="tab-profiles" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-profiles" data-panel="profiles" title="管理当前作用域的命名配置方案；API Key 等凭据仍只保存在本机缓存。">
+            <span class="tab-icon" aria-hidden="true">配</span><span>配置方案</span>
           </button>
           <button id="tab-tokens" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-tokens" data-panel="tokens">
             <span class="tab-icon" aria-hidden="true">T</span><span>Token 统计</span>
@@ -245,9 +249,9 @@
         </section>
 
         <section id="panel-workflows" class="panel settings-page" role="tabpanel" aria-labelledby="tab-workflows" hidden>
-          <div class="settings-heading"><p class="step">WORKFLOW RUNTIME</p><h2>工作流</h2><p>文件修改会在刷新时实时读取；启动中的实例固定使用启动时快照。</p></div>
+          <div class="settings-heading"><p class="step">WORKFLOW RUNTIME</p><h2>工作流运行</h2><p>查看工作流定义、节点和运行实例；运行策略、触发方式与节点配置统一在“配置方案”中修改。</p></div>
           <div class="config-toolbar"><label>可用工作流<select id="workflow-select" class="setting-select"></select></label><button id="show-active-workflow" type="button" class="secondary-button">当前前台</button><button id="activate-workflow" type="button">激活 / 运行</button><button id="refresh-workflows" type="button" class="secondary-button">立即刷新</button></div>
-          <form id="workflow-policy-form" class="workflow-policy">
+          <form id="workflow-policy-form" class="workflow-policy" hidden aria-hidden="true">
             <label>全局最大并发<input id="workflow-max-concurrency" class="setting-input" type="number" min="1" max="10" value="10" /></label>
             <label class="check-label"><input id="workflow-silent-fallback" type="checkbox" /> 允许节点失败后静默使用兜底模型</label>
             <label>默认兜底模型<select id="workflow-fallback-model" class="setting-select"></select></label>
@@ -258,6 +262,47 @@
           <div class="settings-heading run-heading"><p class="step">LIVE RUNS</p><h3>正在执行与最近实例</h3></div>
           <div id="workflow-run-list" class="workflow-run-list"></div>
           <p id="workflow-status" class="setting-status"></p>
+        </section>
+
+        <section id="panel-profiles" class="panel settings-page profile-config" role="tabpanel" aria-labelledby="tab-profiles" hidden>
+          <div class="settings-heading profile-config-heading">
+            <div>
+              <p class="step">CONFIG PROFILES</p>
+              <h2>配置方案</h2>
+              <p id="mode-description">正在读取配置作用域……</p>
+            </div>
+            <span id="scope-badge" class="scope-badge">加载中</span>
+          </div>
+
+          <section class="profile-toolbar" aria-labelledby="profile-heading">
+            <div><p class="step">ACTIVE PROFILE</p><h3 id="profile-heading">命名配置方案</h3></div>
+            <label class="compact-field"><span class="field-caption">当前方案
+              <span class="help" tabindex="0" data-tooltip="切换后，模型与 Agent 从下一次调用生效；工作流从下一次实例生效。">?</span></span>
+              <select id="profile-select"></select>
+            </label>
+            <div class="toolbar-actions">
+              <button id="profile-new" type="button">新建</button><button id="profile-rename" type="button">改名</button><button id="profile-copy" type="button">复制</button>
+              <button id="profile-delete" type="button" class="danger">删除</button><button id="profile-import" type="button">导入 JSON</button><button id="profile-export" type="button">导出 JSON</button>
+              <input id="profile-file" type="file" accept="application/json,.json" hidden />
+            </div>
+          </section>
+
+          <nav class="config-tabs" aria-label="配置类别">
+            <button class="config-tab active" type="button" data-config-panel="models">模型</button>
+            <button class="config-tab" type="button" data-config-panel="agents">Agents</button>
+            <button class="config-tab" type="button" data-config-panel="workflows">工作流</button>
+            <button class="config-tab" type="button" data-config-panel="modules">模块参数</button>
+          </nav>
+
+          <section id="config-panel-models" class="config-category-panel"></section>
+          <section id="config-panel-agents" class="config-category-panel" hidden></section>
+          <section id="config-panel-workflows" class="config-category-panel" hidden></section>
+          <section id="config-panel-modules" class="config-category-panel" hidden></section>
+
+          <footer class="save-bar">
+            <p id="status" role="status" aria-live="polite"></p>
+            <button id="save-profile" type="button">保存当前方案</button>
+          </footer>
         </section>
 
         <section id="panel-tokens" class="panel settings-page" role="tabpanel" aria-labelledby="tab-tokens" hidden>
@@ -319,6 +364,7 @@
         <footer><button value="cancel" class="secondary-button">关闭</button><button id="image-regenerate-confirm" value="default">修改并重新生成</button></footer>
       </form>
     </dialog>
-    <script type="module" src="/app.js?v=23"></script>
+    <script type="module" src="/app.js?v=26"></script>
+  <script type="module" src="/config.js?v=4"></script>
   </body>
 </html>

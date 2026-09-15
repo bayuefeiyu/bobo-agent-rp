@@ -22,6 +22,7 @@
 ├── design-pi-rp-data/               # 统一数据、记录结构与运行逻辑设计
 ├── create-pi-rp-feature-module/     # 根目录发起的模块创建与定制
 ├── adapt-comfyui-workflow/          # 将 ComfyUI API 工作流适配为生图配置
+├── manage-pi-rp-config-ui/          # 无卡开发模式下管理全局命名配置方案
 ├── audit-and-upgrade-pi-rp-card/    # 显式调用的旧卡检查与升级设计
 └── codex-delegate-bounded-tasks/    # Codex 有界子任务委派策略
 ```
@@ -80,7 +81,7 @@ pi --approve
 
 仓库内置 `global-modules/narrative-memory/` 叙事记忆模块源，用于在长篇 RP 中按需检索实体、事件、关系、认知与知情范围，并通过独立的两级归档工作流持续维护记录。模块前端面向调试与设置，可分页查看全部记录和修订历史、提醒归档覆盖或正文修订问题、按用户选择的回合范围修复或补充记录、调整常用参数及手动启动受控维护工作流；提醒不会自动使记录失效或启动修复。该源包不会自动修改已经转换的卡。
 
-仓库内置 `global-modules/world-narrative-coordinator/` 世界叙事统筹模块源。它以私有孵化、频道指导、深度推演和已确认归档交接四类职责，在世界逻辑基础上寻找有张力的发展；采用前置轻量调整、后置阻塞复盘和按需异步深度推演。模块依赖 `card-context-library` 的 `director-future` 类别与 `narrative-memory`，首版不提供前端，也不会自动维护或修改既有卡与会话。
+仓库内置 `global-modules/world-narrative-coordinator/` 世界叙事统筹模块源。它以私有孵化、频道指导、深度推演、持久参考资料和已确认归档交接等职责，在世界逻辑基础上寻找有张力的发展；采用前置轻量调整、后置阻塞复盘和按需异步深度推演。深度推演可在原单 Agent 工作流与动态 Leader/秘书/专家/助理会议之间切换，团队版使用独立阶段额度、并行助理、一次定稿审查和短锁原子提交。模块依赖 `card-context-library` 的 `director-future` 类别与 `narrative-memory`，前端提供状态、参考资料、设置、统计提醒和手动维护入口，不会自动维护或修改既有卡与会话。
 
 仓库内置 `global-modules/local-scene-narrative/` 近场叙事模块与 `global-modules/world-scope-narrative/` 广域叙事模块。前者以“一隅众生”为前端标题，创作主线当前地点及周边的视野外故事；后者以“万象潮生”为前端标题，创作遍及世界且通常值得传播的较长事件。两者每次只生成一篇只读候选，经后置导演统一检查硬冲突后再确定性发布；已发布故事进入普通来源捕获。正文按自身最近回合窗口取得摘要目录和按需全文，玩家则可在默认收起的模块前端阅读故事，并可自行承担风险直接打开权威 JSONL 分区进行高级 DIY。
 
@@ -111,7 +112,9 @@ pi --approve
 
 ## 工作流与多 Agent
 
-Web UI 提供 API/模型、Agent 和工作流页面。模型配置以 ID 保存，可设置上下文/输出限制、思考强度、并发量及可选的首尾提示词；Agent 配置独立保存，卡片可建立覆盖层；工作流节点只引用这些 ID。
+Web UI 将模型、Agent 和工作流配置统一收进命名配置方案。模型配置以 ID 保存，可设置上下文/输出限制、思考强度、并发量及可选的首尾提示词；Agent 与工作流配置可建立覆盖层，工作流节点只引用这些 ID。独立工作流页面用于查看定义、节点和运行实例，并提供运行期操作，不再直接修改配置。
+
+在仓库根目录运行 `node .agents/skills/manage-pi-rp-config-ui/scripts/start-config-ui.mjs` 会以“无卡、无聊天”的开发预览状态打开与 `play` 完全相同的 Web UI。正文区、角色卡页和模块栏可用于检查通用前端效果，但不会创建虚拟卡、会话或运行工作流；用户资料与正文字号等通用默认可以修改并保存在 `.pi-rp-local/`。游玩时共享 `settings/common.json` 作为全局回退，卡内 `settings.json.settings.common` 覆盖对应类别且优先级更高。从同一侧栏进入“配置方案”即可统一管理模型、Agent、工作流和模块参数，不再保留重复的独立编辑页。首次启动会从作者默认值建立并激活可编辑的“开发默认”方案，内置默认仍作为只读基线保留。Agent 和工作流都先选“通用”或所属模块，再选具体对象；“通用”只展示不属于模块的内容。工作流档案包含运行策略、触发方式和全部节点，并且只有 Agent 节点显示 Agent、模型、提示词和上下文选项。模块参数从 `settings-form` 初始值载入。全局开发模式与单卡游玩模式分别维护命名方案，支持新建、改名、复制、切换、删除和不含凭据的 JSON 导入导出；单卡方案只对当前卡生效。所有字段均带同排用途提示，模型 API Key 仍只保存在本机项目隔离缓存中。
 
 API Key 不写入项目目录：运行时按 `play/` 绝对路径生成隔离标识，保存到操作系统缓存目录下的 `bobo-agent-rp/projects/<project-hash>/model-secrets.json`。分享或上传项目不会携带凭据；旧版 `model-profiles.json` 中的 Key 会在下次启动时自动迁移并从项目文件删除。
 

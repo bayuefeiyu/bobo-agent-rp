@@ -92,6 +92,76 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_feature_modules(root, [path], errors)
             self.assertEqual(errors, [])
 
+    def test_accepts_a_structurally_valid_public_team_node(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_json(root / "workflows" / "team-check" / "workflow.json", {
+                "schemaVersion": 3,
+                "id": "team-check",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "meeting",
+                    "type": "team",
+                    "team": {
+                        "schemaVersion": 1,
+                        "leader": {"id": "leader", "agentId": "leader-agent"},
+                        "secretary": {"id": "secretary", "agentId": "secretary-agent"},
+                        "experts": [{"id": "logic", "agentId": "expert-agent", "focus": "logic"}],
+                        "assistants": [],
+                    },
+                }],
+            })
+            errors: list[str] = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertEqual(errors, [])
+
+    def test_module_workflow_team_nodes_use_the_same_adapter_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self.make_output_module(root, surface="background")
+            workflow_path = root / "features" / "meanwhile" / "workflows" / "query-scenes" / "workflow.json"
+            workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            workflow["nodes"].insert(0, {
+                "id": "meeting",
+                "type": "team",
+                "team": {
+                    "leader": {"id": "same", "agentId": "leader-agent"},
+                    "secretary": {"id": "same", "agentId": "secretary-agent"},
+                    "assistants": [{"id": "tool", "kind": "tool", "adapter": "unknown-tool", "inputAdapter": "unknown-input"}],
+                },
+            })
+            write_json(workflow_path, workflow)
+            write_json(root / "manifest.json", {"feature_modules": [path]})
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [path], errors)
+            self.assertTrue(any("member IDs must be unique" in error for error in errors))
+            self.assertTrue(any("inputAdapter is unsupported" in error for error in errors))
+            self.assertTrue(any("adapter is unsupported" in error for error in errors))
+
+    def test_rejects_duplicate_team_members_and_unknown_ability_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_json(root / "workflows" / "team-check" / "workflow.json", {
+                "schemaVersion": 3,
+                "id": "team-check",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "meeting",
+                    "type": "team",
+                    "team": {
+                        "schemaVersion": 1,
+                        "leader": {"id": "same", "agentId": "leader-agent"},
+                        "secretary": {"id": "same", "agentId": "secretary-agent"},
+                        "experts": [],
+                        "assistants": [{"id": "bad", "kind": "anything"}],
+                    },
+                }],
+            })
+            errors: list[str] = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertTrue(any("member IDs must be unique" in error for error in errors))
+            self.assertTrue(any("kind is invalid" in error for error in errors))
+
     def test_module_internal_write_access_must_be_covered_by_collection_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

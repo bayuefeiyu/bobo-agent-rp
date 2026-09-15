@@ -206,6 +206,49 @@ export function createApplication({ cardStore, bridge }) {
       if (request.method === "GET" && url.pathname === "/api/settings") {
         return sendJson(response, 200, await bridge.getSettings());
       }
+      if (request.method === "GET" && url.pathname === "/api/config/context") return sendJson(response, 200, await bridge.getConfigContext());
+      if (request.method === "GET" && url.pathname === "/api/config/catalog") return sendJson(response, 200, await bridge.getConfigCatalog());
+      if (request.method === "GET" && url.pathname === "/api/config/profiles") return sendJson(response, 200, await bridge.listConfigProfiles());
+      if (request.method === "POST" && url.pathname === "/api/config/profiles") {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 201, await bridge.createConfigProfile(await readJson(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/api/config/import") {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 201, await bridge.importConfigProfile(await readJson(request)));
+      }
+      const configExportMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/export$/);
+      if (request.method === "GET" && configExportMatch) return sendJson(response, 200, await bridge.exportConfigProfile(cleanSessionId(configExportMatch[1])));
+      const configRenameMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/rename$/);
+      if (request.method === "POST" && configRenameMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 200, await bridge.renameConfigProfile(cleanSessionId(configRenameMatch[1]), await readJson(request)));
+      }
+      const configDuplicateMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/duplicate$/);
+      if (request.method === "POST" && configDuplicateMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 201, await bridge.duplicateConfigProfile(cleanSessionId(configDuplicateMatch[1]), await readJson(request)));
+      }
+      const configActivateMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/activate$/);
+      if (request.method === "POST" && configActivateMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 200, await bridge.activateConfigProfile(cleanSessionId(configActivateMatch[1])));
+      }
+      const configSecretMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/secrets\/models\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/);
+      if (request.method === "PUT" && configSecretMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 200, await bridge.saveConfigModelSecret(cleanSessionId(configSecretMatch[1]), cleanSessionId(configSecretMatch[2]), await readJson(request)));
+      }
+      const configProfileMatch = url.pathname.match(/^\/api\/config\/profiles\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/);
+      if (request.method === "GET" && configProfileMatch) return sendJson(response, 200, await bridge.getConfigProfile(cleanSessionId(configProfileMatch[1])));
+      if (request.method === "PUT" && configProfileMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 200, await bridge.saveConfigProfile(await readJson(request)));
+      }
+      if (request.method === "DELETE" && configProfileMatch) {
+        await bridge.authorizeConfigMutation(request.headers["x-rp-config-token"]);
+        return sendJson(response, 200, await bridge.deleteConfigProfile(cleanSessionId(configProfileMatch[1])));
+      }
       if (request.method === "GET" && url.pathname === "/api/modules") {
         return sendJson(response, 200, await bridge.listFeatureModules());
       }
@@ -354,6 +397,13 @@ export function createApplication({ cardStore, bridge }) {
         return sendJson(response, 200, await bridge.openWorkflowNodeProcessRecord(
           cleanId(processRecordMatch[1], "runId"),
           cleanId(processRecordMatch[2], "nodeId"),
+        ));
+      }
+      const teamTranscriptMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/team-transcript\/open$/);
+      if (request.method === "POST" && teamTranscriptMatch) {
+        return sendJson(response, 200, await bridge.openWorkflowTeamTranscript(
+          cleanId(teamTranscriptMatch[1], "runId"),
+          cleanId(teamTranscriptMatch[2], "nodeId"),
         ));
       }
       if (request.method === "GET" && url.pathname === "/api/workflow-policy") {

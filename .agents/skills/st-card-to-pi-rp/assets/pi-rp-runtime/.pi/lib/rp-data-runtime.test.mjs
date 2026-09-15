@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { normalizeDataContract } from "./rp-data-contracts.mjs";
 import { RpDataStore } from "./rp-data-store.mjs";
 import { assertCommittedDataReceipt, executeDataBatch, executeDataBatchOrThrow } from "./rp-data-changes.mjs";
-import { getDataRecordHistory, queryData, queryDataStable } from "./rp-data-query.mjs";
+import { getDataRecord, getDataRecordHistory, queryData, queryDataStable } from "./rp-data-query.mjs";
 import { commitDataFiles, inspectDataImpact, inspectDataIntegrity } from "./rp-data-transactions.mjs";
 
 const contract = normalizeDataContract({
@@ -48,6 +48,30 @@ test("strict data submissions accept committed receipts and reject failed or par
     });
   }
   await assert.rejects(executeDataBatchOrThrow({}, {}, { }), /must be an object|protocolVersion|batch/i);
+});
+
+test("module profile settings override only the initial session snapshot", async t => {
+  const root = await mkdtemp(join(tmpdir(), "rp-data-settings-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const moduleDirectory = join(root, "module");
+  await mkdir(join(moduleDirectory, "collections", "settings", "initial"), { recursive: true });
+  await writeFile(join(moduleDirectory, "collections", "settings", "initial", "snapshot.json"), JSON.stringify({
+    protocolVersion: 2, id: "settings", moduleId: "settings-module", collectionId: "settings", recordType: "settings.value", dataSchemaVersion: 1, revision: 1, sequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", status: "active",
+    provenance: { source: "initial" }, binding: { messageId: null, turn: 0 }, data: { archive: { interval: 10 }, enabled: true }, note: null,
+  }), "utf8");
+  const settingsContract = normalizeDataContract({
+    schemaVersion: 1, moduleId: "settings-module",
+    collections: { settings: { storage: { kind: "snapshot", partition: { mode: "single" }, initialSnapshotFile: "collections/settings/initial/snapshot.json" }, recordTypes: { "settings.value": { dataSchemaVersion: 1, indexes: {}, searchableFields: [], views: {}, actions: ["update"] } } } },
+    capabilities: {},
+  });
+  const sessionDirectory = join(root, "session");
+  const first = new RpDataStore({ sessionDirectory, modules: [{ contract: settingsContract, moduleDirectory }], initialOverrides: { "settings-module": { archive: { interval: 3 } } } });
+  await first.initialize();
+  assert.deepEqual((await first.readCollection("settings-module", "settings")).records[0].data, { archive: { interval: 3 }, enabled: true });
+  const second = new RpDataStore({ sessionDirectory, modules: [{ contract: settingsContract, moduleDirectory }], initialOverrides: { "settings-module": { archive: { interval: 99 } } } });
+  await second.initialize();
+  assert.equal((await second.readCollection("settings-module", "settings")).records[0].data.archive.interval, 3);
 });
 
 async function fixture(t) {
@@ -124,6 +148,22 @@ test("revision conflicts and permissions reject silent writes", async t => {
   const state = await store.readCollection("rumors", "entries");
   assert.equal(state.records[0].revision, 1);
   assert.equal(state.records[0].status, "active");
+});
+
+test("workflow data reads honor the frozen visible-through turn and historical revision", async t => {
+  const { store } = await fixture(t);
+  const writeAccess = { rumors: ["rumor.write"] };
+  await executeDataBatch(store, { protocolVersion: 1, batchId: "visible-create", status: "pending", commitPolicy: "atomic", operations: [{ operationId: "visible-create", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.visible", data: { content: "turn two", source: "character.queen" } }] }, { access: writeAccess, context: { initiatorKind: "code", binding: { turn: 2, messageId: null } } });
+  const readAccess = { capabilities: ["rumor.query"], views: ["rp"], runtimeLimit: 20, runtimeCharacters: 1000, visibleThroughTurn: 1 };
+  assert.equal(await getDataRecord(store, { moduleId: "rumors", collectionId: "entries", id: "rumor.visible", view: "rp" }, readAccess), null);
+  assert.equal((await queryData(store, { moduleId: "rumors", collectionId: "entries", view: "rp" }, readAccess)).returned, 0);
+  const revisionOne = (await store.readCollection("rumors", "entries")).records[0];
+  const readSnapshotAt = new Date().toISOString();
+  await new Promise(resolve => setTimeout(resolve, 2));
+  await executeDataBatch(store, { protocolVersion: 1, batchId: "visible-update", status: "pending", commitPolicy: "atomic", operations: [{ operationId: "visible-update", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "update", targetId: "rumor.visible", expectedRevision: revisionOne.revision, data: { content: "turn three", source: "character.queen" } }] }, { access: writeAccess, context: { initiatorKind: "code", binding: { turn: 3, messageId: null } } });
+  const historical = await getDataRecord(store, { moduleId: "rumors", collectionId: "entries", id: "rumor.visible", view: "rp" }, { ...readAccess, visibleThroughTurn: 2, visibleThroughTime: readSnapshotAt });
+  assert.equal(historical.value, "turn two");
+  assert.equal(historical.revision, 1);
 });
 
 test("data receipts retain exact input revisions and impact inspection is read-only", async t => {

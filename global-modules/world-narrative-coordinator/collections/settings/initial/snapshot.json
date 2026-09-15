@@ -1,6 +1,6 @@
 [
   {
     "protocolVersion": 2, "id": "director-settings-current", "moduleId": "world-narrative-coordinator", "collectionId": "settings", "recordType": "director.settings", "dataSchemaVersion": 1, "sequence": 0, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
-    "data": { "enabled": true, "deep": { "turnCooldown": 10, "worldTimeCooldown": "10d", "retrievalBudget": { "maxRecords": 120, "maxCharacters": 350000 } }, "opening": { "deepMode": "background" }, "healthReference": { "recordCount": 250, "characters": 300000 } }, "note": null, "provenance": {}
+    "data": { "enabled": true, "deep": { "workflowMode": "single", "turnCooldown": 10, "worldTimeCooldown": "10d", "retrievalBudget": { "maxRecords": 120, "maxCharacters": 350000 } }, "opening": { "deepMode": "background" }, "healthReference": { "recordCount": 250, "characters": 300000 } }, "note": null, "provenance": {}
   }
 ]

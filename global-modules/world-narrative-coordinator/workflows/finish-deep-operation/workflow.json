@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 3,
+  "id": "finish-deep-operation",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "收尾深度导演运行",
+  "description": "在失败、取消或跳过时用短锁释放仍由本次操作持有的运行状态。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
+      "terminalStatus": { "type": "parameter", "required": true, "valueType": "string" },
+      "terminalError": { "type": "parameter", "required": false, "valueType": "any" }
+    },
+    "exports": {}
+  },
+  "revision": "1",
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId" },
+  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
+  "nodes": [
+    {
+      "id": "finish", "type": "code",
+      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }],
+      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/finish-deep-operation.mjs", "argumentInputs": ["operationId", "terminalStatus", "terminalError"] }
+    },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["finish"], "exports": {} }
+  ]
+}

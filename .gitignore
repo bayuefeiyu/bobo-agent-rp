@@ -9,7 +9,6 @@
 !/PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md
 !/PROJECT_STATUS.md
 !/PROJECT-RELEASE-MANIFEST.json
-!/PROJECT-REVIEW-*
 !/global-modules/
 /global-modules/*
 !/global-modules/comfy-image-generation/
@@ -35,6 +34,10 @@
 !/.agents/skills/codex-delegate-bounded-tasks/
 !/.agents/skills/audit-and-upgrade-pi-rp-card/
 !/.agents/skills/adapt-comfyui-workflow/
+!/.agents/skills/manage-pi-rp-config-ui/
+
+# Local-only reports, plans, acceptance notes, and diagnostic probes.
+/local-development-records/
 
 **/__pycache__/
 **/*.py[cod]

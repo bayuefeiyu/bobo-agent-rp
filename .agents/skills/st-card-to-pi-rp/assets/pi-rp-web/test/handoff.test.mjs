@@ -46,8 +46,10 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /run\.usageComplete === false/);
   assert.match(app, /node\.usage \?\? attempt\?\.usage/);
   assert.match(styles, /\.token-summary/);
-  assert.match(app, /继承工作流默认 Agent（\$\{agentLabel/);
-  assert.match(app, /继承\$\{inherited\.source\}（\$\{modelLabel/);
+  assert.match(app, /if \(node\.type === "agent"\)/);
+  assert.match(app, /binding\.textContent = `Agent：\$\{agentLabel/);
+  assert.doesNotMatch(app, /node-binding-controls/);
+  assert.match(page, /id="workflow-policy-form"[^>]*hidden/);
   assert.match(app, /function beginMessageEdit/);
   assert.match(app, /function deleteSavedMessage/);
   assert.match(app, /function deleteSavedProfile/);
@@ -65,5 +67,5 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(page, /id="image-positive-prompt"[^>]*readonly/);
   assert.match(page, /id="image-regenerate-scope"/);
   assert.match(page, /id="comfy-connection-form"/);
-  assert.match(app, /updateWorkflowTrigger|\/trigger/);
+  assert.doesNotMatch(app, /updateWorkflowTrigger|\/trigger/);
 });

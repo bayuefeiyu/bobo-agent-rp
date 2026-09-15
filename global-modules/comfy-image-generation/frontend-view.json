@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "regions": [
     {
       "type": "image-generation",
@@ -8,6 +8,47 @@
       "requestsPath": "collections.requests.records",
       "rendersPath": "collections.renders.records",
       "empty": "尚未配置 ComfyUI 生图工作流。请在项目根目录使用 adapt-comfyui-workflow Skill 完成适配。"
+    },
+    {
+      "id": "image-input-defaults",
+      "type": "settings-form",
+      "title": "默认输入范围",
+      "description": "设置新聊天首次建立剧情生图偏好时使用的输入范围；不会改写已有聊天中的生图设置。",
+      "spoiler": false,
+      "collectionId": "settings",
+      "recordType": "image.preferences",
+      "recordId": "image-preferences",
+      "view": "rp",
+      "readCapability": "image.preferences.read",
+      "updateCapability": "image.preferences.configure",
+      "submitLabel": "保存生图输入范围",
+      "fields": [
+        {
+          "path": "/inputPolicy/kind",
+          "label": "默认输入类型",
+          "type": "select",
+          "required": true,
+          "options": ["recent-turns", "custom-brief"],
+          "help": "recent-turns 自动读取最近完整剧情；custom-brief 默认打开本次画面描述输入。"
+        },
+        {
+          "path": "/inputPolicy/turnCount",
+          "label": "最近完整回合数",
+          "type": "integer",
+          "required": true,
+          "minimum": 1,
+          "maximum": 20,
+          "help": "默认输入类型为 recent-turns 时，最多读取多少个最近完整剧情回合。"
+        },
+        {
+          "path": "/inputPolicy/target",
+          "label": "默认画面目标",
+          "type": "select",
+          "required": true,
+          "options": ["latest", "all"],
+          "help": "latest 仅把最新回合作为画面目标，较早回合作为连续性参考；all 把所选全部回合都作为画面目标。"
+        }
+      ]
     }
   ]
 }

@@ -20,6 +20,56 @@ import {
   workflowRuntimeIdentity,
 } from "./rp-workflows.mjs";
 
+test("normalizes a dynamic team node without assigning it one outer Agent or model", () => {
+  const workflow = normalizeWorkflowDefinition({
+    schemaVersion: 3,
+    id: "team-background",
+    kind: "turn-background",
+    nodes: [{
+      id: "meeting",
+      type: "team",
+      team: {
+        schemaVersion: 1,
+        leader: { id: "leader", agentId: "leader-agent" },
+        secretary: { id: "secretary", agentId: "secretary-agent" },
+        experts: [{ id: "expert", agentId: "expert-agent", modelId: "model-strong" }],
+        assistants: [],
+        agenda: { normalRounds: 1, maxRounds: 2 },
+        budgets: { preparation: 8, discussion: 8, coordination: 4, closing: 4, draft: 2, review: 4, revision: 2 },
+      },
+    }],
+  });
+  assert.equal(workflow.nodes[0].type, "team");
+  assert.equal(workflow.nodes[0].agentId, null);
+  assert.equal(workflow.nodes[0].team.experts.length, 1);
+  assert.equal(workflow.nodes[0].team.leader.modelId, null);
+});
+
+test("rejects team configuration on ordinary nodes and missing team configuration on team nodes", () => {
+  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 3, id: "missing-team", kind: "turn-background", nodes: [{ id: "meeting", type: "team" }] }), /declare team exactly/);
+  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 3, id: "wrong-team", kind: "turn-background", nodes: [{ id: "task", type: "code", team: { leader: {}, secretary: {} } }] }), /agentId/);
+});
+
+test("team workflow assistants require an exact node call authorization", () => {
+  const definition = {
+    schemaVersion: 3,
+    id: "team-ability-call",
+    kind: "turn-background",
+    nodes: [{
+      id: "meeting",
+      type: "team",
+      team: {
+        leader: { id: "leader", agentId: "leader-agent" },
+        secretary: { id: "secretary", agentId: "secretary-agent" },
+        assistants: [{ id: "lookup", kind: "workflow", target: "memory/lookup" }],
+      },
+    }],
+  };
+  assert.throws(() => normalizeWorkflowDefinition(definition), /require matching workflowCalls/);
+  definition.nodes[0].workflowCalls = ["memory/lookup"];
+  assert.equal(normalizeWorkflowDefinition(definition).nodes[0].workflowCalls[0].target, "memory/lookup");
+});
+
 test("document-workspace agents require read and explicit input declarations", () => {
   const definition = {
     schemaVersion: 3,

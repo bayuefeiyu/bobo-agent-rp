@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["generatedAt", "reference", "totals", "exceedsReference", "collections"],
+  "properties": {
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "reference": {
+      "type": "object", "additionalProperties": false, "required": ["recordCount", "characters"],
+      "properties": { "recordCount": { "type": "integer", "minimum": 1 }, "characters": { "type": "integer", "minimum": 1000 } }
+    },
+    "totals": {
+      "type": "object", "additionalProperties": false, "required": ["recordCount", "characters"],
+      "properties": { "recordCount": { "type": "integer", "minimum": 0 }, "characters": { "type": "integer", "minimum": 0 } }
+    },
+    "exceedsReference": {
+      "type": "object", "additionalProperties": false, "required": ["recordCount", "characters"],
+      "properties": { "recordCount": { "type": "boolean" }, "characters": { "type": "boolean" } }
+    },
+    "collections": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["collectionId", "recordCount", "characters", "byType"],
+        "properties": {
+          "collectionId": { "type": "string", "minLength": 1 },
+          "recordCount": { "type": "integer", "minimum": 0 },
+          "characters": { "type": "integer", "minimum": 0 },
+          "byType": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    }
+  }
+}

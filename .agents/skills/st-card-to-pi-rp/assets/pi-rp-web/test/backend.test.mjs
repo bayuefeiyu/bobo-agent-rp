@@ -47,12 +47,28 @@ test("card-local server only transports view state and player input", async () =
   let workflowPolicy = { schemaVersion: 1, maxConcurrency: 10, modelFailure: { silentFallback: false, defaultFallbackModelId: null } };
   let openedModuleDocument = null;
   let openedProcessRecord = null;
+  let openedTeamTranscript = null;
+  let configProfile = { schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "test-profile", name: "Test", models: [], agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {} };
   const bridge = {
     getState: async () => ({ openingId, playerName, messages, busy: false }),
     getSettings: async () => ({
       common: { schemaVersion: 1, user: { playerName, description: playerDescription, savedProfiles }, system: { fontSize } },
       card: { schemaVersion: 1, cardId: "test-card", settings: { featureModules: moduleDisplaySettings } },
     }),
+    getConfigContext: async () => ({ mode: "play", scope: "card", ownerId: "test-card", token: "config-token" }),
+    authorizeConfigMutation: async value => { if (value !== "config-token") throw Object.assign(new Error("Configuration session token is invalid."), { status: 403 }); },
+    getConfigCatalog: async () => ({ schemaVersion: 1, agents: [], workflows: [], modules: [], runtimePolicy: workflowPolicy }),
+    listConfigProfiles: async () => ({ activeProfileId: "test-profile", profiles: [{ id: "builtin", name: "内置默认", builtin: true }, { id: "test-profile", name: "Test" }] }),
+    getConfigProfile: async () => configProfile,
+    createConfigProfile: async value => ({ ...configProfile, ...value }),
+    saveConfigProfile: async value => { configProfile = value; return value; },
+    renameConfigProfile: async (_id, value) => { configProfile.name = value.name; return configProfile; },
+    duplicateConfigProfile: async (_id, value) => ({ ...configProfile, id: value.newId, name: value.name }),
+    deleteConfigProfile: async id => ({ deleted: id, activeProfileId: "builtin" }),
+    importConfigProfile: async value => value.profile,
+    exportConfigProfile: async () => configProfile,
+    saveConfigModelSecret: async (_profileId, modelId, value) => ({ modelId, hasSecret: Boolean(value.apiKey) }),
+    activateConfigProfile: async id => ({ activeProfileId: id }),
     listFeatureModules: async () => ({
       sessionId: openingId ? "test-session" : null,
       modules: [{
@@ -84,6 +100,10 @@ test("card-local server only transports view state and player input", async () =
     openWorkflowNodeProcessRecord: async (runId, nodeId) => {
       openedProcessRecord = { runId, nodeId };
       return { opened: true, path: `workflow/process-records/${runId}/${nodeId}.md` };
+    },
+    openWorkflowTeamTranscript: async (runId, nodeId) => {
+      openedTeamTranscript = { runId, nodeId };
+      return { opened: true, path: `workflow/private/${runId}/${nodeId}/team/shared/TRANSCRIPT.md` };
     },
     getWorkflowPolicy: async () => workflowPolicy,
     saveWorkflowPolicy: async value => { workflowPolicy = value; return value; },
@@ -178,6 +198,15 @@ test("card-local server only transports view state and player input", async () =
     const pageResponse = await fetch(`${base}/`);
     assert.equal(pageResponse.status, 200);
     assert.equal(pageResponse.headers.get("cache-control"), "no-store");
+    const page = await pageResponse.text();
+    assert.match(page, /id="tab-profiles"/);
+    assert.match(page, /id="tab-api"[^>]*hidden/);
+    assert.match(page, /id="tab-agents"[^>]*hidden/);
+    assert.match(page, /id="panel-profiles"/);
+    assert.match(page, /src="\/config\.js\?v=4"/);
+
+    const legacyConfigPage = await fetch(`${base}/config.html`).then(response => response.text());
+    assert.match(legacyConfigPage, /\?panel=profiles/);
 
     const card = await fetch(`${base}/api/card`).then(response => response.json());
     assert.equal(card.name, "沈月");
@@ -189,6 +218,16 @@ test("card-local server only transports view state and player input", async () =
     const initialSettings = await fetch(`${base}/api/settings`).then(response => response.json());
     assert.equal(initialSettings.common.system.fontSize, 16);
     assert.deepEqual(initialSettings.card.settings.featureModules, { order: ["character-memory"], hidden: [] });
+    const configContext = await fetch(`${base}/api/config/context`).then(response => response.json());
+    assert.equal(configContext.scope, "card");
+    const configCatalog = await fetch(`${base}/api/config/catalog`).then(response => response.json());
+    assert.equal(configCatalog.runtimePolicy.maxConcurrency, 10);
+    assert.equal((await fetch(`${base}/api/config/profiles`).then(response => response.json())).activeProfileId, "test-profile");
+    const deniedConfigSave = await fetch(`${base}/api/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(configProfile) });
+    assert.equal(deniedConfigSave.status, 403);
+    const configSave = await fetch(`${base}/api/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json", "x-rp-config-token": "config-token" }, body: JSON.stringify({ ...configProfile, name: "Saved" }) });
+    assert.equal(configSave.status, 200);
+    assert.equal((await configSave.json()).name, "Saved");
 
     const initialModules = await fetch(`${base}/api/modules`).then(response => response.json());
     assert.equal(initialModules.modules[0].id, "character-memory");
@@ -228,6 +267,9 @@ test("card-local server only transports view state and player input", async () =
     const openedProcess = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
     assert.equal(openedProcess.opened, true);
     assert.deepEqual(openedProcessRecord, { runId: "run-1", nodeId: "story" });
+    const openedTranscript = await fetch(`${base}/api/workflow-runs/run-1/nodes/meeting/team-transcript/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
+    assert.equal(openedTranscript.opened, true);
+    assert.deepEqual(openedTeamTranscript, { runId: "run-1", nodeId: "meeting" });
     const recoveredNodeResponse = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/recover`, { method: "POST" });
     assert.equal(recoveredNodeResponse.status, 202);
     const recoveredNode = await recoveredNodeResponse.json();

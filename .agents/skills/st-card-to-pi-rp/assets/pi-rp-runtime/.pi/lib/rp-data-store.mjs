@@ -37,6 +37,16 @@ function latestRecords(history) {
   return [...latest.values()].sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
 }
 
+function mergeDefined(base, override) {
+  if (!override || typeof override !== "object" || Array.isArray(override)) return structuredClone(base);
+  const result = structuredClone(base);
+  for (const [key, value] of Object.entries(override)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && result[key] && typeof result[key] === "object" && !Array.isArray(result[key])) result[key] = mergeDefined(result[key], value);
+    else result[key] = structuredClone(value);
+  }
+  return result;
+}
+
 function identityDocument(entries) {
   const ids = new Set();
   for (const entry of entries) {
@@ -62,9 +72,10 @@ function partitionName(record, contract, collectionId) {
 }
 
 export class RpDataStore {
-  constructor({ sessionDirectory, modules }) {
+  constructor({ sessionDirectory, modules, initialOverrides = {} }) {
     this.sessionDirectory = resolve(sessionDirectory);
     this.modules = new Map(modules.map(module => [module.contract.moduleId, module]));
+    this.initialOverrides = initialOverrides && typeof initialOverrides === "object" && !Array.isArray(initialOverrides) ? structuredClone(initialOverrides) : {};
     this.processorCache = new Map();
     this.schemaCache = new Map();
   }
@@ -131,6 +142,8 @@ export class RpDataStore {
         if (collection.storage.initialSnapshotFile) {
           const value = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
           initialSnapshot = (Array.isArray(value) ? value : [value]).map(record => validateDataRecord(record, module.contract));
+          const override = collectionId === "settings" ? this.initialOverrides[module.contract.moduleId] : null;
+          if (override && initialSnapshot.length) initialSnapshot[0] = { ...initialSnapshot[0], data: mergeDefined(initialSnapshot[0].data, override) };
           for (const record of initialSnapshot) await this.validateRecordData(record);
         }
         const files = this.stateFiles(module.contract.moduleId, collectionId, { history: initialRecords, records: initialSnapshot.length ? initialSnapshot : latestRecords(initialRecords) });

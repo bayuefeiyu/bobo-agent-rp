@@ -1,5 +1,5 @@
 import { capabilityAllows } from "./rp-data-contracts.mjs";
-import { dataValueAt, queryDataIndex } from "./rp-data-index.mjs";
+import { buildDataIndex, dataValueAt, queryDataIndex } from "./rp-data-index.mjs";
 import { renderDataRecordView } from "./rp-data-views.mjs";
 
 function cursorOffset(value) {
@@ -37,6 +37,19 @@ function withinSearch(record, definition, search) {
   return fields.some(path => String(dataValueAt(record, path) ?? "").toLocaleLowerCase().includes(needle));
 }
 
+function recordsVisibleThrough(state, visibleThroughTurn, visibleThroughTime, includeInactive = false) {
+  if (!Number.isSafeInteger(visibleThroughTurn) && !(typeof visibleThroughTime === "string" && visibleThroughTime)) return state.records;
+  const source = state.history?.length ? state.history : state.records;
+  const latest = new Map();
+  for (const record of source) {
+    if (Number.isSafeInteger(visibleThroughTurn) && (record.binding?.turn || 0) > visibleThroughTurn) continue;
+    if (typeof visibleThroughTime === "string" && visibleThroughTime && typeof record.updatedAt === "string" && record.updatedAt > visibleThroughTime) continue;
+    const prior = latest.get(record.id);
+    if (!prior || record.revision > prior.revision) latest.set(record.id, record);
+  }
+  return [...latest.values()].filter(record => includeInactive || record.status === "active");
+}
+
 export async function queryData(store, request, access = {}) {
   const module = store.module(request.moduleId);
   const view = request.view || "rp";
@@ -52,10 +65,13 @@ export async function queryData(store, request, access = {}) {
   const nodeCharacters = Number.isSafeInteger(access.nodeCharacters) ? access.nodeCharacters : runtimeCharacters;
   const requestedCharacters = Number.isSafeInteger(request.maxCharacters) && request.maxCharacters > 0 ? request.maxCharacters : runtimeCharacters;
   const maxCharacters = Math.min(runtimeCharacters, nodeCharacters, requestedCharacters);
-  const index = await store.readIndex(request.moduleId);
-  let entries = queryDataIndex(index, module.contract, request);
   const state = await store.readCollection(request.moduleId, request.collectionId);
-  const records = new Map(state.records.map(record => [record.id, record]));
+  const visibleRecords = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true);
+  const index = Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
+    ? buildDataIndex(visibleRecords, module.contract)
+    : await store.readIndex(request.moduleId);
+  let entries = queryDataIndex(index, module.contract, request);
+  const records = new Map(visibleRecords.map(record => [record.id, record]));
   entries = entries.filter(entry => {
     const record = records.get(entry.id);
     if (!record) return false;
@@ -114,7 +130,7 @@ export async function getDataRecord(store, request, access = {}) {
     throw new Error(`The current node cannot read ${request.moduleId}/${request.collectionId} with view ${view}.`);
   }
   const state = await store.readCollection(request.moduleId, request.collectionId);
-  const record = state.records.find(item => item.id === request.id);
+  const record = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true).find(item => item.id === request.id);
   if (!record) return null;
   return { id: record.id, recordType: record.recordType, revision: record.revision, value: renderDataRecordView(record, module.contract, view) };
 }
@@ -132,13 +148,16 @@ export async function queryDataStable(store, request, access = {}) {
   const maxCharacters = Math.min(runtimeCharacters, requestedCharacters);
   const signature = stableSignature(request);
   const cursor = decodeCursor(request.cursor, signature);
-  const index = await store.readIndex(request.moduleId);
   const descending = request.order === "desc";
+  const state = await store.readCollection(request.moduleId, request.collectionId);
+  const visibleRecords = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true);
+  const index = Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
+    ? buildDataIndex(visibleRecords, module.contract)
+    : await store.readIndex(request.moduleId);
   let entries = queryDataIndex(index, module.contract, { ...request, sort: [{ field: "sequence", order: descending ? "desc" : "asc" }] });
   entries.sort((left, right) => descending ? right.sequence - left.sequence || right.id.localeCompare(left.id) : left.sequence - right.sequence || left.id.localeCompare(right.id));
   if (cursor) entries = entries.filter(entry => descending ? entry.sequence < cursor.sequence || (entry.sequence === cursor.sequence && entry.id < cursor.id) : entry.sequence > cursor.sequence || (entry.sequence === cursor.sequence && entry.id > cursor.id));
-  const state = await store.readCollection(request.moduleId, request.collectionId);
-  const records = new Map(state.records.map(record => [record.id, record]));
+  const records = new Map(visibleRecords.map(record => [record.id, record]));
   entries = entries.filter(entry => {
     const record = records.get(entry.id);
     if (!record) return false;

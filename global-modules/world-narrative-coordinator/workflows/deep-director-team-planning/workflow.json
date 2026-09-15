@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 3,
+  "id": "deep-director-team-planning",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "团队深度导演推演",
+  "description": "以Leader、秘书、动态专家和动态助理组成的固定议程会议完成高层推演。",
+  "kind": "module-external",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
+      "triggerReasons": { "type": "parameter", "required": true, "valueType": "array" },
+      "story-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot", "document-set"] }
+    },
+    "exports": {
+      "report": { "format": "json", "kind": "file", "description": "团队定稿的深度导演报告。" },
+      "references": { "format": "json", "kind": "file", "description": "与报告清单严格对应的参考文档变化。" }
+    }
+  },
+  "revision": "1",
+  "terminalFinalizer": { "target": "world-narrative-coordinator/finish-deep-operation", "statuses": ["failed", "cancelled", "skipped"], "forwardArguments": ["operationId"] },
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 2, "dedupeKey": "$.operationId" },
+  "nodes": [
+    {
+      "id": "prepare-private",
+      "type": "call",
+      "target": "world-narrative-coordinator/prepare-private-context",
+      "arguments": {},
+      "documents": {},
+      "outputPaths": { "context": "director-private" },
+      "outputs": { "context": { "path": "director-private", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "context" }] }
+    },
+    {
+      "id": "prepare-author-future",
+      "type": "call",
+      "target": "card-context-library/export-context",
+      "arguments": { "categories": ["director-future"] },
+      "documents": {},
+      "outputPaths": { "context": "author-future" },
+      "outputs": { "context": { "path": "author-future", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
+      "workspaceHandoff": { "include": [{ "output": "context" }] }
+    },
+    {
+      "id": "meeting",
+      "type": "team",
+      "dependsOn": ["prepare-private", "prepare-author-future"],
+      "prompt": "完整阅读冻结正文、导演私有目录、作者未来资料目录及会议过程中返回的检索报告。区分已发生事实、作者未来意图、导演规划、推断与备选；规划必须高度动态，尽量保留作者强调的核心结果和长期影响，过程可随实际情况合理变形。控制世界节奏与烈度，允许多数推演长期停留为氛围和谈资，大事件优先从多个已有因素交汇中生长。最终report只能包含basisTurn、basisWorldTime、coverage、assumptions、invalidatingSignals、summary、content、worldNarrativeTopics、nextReviewTriggers、referenceUpdates；不要写schemaVersion或previousRevision，previousRevision由提交阶段补入。basisTurn必须等于冻结回合；worldNarrativeTopics恰好一个active且至少一个backup。referenceUpdates只收录对日常导演有用的世界知识、桥段与视野扩展，不是世界事实；可省略referenceId，由运行时分配稳定ID。",
+      "team": {
+        "schemaVersion": 1,
+        "leader": { "id": "leader", "agentId": "world-narrative-team-leader" },
+        "secretary": { "id": "secretary", "agentId": "world-narrative-team-secretary" },
+        "experts": [
+          { "id": "world-logic", "agentId": "world-narrative-team-expert", "focus": "世界底层逻辑、势力与地区演化、信息传播、烈度边界" },
+          { "id": "story-structure", "agentId": "world-narrative-team-expert", "focus": "作者意图、长期分支、伏笔回收、戏剧张力与节奏" }
+        ],
+        "baseRetrieval": {
+          "id": "base-memory",
+          "kind": "workflow",
+          "target": "narrative-memory/narrative-memory-retrieve",
+          "budgetPool": "base-assistance",
+          "inputAdapter": "memory-request-v1",
+          "fixedArguments": { "budget": { "entityQueryLimit": 40, "initialInspectLimit": 60, "supplementalInspectLimit": 15, "informationLimit": 45, "elasticInformationLimit": 10, "possiblePerQueryLimit": 3 } },
+          "exports": ["memory-context"],
+          "publicDescription": { "title": "基础记忆检索", "purpose": "正式推演前广泛核实已有实体、事件、关系、认知与世界状态", "limitations": "只负责检索与证据提供，不代替导演推理", "requestExample": "梳理与当前主要势力变化、未决事件和活跃角色有关的既有记录。" }
+        },
+        "assistants": [
+          {
+            "id": "memory-followup",
+            "kind": "workflow",
+            "target": "narrative-memory/narrative-memory-retrieve",
+            "budgetPool": "supplemental-assistance",
+            "inputAdapter": "memory-request-v1",
+            "fixedArguments": { "budget": { "entityQueryLimit": 10, "initialInspectLimit": 15, "supplementalInspectLimit": 4, "informationLimit": 12, "elasticInformationLimit": 2, "possiblePerQueryLimit": 2 } },
+            "exports": ["memory-context"],
+            "publicDescription": { "title": "定向记忆检索", "purpose": "中途核实一个明确的实体、事件、关系或认知问题", "limitations": "预算较低，不适合重新做全局检索", "requestExample": "请核实A是否知道旧案真相，以及现有记录中的证据。" }
+          }
+        ],
+        "agenda": { "normalRounds": 2, "maxRounds": 4, "assistantConcurrency": 2, "speechCharacterTarget": 4000, "referenceDocumentCharacterTarget": 3000, "referenceTotalCharacterTarget": 16000 },
+        "budgets": { "preparation": 8, "base-assistance": 1, "discussion": 16, "supplemental-assistance": 4, "coordination": 6, "closing": 4, "draft": 1, "review": 4, "revision": 1, "references": 1, "retries": 3 },
+        "deliverables": { "report": "deliverables/report.json", "references": "deliverables/references.json" }
+      },
+      "workflowCalls": [{ "target": "narrative-memory/narrative-memory-retrieve", "maxCalls": 5 }],
+      "outputs": {
+        "report": { "path": "deliverables/report.json", "format": "json", "scope": "workflow", "retain": "run" },
+        "references": { "path": "deliverables/references.json", "format": "json", "scope": "workflow", "retain": "run" }
+      },
+      "workspaceHandoff": { "include": [{ "output": "report" }, { "output": "references" }] },
+      "metadata": {
+        "argumentInputs": ["operationId", "triggerReasons"],
+        "callInputs": ["story-context"],
+        "handoffInputs": [
+          { "nodeId": "prepare-private", "output": "context" },
+          { "nodeId": "prepare-author-future", "output": "context" }
+        ]
+      }
+    },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["meeting"], "exports": { "report": { "fromNode": "meeting", "output": "report" }, "references": { "fromNode": "meeting", "output": "references" } } }
+  ]
+}

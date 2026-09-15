@@ -1,0 +1,67 @@
+.profile-config {
+  --config-panel: #fffdf9;
+  --config-line: #dfd8cf;
+  --config-muted: #6f685f;
+  --config-text: #24211d;
+  --config-accent: #356e63;
+  --config-danger: #a23d42;
+  display: grid;
+  gap: 16px;
+}
+.profile-config[hidden], .config-category-panel[hidden] { display: none; }
+.profile-config-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.profile-config button, .profile-config input, .profile-config select, .profile-config textarea { font: inherit; }
+.profile-config button { border: 1px solid var(--config-line); background: #f3eee7; color: var(--config-text); border-radius: 10px; padding: .58rem .82rem; cursor: pointer; }
+.profile-config button:hover, .profile-config button:focus-visible { border-color: var(--config-accent); }
+.profile-config button:disabled { opacity: .45; cursor: not-allowed; }
+.profile-config button.danger { color: var(--config-danger); }
+.scope-badge { border: 1px solid var(--config-accent); color: var(--config-accent); border-radius: 999px; padding: .38rem .75rem; white-space: nowrap; }
+.profile-toolbar, .profile-config .config-card, .profile-config .save-bar { background: var(--config-panel); border: 1px solid var(--config-line); border-radius: 16px; }
+.profile-toolbar { display: grid; grid-template-columns: minmax(0, .8fr) minmax(220px, 1.2fr); gap: 14px 16px; align-items: start; padding: 16px; }
+.profile-toolbar .toolbar-actions { grid-column: 1 / -1; }
+.profile-toolbar h3, .profile-config .config-card h3 { margin: .1rem 0 .35rem; }
+.profile-config .toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-config .compact-field { display: grid; gap: 5px; color: var(--config-muted); }
+.profile-config .field-caption { position: relative; display: flex; align-items: center; gap: .35rem; min-width: 0; line-height: 1.25; }
+.config-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--config-line); }
+.config-tab { border-radius: 10px 10px 0 0 !important; border-bottom: 0 !important; }
+.config-tab.active { background: var(--config-accent); color: #fff; }
+.config-category-panel { display: grid; gap: 12px; }
+.profile-config .config-card { padding: 18px; }
+.profile-config .config-card header { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; }
+.profile-config .config-card p { color: var(--config-muted); margin: .2rem 0; }
+.profile-config .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.profile-config .field { display: grid; gap: 5px; color: var(--config-muted); min-width: 0; }
+.profile-config .field.wide { grid-column: 1 / -1; }
+.profile-config input, .profile-config select, .profile-config textarea { width: 100%; border: 1px solid var(--config-line); border-radius: 10px; background: #fff; color: var(--config-text); padding: .62rem .72rem; }
+.profile-config .field input[type="checkbox"] { width: 1.15rem; height: 1.15rem; margin: .45rem 0; accent-color: var(--config-accent); }
+.profile-config textarea { resize: vertical; min-height: 90px; }
+.profile-config .help { position: static; display: inline-grid; flex: 0 0 1.15rem; place-items: center; width: 1.15rem; height: 1.15rem; border: 1px solid var(--config-muted); border-radius: 50%; color: var(--config-muted); font-size: .75rem; cursor: help; }
+.profile-config .help::after { content: attr(data-tooltip); position: absolute; z-index: 100; left: 0; bottom: calc(100% + 8px); width: min(320px, 100%); transform: translateY(4px); background: #24211d; border: 1px solid #443f39; color: #fff; padding: 9px 11px; border-radius: 9px; box-shadow: 0 10px 30px #0004; opacity: 0; pointer-events: none; transition: .12s; }
+.profile-config .help:hover::after, .profile-config .help:focus::after { opacity: 1; transform: translateY(0); }
+.profile-config .list-toolbar { display: flex; gap: 10px; align-items: end; margin-bottom: 12px; }
+.profile-config .list-toolbar label { flex: 1; }
+.profile-config .workflow-pickers label:first-child, .profile-config .agent-pickers label:first-child { flex: 0 1 260px; }
+.profile-config .workflow-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0 14px; color: var(--config-muted); font-size: .88rem; }
+.profile-config .workflow-defaults, .profile-config .workflow-trigger-config { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--config-line); }
+.profile-config .workflow-defaults h4, .profile-config .workflow-trigger-config h4 { margin: 0 0 12px; }
+.profile-config .workflow-nodes-heading { margin: 10px 2px 0; }
+.profile-config .workflow-nodes-heading h3 { margin: 0 0 3px; }
+.profile-config .workflow-nodes-heading p { margin: 0; color: var(--config-muted); }
+.profile-config .workflow-node-config { border-left: 4px solid #8c857b; }
+.profile-config .workflow-node-config.node-type-agent { border-left-color: var(--config-accent); }
+.profile-config .workflow-node-config.node-type-call { border-left-color: #50759a; }
+.profile-config .workflow-node-config.node-type-code { border-left-color: #8a6944; }
+.profile-config .node-type-badge { flex: 0 0 auto; border: 1px solid currentColor; border-radius: 999px; padding: .22rem .58rem; color: var(--config-accent); font-size: .78rem; }
+.profile-config .non-agent-node-note { padding: 10px 12px; border-radius: 10px; background: #f6f2ec; }
+.profile-config .save-bar { position: sticky; bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; box-shadow: 0 8px 30px #453a291f; }
+.profile-config #status { margin: 0; color: var(--config-muted); }
+.profile-config .model-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.profile-config .empty { color: var(--config-muted); padding: 30px; text-align: center; border: 1px dashed var(--config-line); border-radius: 14px; }
+.development-preview .connection-status { color: #8a5b19; }
+.preview-empty { margin: auto; max-width: 36rem; padding: 24px; text-align: center; color: #756b60; border: 1px dashed #d8cec2; border-radius: 16px; background: #fffdf9; }
+@media (max-width: 850px) {
+  .profile-toolbar { grid-template-columns: 1fr; }
+  .profile-config .field-grid { grid-template-columns: 1fr; }
+  .profile-config-heading { align-items: flex-start; }
+}

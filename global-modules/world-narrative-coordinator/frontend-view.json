@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "regions": [
+    {
+      "id": "director-status", "type": "record-browser", "title": "导演运行状态",
+      "description": "查看当前深度导演状态和最近一次深度规划。", "spoiler": true,
+      "collectionId": "deep-workbench", "recordTypes": ["director.deep-state", "director.deep-report"], "view": "frontend", "readCapability": "director.frontend.read",
+      "pageSize": 5, "maxCharacters": 30000, "filters": [], "includeInactive": true, "empty": "尚无导演运行状态。"
+    },
+    {
+      "id": "director-references", "type": "record-browser", "title": "导演参考资料",
+      "description": "深度导演整理的世界知识、情节桥段和视野扩展；这些内容是参考，不是世界事实。这里直接读取正式记录，供高级用户检查或DIY。", "spoiler": true,
+      "collectionId": "reference-library", "recordTypes": ["director.reference-document"], "view": "frontend", "readCapability": "director.frontend.read",
+      "pageSize": 20, "maxCharacters": 120000, "filters": [], "includeInactive": true, "empty": "尚无导演参考资料。"
+    },
+    {
+      "id": "director-settings", "type": "settings-form", "title": "导演模块设置",
+      "description": "选择旧版单 Agent 或新版团队深度导演；健康参考线只用于提醒，不会自动维护。", "spoiler": true,
+      "collectionId": "settings", "recordType": "director.settings", "recordId": "director-settings-current", "view": "frontend",
+      "readCapability": "director.frontend.read", "updateCapability": "director.settings.update", "submitLabel": "保存导演设置",
+      "fields": [
+        { "path": "/enabled", "label": "启用导演模块", "type": "boolean" },
+        { "path": "/deep/workflowMode", "label": "深度推演形式", "type": "select", "required": true, "options": ["single", "team"], "help": "single 使用原单 Agent 工作流；team 使用可配置的Leader、秘书、专家和助理会议。" },
+        { "path": "/deep/turnCooldown", "label": "回合参考CD", "type": "integer", "required": true, "minimum": 1 },
+        { "path": "/deep/worldTimeCooldown", "label": "世界时间参考CD", "type": "text", "required": true },
+        { "path": "/healthReference/recordCount", "label": "记录数提醒参考线", "type": "integer", "required": true, "minimum": 1 },
+        { "path": "/healthReference/characters", "label": "字符量提醒参考线", "type": "integer", "required": true, "minimum": 1000 }
+      ]
+    },
+    {
+      "id": "director-health", "type": "record-browser", "title": "导演数据统计",
+      "description": "显示最近一次手动统计结果及参考线是否超出；统计本身不会修改或压缩导演资料。", "spoiler": true,
+      "collectionId": "health-dashboard", "recordTypes": ["director.health-report"], "view": "frontend", "readCapability": "director.frontend.read",
+      "pageSize": 1, "maxCharacters": 50000, "filters": [], "includeInactive": true, "empty": "尚未生成导演数据统计。"
+    },
+    {
+      "id": "director-workflows", "type": "workflow-controls", "title": "统计与手动维护",
+      "description": "统计只提示、不操作；维护只按用户明确填写的范围执行。", "spoiler": true,
+      "workflows": [
+        { "id": "director-health-check", "title": "生成导演数据统计", "description": "统计私有、深度、参考资料和归档交接域的记录数与字符量。", "confirm": "生成当前导演数据统计？", "parameters": [] },
+        { "id": "director-manual-maintenance", "title": "手动维护导演数据", "description": "按明确要求整理导演数据；不会为了追逐统一上限自动合并。", "confirm": "按填写的范围启动导演数据维护？", "parameters": [{ "name": "request", "label": "维护任务与范围", "type": "textarea", "required": true, "help": "请明确说明要处理的记录、主题或范围。" }] }
+      ]
+    }
+  ]
+}

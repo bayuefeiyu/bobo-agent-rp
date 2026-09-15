@@ -40,6 +40,360 @@ test("runs parallel roots before narrative and finalization", async () => {
   assert.doesNotMatch(JSON.stringify(completed), /private-(?:input|output)/);
 });
 
+test("a team node schedules independently configured member Agents without holding an outer model slot", async () => {
+  const seen = [];
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-runtime",
+    kind: "global-background",
+    nodes: [{
+      id: "meeting",
+      type: "team",
+      team: {
+        schemaVersion: 1,
+        leader: { id: "leader", agentId: "leader-agent", modelId: "strong" },
+        secretary: { id: "secretary", agentId: "secretary-agent", modelId: "fast" },
+        experts: [], assistants: [],
+      },
+    }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, modelId: id === "leader-agent" ? "strong" : "fast", tools: [] }),
+    resolveModel: async id => ({ id, maxConcurrency: 2 }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        const leader = await task.invokeAgent({ executionId: "leader-step", agentId: "leader-agent", modelId: "strong", role: "leader", prompt: "analyze" });
+        const secretary = await task.invokeAgent({ executionId: "secretary-step", agentId: "secretary-agent", modelId: "fast", role: "secretary", prompt: "record" });
+        return { output: [leader.output, secretary.output] };
+      }
+      seen.push([task.node.metadata.teamRole, task.agent.id, task.binding.modelId]);
+      return { output: task.agent.id };
+    },
+  });
+  const started = await engine.start(workflow, { id: "team-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(seen, [["leader", "leader-agent", "strong"], ["secretary", "secretary-agent", "fast"]]);
+});
+
+test("team preflight freezes member prompts before the first member call", async () => {
+  let promptVersion = "original member prompt";
+  let executedPrompt = null;
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-frozen-agent",
+    kind: "global-background",
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent" }, secretary: { id: "secretary", agentId: "secretary-agent" }, experts: [], assistants: [] } }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, prompt: promptVersion, modelId: "pi:current", tools: [] }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        promptVersion = "changed after meeting preflight";
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", role: "leader", prompt: "phase prompt" });
+      } else executedPrompt = task.agent.prompt;
+      return { output: {} };
+    },
+  });
+  const started = await engine.start(workflow, { id: "team-frozen-agent-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.equal(executedPrompt, "original member prompt");
+  assert.equal(completed.teamPreflights.meeting.bindings["member:leader"].agentSnapshot.prompt, "original member prompt");
+  assert.equal(completed.nodes.meeting.status, "completed");
+});
+
+test("team retry model override applies only to the selected failed member", async () => {
+  const seenModels = [];
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-member-retry-model",
+    kind: "global-background",
+    nodes: [{ id: "meeting", type: "team", retry: { maxAttempts: 1 }, team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent", modelId: "old-model" }, secretary: { id: "secretary", agentId: "secretary-agent", modelId: "old-model" }, experts: [], assistants: [] } }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, tools: [] }),
+    resolveModel: async id => ({ id, maxConcurrency: 2 }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", modelId: "old-model", role: "leader", prompt: "phase" });
+        return { output: {} };
+      }
+      seenModels.push(task.binding.modelId);
+      if (task.binding.modelId === "old-model") throw new Error("model failed");
+      return { output: "recovered" };
+    },
+  });
+  const started = await engine.start(workflow, { id: "team-member-retry-model-run" });
+  const failed = await engine.wait(started.id);
+  assert.equal(failed.status, "awaiting-model-choice");
+  await engine.retry(started.id, "meeting", "replacement-model", { memberId: "member:leader" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(seenModels, ["old-model", "replacement-model"]);
+  assert.equal(completed.teamPreflights.meeting.bindings["member:secretary"].resolvedModelId, "old-model");
+});
+
+test("a cancelled team rejects a late member result before publication", async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let cancellationCode = null;
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-cancel",
+    kind: "global-background",
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent" }, secretary: { id: "secretary", agentId: "secretary-agent" }, experts: [], assistants: [] } }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        try { await task.invokeAgent({ executionId: "late", agentId: "leader-agent", role: "leader", prompt: "wait" }); }
+        catch (error) { cancellationCode = error.code; }
+        return { output: "ignored" };
+      }
+      await gate;
+      return { output: "late result" };
+    },
+  });
+  const started = await engine.start(workflow, { id: "team-cancel-run" });
+  await new Promise(resolve => setImmediate(resolve));
+  const cancelled = await engine.cancel(started.id, "stop");
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancellationCode, "workflow_cancelled");
+});
+
+test("a team does not reacquire an outer scheduler slot after a workflow assistant returns", async () => {
+  let slotsAfterChild = null;
+  const child = { schemaVersion: 3, id: "lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        await task.invokeWorkflow({ workflow: "demo/lookup", outputPaths: {} }, { parallel: true });
+        slotsAfterChild = engine.running;
+      }
+      return { output: {} };
+    },
+  });
+  const workflow = { schemaVersion: 3, id: "team-slot", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader" }, secretary: { id: "secretary", agentId: "secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
+  const run = await engine.start(workflow, { id: "team-slot-run" });
+  await engine.wait(run.id);
+  assert.equal(slotsAfterChild, 0);
+});
+
+test("a cancelled team cannot dispatch a workflow assistant after its gate reopens", async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  let finished;
+  const done = new Promise(resolve => { finished = resolve; });
+  let childStarted = false;
+  let cancellationCode = null;
+  const child = { schemaVersion: 3, id: "lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        entered();
+        await gate;
+        try { await task.invokeWorkflow({ workflow: "demo/lookup", outputPaths: {} }, { parallel: true }); }
+        catch (error) { cancellationCode = error.code; }
+        finished();
+      } else childStarted = true;
+      return { output: {} };
+    },
+  });
+  const workflow = { schemaVersion: 3, id: "team-cancel-child", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader" }, secretary: { id: "secretary", agentId: "secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
+  const run = await engine.start(workflow, { id: "team-cancel-child-run" });
+  await ready;
+  await engine.cancel(run.id, "user-stop");
+  release();
+  await done;
+  assert.equal(cancellationCode, "workflow_cancelled");
+  assert.equal(childStarted, false);
+});
+
+test("global-background work can make progress when maxConcurrency is one", async () => {
+  const engine = new RpWorkflowEngine({
+    policy: { maxConcurrency: 1 },
+    executor: async () => ({ output: "done" }),
+  });
+  const workflow = { schemaVersion: 3, id: "single-slot-background", kind: "global-background", nodes: [{ id: "work", type: "agent" }] };
+  const started = await engine.start(workflow, { id: "single-slot-background-run" });
+  const completed = await Promise.race([
+    engine.wait(started.id),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("background scheduler deadlocked")), 250)),
+  ]);
+  assert.equal(completed.status, "completed");
+});
+
+test("child workflows inherit the root scheduling class", async () => {
+  const child = {
+    schemaVersion: 3,
+    id: "scheduled-child",
+    ownerModuleId: "demo",
+    kind: "module-external",
+    interface: { inputs: {}, exports: {} },
+    nodes: [{ id: "work", type: "agent" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    executor: async task => task.node.type === "call"
+      ? task.invokeWorkflow({ workflow: task.node.target, outputPaths: {} })
+      : ({ output: {} }),
+  });
+  const parent = { schemaVersion: 3, id: "scheduled-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/scheduled-child" }] };
+  const run = await engine.start(parent, { id: "scheduled-parent-run" });
+  const completed = await engine.wait(run.id);
+  assert.equal(completed.status, "completed");
+  const childRun = [...engine.runs.values()].find(entry => entry.workflow.id === "scheduled-child")?.run;
+  assert.equal(childRun?.effectiveSchedulingKind, "global-background");
+});
+
+test("a scheduler waiter observes cancellation before dispatch", async () => {
+  let releaseFirst;
+  const gate = new Promise(resolve => { releaseFirst = resolve; });
+  const dispatched = [];
+  const engine = new RpWorkflowEngine({
+    policy: { maxConcurrency: 1 },
+    executor: async ({ run }) => {
+      dispatched.push(run.id);
+      if (run.id === "scheduler-holder") await gate;
+      return { output: "done" };
+    },
+  });
+  const workflow = { schemaVersion: 3, id: "scheduler-cancel", kind: "global-background", instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.request" }, nodes: [{ id: "work", type: "agent" }] };
+  const first = await engine.start(workflow, { id: "scheduler-holder", payload: { request: "first" } });
+  await new Promise(resolve => setImmediate(resolve));
+  const second = await engine.start(workflow, { id: "scheduler-waiter", payload: { request: "second" } });
+  await new Promise(resolve => setImmediate(resolve));
+  await engine.cancel(second.id, "cancel queued work");
+  releaseFirst();
+  await engine.wait(first.id);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(dispatched, ["scheduler-holder"]);
+});
+
+test("foreground-class work takes the next slot ahead of queued background work at concurrency one", async () => {
+  let releaseHolder;
+  const gate = new Promise(resolve => { releaseHolder = resolve; });
+  const order = [];
+  const engine = new RpWorkflowEngine({
+    policy: { maxConcurrency: 1 },
+    executor: async ({ run }) => {
+      order.push(run.id);
+      if (run.id === "priority-holder") await gate;
+      return { output: "done" };
+    },
+  });
+  const background = id => ({ schemaVersion: 3, id, kind: "global-background", nodes: [{ id: "work", type: "agent" }] });
+  const foregroundClass = { schemaVersion: 3, id: "priority-turn", kind: "turn-background", nodes: [{ id: "work", type: "agent" }] };
+  const holder = await engine.start(background("priority-holder-flow"), { id: "priority-holder" });
+  await new Promise(resolve => setImmediate(resolve));
+  const queuedBackground = await engine.start(background("priority-background-flow"), { id: "priority-background" });
+  const queuedForeground = await engine.start(foregroundClass, { id: "priority-foreground" });
+  await new Promise(resolve => setImmediate(resolve));
+  releaseHolder();
+  await Promise.all([engine.wait(holder.id), engine.wait(queuedBackground.id), engine.wait(queuedForeground.id)]);
+  assert.deepEqual(order, ["priority-holder", "priority-foreground", "priority-background"]);
+});
+
+test("terminal lifecycle finalization runs once for completion and cancellation", async () => {
+  const finalized = [];
+  const completedEngine = new RpWorkflowEngine({ executor: async () => ({ output: "ok" }), onRunTerminal: async ({ run }) => { finalized.push([run.id, run.status]); } });
+  const completeFlow = { schemaVersion: 3, id: "finalize-complete", kind: "turn-background", nodes: [{ id: "task", type: "code" }] };
+  const completeRun = await completedEngine.start(completeFlow, { id: "complete" });
+  const complete = await completedEngine.wait(completeRun.id);
+  assert.equal(complete.terminalFinalization.status, "completed");
+
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const cancelEngine = new RpWorkflowEngine({ executor: async () => { await gate; return { output: "late" }; }, onRunTerminal: async ({ run }) => { finalized.push([run.id, run.status]); } });
+  const cancelRun = await cancelEngine.start({ schemaVersion: 3, id: "finalize-cancel", kind: "global-background", nodes: [{ id: "task", type: "code" }] }, { id: "cancel" });
+  await new Promise(resolve => setImmediate(resolve));
+  const cancelled = await cancelEngine.cancel(cancelRun.id, "stop");
+  release();
+  assert.equal(cancelled.terminalFinalization.status, "completed");
+  assert.deepEqual(finalized, [["complete", "completed"], ["cancel", "cancelled"]]);
+});
+
+test("a failed terminal finalization is retried after restoring the terminal run", async () => {
+  const workflow = { schemaVersion: 3, id: "restore-finalization", kind: "global-background", nodes: [{ id: "task", type: "code" }] };
+  const firstEngine = new RpWorkflowEngine({ executor: async () => ({ output: "ok" }), onRunTerminal: async () => { throw new Error("temporary finalizer failure"); } });
+  const started = await firstEngine.start(workflow, { id: "restore-finalization-run" });
+  const failedFinalization = await firstEngine.wait(started.id);
+  assert.equal(failedFinalization.status, "completed");
+  assert.equal(failedFinalization.terminalFinalization.status, "failed");
+
+  let retries = 0;
+  const restoredEngine = new RpWorkflowEngine({ executor: async () => { throw new Error("completed node must not rerun"); }, onRunTerminal: async () => { retries += 1; } });
+  await restoredEngine.restore(workflow, failedFinalization);
+  const restored = await restoredEngine.wait(started.id);
+  assert.equal(restored.terminalFinalization.status, "completed");
+  assert.equal(retries, 1);
+});
+
+test("a module terminal finalizer invokes one same-module internal workflow", async () => {
+  const calls = [];
+  const finalizer = {
+    schemaVersion: 3,
+    id: "release-operation",
+    ownerModuleId: "demo",
+    kind: "module-internal",
+    interface: {
+      inputs: {
+        operationId: { type: "parameter", required: true, valueType: "string" },
+        terminalStatus: { type: "parameter", required: true, valueType: "string" },
+        terminalError: { type: "parameter", required: false, valueType: "string" },
+      },
+      exports: {},
+    },
+    writeLocks: [{ moduleId: "demo", collectionId: "state" }],
+    nodes: [
+      { id: "release", type: "code", metadata: { argumentInputs: ["operationId", "terminalStatus", "terminalError"] } },
+      { id: "return", type: "workflow-return", dependsOn: ["release"], exports: {} },
+    ],
+  };
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-operation",
+    ownerModuleId: "demo",
+    kind: "module-external",
+    interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
+    terminalFinalizer: { target: "demo/release-operation", statuses: ["failed"], forwardArguments: ["operationId"] },
+    nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
+  };
+  const wrapper = {
+    schemaVersion: 3,
+    id: "team-operation-wrapper",
+    kind: "global-background",
+    nodes: [{ id: "call", type: "call", target: "demo/team-operation", arguments: { operationId: "operation-7" }, documents: {}, outputPaths: {} }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async reference => reference === "demo/release-operation" ? finalizer : reference === "demo/team-operation" ? workflow : null,
+    executor: async ({ workflow: active, node, run, invokeWorkflow }) => {
+      if (active.id === "team-operation-wrapper") return invokeWorkflow({ workflow: node.target, arguments: node.arguments, outputPaths: {} });
+      if (active.id === "team-operation") return { output: { executionStatus: "failed", error: "meeting failed" } };
+      if (node.id === "release") calls.push(structuredClone(run.arguments));
+      return { output: {} };
+    },
+  });
+  const started = await engine.start(wrapper, { id: "team-operation-wrapper-run" });
+  const failedWrapper = await engine.wait(started.id);
+  assert.equal(failedWrapper.status, "failed");
+  const failed = engine.snapshot().find(run => run.workflowId === "team-operation");
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.terminalFinalization.status, "completed", failed?.terminalFinalization.error);
+  assert.equal(failed?.terminalFinalization.workflow, "demo/release-operation");
+  assert.deepEqual(calls, [{ operationId: "operation-7", terminalStatus: "failed", terminalError: "meeting failed" }]);
+});
+
 test("an explicitly idempotent start returns the active run for the same instance key", async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });

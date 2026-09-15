@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 3,
+  "id": "commit-deep-operation",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "提交团队深度导演成果",
+  "description": "用短锁原子提交报告、参考资料变化和深度运行状态。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
+      "report": { "type": "document", "required": true, "kind": "file", "formats": ["json"] },
+      "references": { "type": "document", "required": true, "kind": "file", "formats": ["json"] },
+      "basis": { "type": "document", "required": true, "kind": "file", "formats": ["json"] }
+    },
+    "exports": {}
+  },
+  "revision": "1",
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId" },
+  "writeLocks": [
+    { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" },
+    { "moduleId": "world-narrative-coordinator", "collectionId": "reference-library" }
+  ],
+  "nodes": [
+    {
+      "id": "commit",
+      "type": "code",
+      "moduleAccess": [
+        { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } },
+        { "moduleId": "world-narrative-coordinator", "collectionId": "reference-library", "capabilities": ["director.reference.write"], "views": ["maintenance"], "queryBudget": { "maxRecords": 1000, "maxCharacters": 2000000 } }
+      ],
+      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/commit-deep-operation.mjs", "argumentInputs": ["operationId"], "callInputs": ["report", "references", "basis"] }
+    },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["commit"], "exports": {} }
+  ]
+}

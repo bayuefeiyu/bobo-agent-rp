@@ -72,7 +72,7 @@ function cleanSecretDocument(value) {
   return { schemaVersion: 1, models };
 }
 
-export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null } = {}) {
+export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null } = {}) {
   const root = resolve(rootDirectory);
   const card = resolve(cardDirectory);
   const secretDirectory = resolve(secretCacheDirectory || systemCacheRoot(), "projects", projectCacheId(root));
@@ -109,6 +109,35 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     return { models, secrets };
   }
 
+  async function activeProfile() {
+    return profileStore ? profileStore.getActive() : null;
+  }
+
+  async function profileModel(profile, value, includeSecrets) {
+    const normalized = normalizeModelProfile(value);
+    const apiKey = await profileStore.getModelSecret(profile.id, normalized.id);
+    const combined = {
+      ...normalized,
+      baseUrl: typeof value.baseUrl === "string" ? value.baseUrl.trim().replace(/\/$/, "") : "",
+      apiKey,
+    };
+    return includeSecrets ? combined : publicModel(combined);
+  }
+
+  function profileAgentOverride(profile, agentId) {
+    if (!profile) return null;
+    if (profile.agentOverrides?.[agentId]) return profile.agentOverrides[agentId];
+    const key = Object.keys(profile.agentOverrides || {}).find(item => item.endsWith(`/agent/${agentId}`));
+    return key ? profile.agentOverrides[key] : null;
+  }
+
+  function profileWorkflowOverride(profile, workflowId) {
+    if (!profile) return null;
+    if (profile.workflowOverrides?.[workflowId]) return profile.workflowOverrides[workflowId];
+    const key = Object.keys(profile.workflowOverrides || {}).find(item => item.endsWith(`/workflow/${workflowId}`));
+    return key ? profile.workflowOverrides[key] : null;
+  }
+
   return {
     paths,
     async ensure() {
@@ -125,14 +154,31 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       await atomicJson(paths.runtime, normalizeRuntimePolicy(runtime));
     },
     async getRuntimePolicy() {
-      return normalizeRuntimePolicy(await readJson(paths.runtime, {}));
+      const base = normalizeRuntimePolicy(await readJson(paths.runtime, {}));
+      const profile = await activeProfile();
+      return normalizeRuntimePolicy(mergeDefined(base, profile?.workflowOverrides?.runtimePolicy));
     },
     async saveRuntimePolicy(value) {
       const policy = normalizeRuntimePolicy(value);
+      const profile = await activeProfile();
+      if (profile) {
+        profile.workflowOverrides.runtimePolicy = policy;
+        await profileStore.save(profile);
+        return policy;
+      }
       await atomicJson(paths.runtime, policy);
       return policy;
     },
     async listModels({ includeSecrets = false } = {}) {
+      const profile = await activeProfile();
+      if (profile) {
+        const models = [];
+        for (const value of profile.models) {
+          try { models.push(await profileModel(profile, value, includeSecrets)); }
+          catch { /* Incomplete models remain editable drafts in the profile UI. */ }
+        }
+        return models;
+      }
       const { models: value, secrets } = await modelDocuments({ migrate: true });
       const profiles = value.profiles.map(normalizeModelProfile);
       return profiles.map(profile => {
@@ -144,6 +190,19 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async saveModel(value) {
       const profile = normalizeModelProfile(value);
+      const active = await activeProfile();
+      if (active) {
+        const saved = {
+          ...profile,
+          baseUrl: typeof value.baseUrl === "string" ? value.baseUrl.trim().replace(/\/$/, "") : "",
+        };
+        const index = active.models.findIndex(item => item.id === profile.id);
+        if (index === -1) active.models.push(saved);
+        else active.models[index] = saved;
+        await profileStore.save(active);
+        if (typeof value.apiKey === "string" && value.apiKey.trim()) await profileStore.saveModelSecret(active.id, profile.id, value.apiKey);
+        return profileModel(active, saved, false);
+      }
       const { models: document, secrets } = await modelDocuments({ migrate: true });
       const saved = {
         ...profile,
@@ -161,6 +220,15 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async removeModel(modelId) {
       assertId(modelId, "modelId");
+      const profile = await activeProfile();
+      if (profile) {
+        const before = profile.models.length;
+        profile.models = profile.models.filter(item => item.id !== modelId);
+        if (before === profile.models.length) throw new Error(`Unknown model profile: ${modelId}`);
+        await profileStore.save(profile);
+        await profileStore.saveModelSecret(profile.id, modelId, "");
+        return;
+      }
       const { models: document, secrets } = await modelDocuments({ migrate: true });
       const before = document.profiles.length;
       document.profiles = document.profiles.filter(item => item.id !== modelId);
@@ -184,10 +252,25 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       const overridePath = resolve(paths.cardAgents, agentId, "override.json");
       const base = await readJson(basePath);
       const override = await readJson(overridePath, null);
-      return { effective: normalizeAgentProfile(mergeDefined(base, override)), base: normalizeAgentProfile(base), override, overridden: Boolean(override), source: cardBase ? "card" : "global" };
+      const profile = await activeProfile();
+      const profileOverride = profileAgentOverride(profile, agentId);
+      return { effective: normalizeAgentProfile(mergeDefined(mergeDefined(base, override), profileOverride)), base: normalizeAgentProfile(base), override: profileOverride || override, overridden: Boolean(profileOverride || override), source: cardBase ? "card" : "global", profileOverride: Boolean(profileOverride) };
     },
     async saveAgent(value, { scope = "card" } = {}) {
       const profile = normalizeAgentProfile(value);
+      const active = await activeProfile();
+      if (active && scope !== "global") {
+        const current = await this.getAgent(profile.id);
+        const override = {};
+        for (const key of Object.keys(profile)) {
+          if (JSON.stringify(profile[key]) !== JSON.stringify(current.base[key])) override[key] = profile[key];
+        }
+        delete override.schemaVersion;
+        delete override.id;
+        active.agentOverrides[profile.id] = override;
+        await profileStore.save(active);
+        return this.getAgent(profile.id);
+      }
       if (scope === "global") {
         await atomicJson(resolve(paths.agents, profile.id, "agent.json"), profile);
         await rm(resolve(paths.cardAgents, profile.id, "override.json"), { force: true });
@@ -205,6 +288,13 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async restoreAgent(agentId) {
       assertId(agentId, "agentId");
+      const profile = await activeProfile();
+      if (profile) {
+        delete profile.agentOverrides[agentId];
+        for (const key of Object.keys(profile.agentOverrides)) if (key.endsWith(`/agent/${agentId}`)) delete profile.agentOverrides[key];
+        await profileStore.save(profile);
+        return this.getAgent(agentId);
+      }
       await rm(resolve(paths.cardAgents, agentId, "override.json"), { force: true });
       return this.getAgent(agentId);
     },
@@ -229,18 +319,27 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
       const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
       const raw = await readJson(cardPath, null) || await readJson(globalPath);
-      const workflow = normalizeWorkflowDefinition(raw);
+      const profile = await activeProfile();
+      const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
       if (workflow.kind.startsWith("module-")) throw new Error("Module workflows must be registered through module.json.workflowFiles, not the top-level workflow store.");
       return workflow;
     },
     async copyWorkflowToCard(workflowId) {
       const workflow = await this.getWorkflow(workflowId);
+      const profile = await activeProfile();
+      if (profile) return workflow;
       await atomicJson(resolve(paths.cardWorkflows, workflowId, "workflow.json"), workflow);
       return workflow;
     },
     async saveCardWorkflow(value) {
       const workflow = normalizeWorkflowDefinition(value);
       if (workflow.kind.startsWith("module-")) throw new Error("Module workflows cannot be saved as top-level card workflows.");
+      const profile = await activeProfile();
+      if (profile) {
+        profile.workflowOverrides[workflow.id] = workflow;
+        await profileStore.save(profile);
+        return workflow;
+      }
       await atomicJson(resolve(paths.cardWorkflows, workflow.id, "workflow.json"), workflow);
       return workflow;
     },

@@ -1,12 +1,15 @@
 {
-  "schemaVersion": 3, "id": "director-health-report", "ownerModuleId": "world-narrative-coordinator", "title": "统计导演数据健康", "description": "只读统计记录数与字符量，并与卡片可配置参考线比较；不自动维护。", "kind": "module-external", "agentCallable": false,
-  "interface": { "inputs": {}, "exports": { "report": { "format": "json", "kind": "file", "description": "健康统计报告。" } } }, "revision": "1", "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4 },
+  "schemaVersion": 3, "id": "director-health-report", "ownerModuleId": "world-narrative-coordinator", "title": "统计导演数据健康", "description": "统计记录数与字符量、更新前端统计快照，并与卡片可配置参考线比较；不自动维护。", "kind": "module-internal", "agentCallable": false,
+  "interface": { "inputs": {}, "exports": { "report": { "format": "json", "kind": "file", "description": "健康统计报告。" } } }, "revision": "1", "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "health-dashboard" }],
   "nodes": [
     { "id": "report", "type": "code", "outputs": { "report": { "path": "health-report.json", "format": "json", "scope": "workflow", "retain": "run" } }, "moduleAccess": [
       { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.read"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.read"], "views": ["deep-status"], "queryBudget": { "maxRecords": 100, "maxCharacters": 1000000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "reference-library", "capabilities": ["director.reference.read"], "views": ["director-reference"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox", "capabilities": ["director.archive.write"], "views": ["director-status"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["health"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } }
+      { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["health"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "health-dashboard", "capabilities": ["director.health.write"], "views": ["health"], "queryBudget": { "maxRecords": 1, "maxCharacters": 100000 } }
     ], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/director-health-report.mjs" } },
     { "id": "return", "type": "workflow-return", "dependsOn": ["report"], "exports": { "report": { "fromNode": "report", "output": "report" } }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
   ]

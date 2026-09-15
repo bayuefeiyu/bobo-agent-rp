@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 3,
+  "id": "director-health-check",
+  "title": "生成导演数据统计",
+  "description": "手动生成导演各数据域的规模统计与参考线提示，不自动维护。",
+  "kind": "global-background",
+  "revision": "1",
+  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "trigger": { "type": "manual" },
+  "nodes": [{
+    "id": "report",
+    "type": "call",
+    "target": "world-narrative-coordinator/director-health-report",
+    "arguments": {},
+    "documents": {},
+    "outputPaths": { "report": "director-health-report.json" },
+    "outputs": { "report": { "path": "director-health-report.json", "format": "json", "scope": "session", "retain": "session" } }
+  }]
+}

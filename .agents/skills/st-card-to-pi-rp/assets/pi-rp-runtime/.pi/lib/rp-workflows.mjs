@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { addTokenUsage, emptyTokenUsage, normalizeTokenUsage } from "./rp-token-usage.mjs";
 import { mergeSourceReferences, normalizeNarrativeSourceDeclaration, workflowNodeNarrativeSource } from "./rp-narrative-source.mjs";
+import { normalizeTeamDefinition } from "./rp-team-config.mjs";
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const TERMINAL = new Set(["completed", "skipped", "failed", "cancelled"]);
 const TOP_LEVEL_WORKFLOW_KINDS = new Set(["foreground", "turn-background", "global-background"]);
 const MODULE_WORKFLOW_KINDS = new Set(["module-external", "module-internal"]);
 const WORKFLOW_KINDS = new Set([...TOP_LEVEL_WORKFLOW_KINDS, ...MODULE_WORKFLOW_KINDS]);
-const NODE_TYPES = new Set(["agent", "code", "call", "gate", "join", "workflow-return", "turn-finalize"]);
+const NODE_TYPES = new Set(["agent", "team", "code", "call", "gate", "join", "workflow-return", "turn-finalize"]);
 const CONTEXT_MODES = new Set(["fixed", "previous-output", "inherit", "custom"]);
 const OUTPUT_SCOPES = new Set(["node", "workflow", "turn", "session", "public"]);
 const RETAIN_POLICIES = new Set(["node", "run", "turn", "session", "permanent"]);
@@ -404,7 +405,7 @@ export function normalizeWorkflowDefinition(value) {
     if (routeFromOutput && type !== "code") throw new Error(`node ${rawNode.id}.routeFromOutput is supported only for code nodes.`);
     if (rawNode.blockNextTurn !== undefined) throw new Error(`node ${rawNode.id}.blockNextTurn was replaced by trigger.blockNextTurnUntilReady.`);
     const workflowCalls = normalizeWorkflowCallBindings(rawNode.workflowCalls, `node ${rawNode.id}.workflowCalls`);
-    if (workflowCalls.length && !["agent", "code"].includes(type)) throw new Error(`node ${rawNode.id}.workflowCalls is supported only for agent and code nodes.`);
+    if (workflowCalls.length && !["agent", "team", "code"].includes(type)) throw new Error(`node ${rawNode.id}.workflowCalls is supported only for agent, team, and code nodes.`);
     const runtimeServices = uniqueIds(rawNode.runtimeServices, `node ${rawNode.id}.runtimeServices`);
     if (runtimeServices.length && type !== "code") throw new Error(`node ${rawNode.id}.runtimeServices is supported only for code nodes.`);
     const unsupportedServices = runtimeServices.filter(service => !RUNTIME_SERVICES.has(service));
@@ -432,6 +433,8 @@ export function normalizeWorkflowDefinition(value) {
     })();
     if ((type === "turn-finalize") !== Boolean(narrative)) throw new Error(`node ${rawNode.id} must declare narrative exactly when type is turn-finalize.`);
     const narrativeSource = normalizeNarrativeSourceDeclaration(rawNode.narrativeSource, { defaultLayer: "unspecified" });
+    const team = rawNode.team === undefined || rawNode.team === null ? null : normalizeTeamDefinition(rawNode.team);
+    if ((type === "team") !== Boolean(team)) throw new Error(`node ${rawNode.id} must declare team exactly when type is team.`);
     return {
       id: rawNode.id,
       title: typeof rawNode.title === "string" && rawNode.title.trim() ? rawNode.title.trim() : rawNode.id,
@@ -462,11 +465,19 @@ export function normalizeWorkflowDefinition(value) {
       outputPaths: callOutputPaths,
       exports: returnExports,
       narrative,
+      team,
       dataCommit: normalizeDataCommit(rawNode.dataCommit, outputs, rawNode.id),
       metadata: rawNode.metadata && typeof rawNode.metadata === "object" && !Array.isArray(rawNode.metadata) ? rawNode.metadata : {},
     };
   });
   for (const node of nodes) {
+    if (node.type === "team") {
+      const declaredCalls = new Set(node.workflowCalls.map(binding => binding.target));
+      const missingCalls = [...node.team.assistants, ...(node.team.baseRetrieval ? [node.team.baseRetrieval] : [])]
+        .filter(ability => ability.enabled && ability.kind === "workflow" && !declaredCalls.has(ability.target))
+        .map(ability => ability.target);
+      if (missingCalls.length) throw new Error(`node ${node.id} team workflow abilities require matching workflowCalls: ${[...new Set(missingCalls)].join(", ")}.`);
+    }
     const callInputs = uniqueIds(node.metadata?.callInputs, `node ${node.id}.metadata.callInputs`);
     for (const inputId of callInputs) {
       if (workflowInterface?.inputs?.[inputId]?.type !== "document") throw new Error(`node ${node.id}.metadata.callInputs references undeclared document input ${inputId}.`);
@@ -585,6 +596,19 @@ export function normalizeWorkflowDefinition(value) {
     : 5;
   if (kind === "foreground" && (recentCompleteTurns < 1 || recentCompleteTurns > 50)) throw new Error("workflow.turnContext.recentCompleteTurns must be an integer from 1 to 50.");
   if (kind !== "foreground" && input.turnContext !== undefined && input.turnContext !== null) throw new Error("Only foreground workflows may declare turnContext.");
+  const terminalFinalizer = input.terminalFinalizer === undefined || input.terminalFinalizer === null ? null : (() => {
+    const value = assertObject(input.terminalFinalizer, "workflow.terminalFinalizer");
+    if (!MODULE_WORKFLOW_KINDS.has(kind)) throw new Error("Only module workflows may declare terminalFinalizer.");
+    const statuses = value.statuses === undefined ? ["failed", "cancelled", "skipped"] : value.statuses;
+    if (!Array.isArray(statuses) || !statuses.length || statuses.some(status => !["completed", "failed", "cancelled", "skipped"].includes(status))) throw new Error("workflow.terminalFinalizer.statuses is invalid.");
+    const target = assertWorkflowRef(value.target, "workflow.terminalFinalizer.target");
+    if (!ownerModuleId || !target.startsWith(`${ownerModuleId}/`)) throw new Error("workflow.terminalFinalizer.target must belong to the same module.");
+    return {
+      target,
+      statuses: [...new Set(statuses)],
+      forwardArguments: uniqueIds(value.forwardArguments, "workflow.terminalFinalizer.forwardArguments"),
+    };
+  })();
   return {
     schemaVersion: 3,
     id,
@@ -608,6 +632,7 @@ export function normalizeWorkflowDefinition(value) {
     trigger: normalizeTrigger(input.trigger, kind),
     turnContext: kind === "foreground" ? { recentCompleteTurns } : null,
     writeLocks,
+    terminalFinalizer,
     nodes,
   };
 }
@@ -629,15 +654,22 @@ export function createWorkflowRun(definition, options = {}) {
     workflowId: workflow.id,
     workflowRevision: workflow.revision,
     kind: workflow.kind,
+    effectiveSchedulingKind: typeof options.effectiveSchedulingKind === "string" && options.effectiveSchedulingKind
+      ? options.effectiveSchedulingKind
+      : workflow.kind,
     ownerModuleId: workflow.ownerModuleId,
     callContext: options.callContext ? structuredClone(options.callContext) : null,
     instanceKey: typeof options.instanceKey === "string" && options.instanceKey ? options.instanceKey : null,
     invocationFingerprint: typeof options.invocationFingerprint === "string" && options.invocationFingerprint ? options.invocationFingerprint : null,
+    invocationIdentity: options.invocationIdentity && typeof options.invocationIdentity === "object"
+      ? structuredClone(options.invocationIdentity)
+      : null,
     status: "running",
     cardId: options.cardId || null,
     chatId: options.chatId || null,
     turn: Number.isSafeInteger(options.turn) ? options.turn : null,
     visibleThroughTurn: Number.isSafeInteger(options.visibleThroughTurn) ? options.visibleThroughTurn : null,
+    readSnapshotAt: typeof options.readSnapshotAt === "string" && options.readSnapshotAt ? options.readSnapshotAt : now,
     trigger: options.trigger || { type: "manual" },
     arguments: options.arguments && typeof options.arguments === "object" && !Array.isArray(options.arguments) ? structuredClone(options.arguments) : {},
     textInput: typeof options.textInput === "string" ? options.textInput : "",
@@ -649,10 +681,12 @@ export function createWorkflowRun(definition, options = {}) {
     updatedAt: now,
     completedAt: null,
     usage: null,
+    usageComplete: null,
     usageComplete: false,
     usageAttempts: { recorded: 0, unrecorded: 0 },
     nodes: Object.fromEntries(workflow.nodes.map(node => [node.id, {
       id: node.id,
+      type: node.type,
       status: "pending",
       attempts: [],
       route: null,
@@ -761,6 +795,7 @@ export function completeWorkflowNode(definition, run, nodeId, result = {}, now =
   attempt.status = "completed";
   attempt.completedAt = now;
   attempt.usage = normalizeTokenUsage(result.usage) || emptyTokenUsage();
+  attempt.usageComplete = result.usageComplete !== false;
   state.status = "completed";
   state.output = result.output ?? null;
   state.context = result.context ?? null;
@@ -783,6 +818,7 @@ export function failWorkflowNode(definition, run, nodeId, error, options = {}, n
   attempt.error = message;
   attempt.completedAt = now;
   attempt.usage = normalizeTokenUsage(options.usage ?? error?.usage);
+  attempt.usageComplete = attempt.usage ? options.usageComplete !== false : false;
   state.error = message;
   if (Object.hasOwn(options, "output")) state.output = structuredClone(options.output);
   if (options.retryable !== false && state.attempts.length < node.retry.maxAttempts) state.status = "awaiting-retry";
@@ -802,6 +838,7 @@ export function requireWorkflowNodeRecovery(definition, run, nodeId, result = {}
   attempt.completedAt = now;
   attempt.error = result.error || "recovery_required";
   attempt.usage = normalizeTokenUsage(result.usage) || emptyTokenUsage();
+  attempt.usageComplete = result.usageComplete !== false;
   state.status = "awaiting-recovery";
   state.output = result.output ?? null;
   state.context = result.context ?? null;
@@ -869,6 +906,7 @@ export function maybeFinalizeWorkflow(definition, run, now = new Date().toISOStr
       if (attemptUsage) {
         usage = addTokenUsage(usage, attemptUsage);
         recorded += 1;
+        if (attempt.usageComplete === false) unrecorded += 1;
       } else if (["completed", "failed", "cancelled"].includes(attempt.status)) {
         unrecorded += 1;
       }
@@ -935,11 +973,12 @@ export function canonicalWorkflowRef(definition) {
   return `${workflow.ownerModuleId}/${workflow.id}`;
 }
 
-export function assertWorkflowCallAllowed(callerWorkflow, callerNode, targetWorkflow, { agent = false } = {}) {
+export function assertWorkflowCallAllowed(callerWorkflow, callerNode, targetWorkflow, { agent = false, lifecycle = false } = {}) {
   const caller = normalizeWorkflowDefinition(callerWorkflow);
   const target = normalizeWorkflowDefinition(targetWorkflow);
   if (!MODULE_WORKFLOW_KINDS.has(target.kind)) throw new Error("Only module workflows may be called synchronously.");
-  if (MODULE_WORKFLOW_KINDS.has(caller.kind) && target.kind !== "module-external") {
+  const sameOwnerLifecycle = lifecycle && caller.ownerModuleId === target.ownerModuleId && target.kind === "module-internal";
+  if (MODULE_WORKFLOW_KINDS.has(caller.kind) && target.kind !== "module-external" && !sameOwnerLifecycle) {
     throw new Error("Module workflows may call only module-external workflows.");
   }
   const reference = canonicalWorkflowRef(target);

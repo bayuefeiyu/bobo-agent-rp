@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 3,
+  "id": "begin-deep-operation",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "登记深度导演运行",
+  "description": "用短锁原子取得新旧深度导演共用的运行权。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
+      "triggerReasons": { "type": "parameter", "required": true, "valueType": "array" }
+    },
+    "exports": {}
+  },
+  "revision": "1",
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId" },
+  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
+  "nodes": [
+    {
+      "id": "begin",
+      "type": "code",
+      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }],
+      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/begin-deep-operation.mjs", "argumentInputs": ["operationId", "triggerReasons"] }
+    },
+    { "id": "return", "type": "workflow-return", "dependsOn": ["begin"], "exports": {} }
+  ]
+}

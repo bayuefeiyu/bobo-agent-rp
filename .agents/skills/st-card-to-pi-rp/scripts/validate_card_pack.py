@@ -498,6 +498,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
     module_fields = {"schemaVersion", "id", "moduleKind", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "resourceCatalogFile", "frontendViewFile", "skillFile", "workflowFiles"}
     index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
     index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
+    all_module_workflows = module_workflow_map(root)
+    allowed_node_types = {"agent", "team", "code", "call", "gate", "join", "workflow-return", "turn-finalize"}
     for index, path_value in enumerate(values):
         label = f"feature_modules[{index}]"
         if not safe_relative_path(path_value):
@@ -624,7 +626,73 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                 if isinstance(owned_nodes, list):
                     for node_index, node in enumerate(owned_nodes):
                         if isinstance(node, dict):
-                            validate_runtime_services(node, f"{workflow_label}.nodes[{node_index}]", errors)
+                            owned_node_label = f"{workflow_label}.nodes[{node_index}]"
+                            validate_runtime_services(node, owned_node_label, errors)
+                            node_type = node.get("type", "agent")
+                            if node_type not in allowed_node_types:
+                                errors.append(f"{owned_node_label}.type is invalid")
+                            if node_type == "team":
+                                team = node.get("team")
+                                if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
+                                    errors.append(f"{owned_node_label}.team must be a schemaVersion 1 object")
+                                else:
+                                    members = [team.get("leader"), team.get("secretary")]
+                                    experts = team.get("experts", [])
+                                    if not isinstance(experts, list):
+                                        errors.append(f"{owned_node_label}.team.experts must be an array")
+                                        experts = []
+                                    members.extend(experts)
+                                    member_ids: list[str] = []
+                                    for member_index, member in enumerate(members):
+                                        member_label = f"{owned_node_label}.team.members[{member_index}]"
+                                        if not isinstance(member, dict):
+                                            errors.append(f"{member_label} must be an object")
+                                            continue
+                                        if not isinstance(member.get("id"), str) or not safe_id.fullmatch(member["id"]):
+                                            errors.append(f"{member_label}.id is invalid")
+                                        else:
+                                            member_ids.append(member["id"])
+                                        if not isinstance(member.get("agentId"), str) or not safe_id.fullmatch(member["agentId"]):
+                                            errors.append(f"{member_label}.agentId is invalid")
+                                    if len(member_ids) != len(set(member_ids)):
+                                        errors.append(f"{owned_node_label}.team member IDs must be unique")
+                                    abilities = team.get("assistants", [])
+                                    if not isinstance(abilities, list):
+                                        errors.append(f"{owned_node_label}.team.assistants must be an array")
+                                        abilities = []
+                                    base_retrieval = team.get("baseRetrieval")
+                                    if base_retrieval is not None:
+                                        abilities = [*abilities, base_retrieval]
+                                    ability_ids: list[str] = []
+                                    required_calls: set[str] = set()
+                                    for ability_index, ability in enumerate(abilities):
+                                        ability_label = f"{owned_node_label}.team.abilities[{ability_index}]"
+                                        if not isinstance(ability, dict):
+                                            errors.append(f"{ability_label} must be an object")
+                                            continue
+                                        if not isinstance(ability.get("id"), str) or not safe_id.fullmatch(ability["id"]):
+                                            errors.append(f"{ability_label}.id is invalid")
+                                        else:
+                                            ability_ids.append(ability["id"])
+                                        ability_kind = ability.get("kind")
+                                        if ability_kind not in {"workflow", "agent", "tool"}:
+                                            errors.append(f"{ability_label}.kind is invalid")
+                                        if ability.get("inputAdapter", "natural-language-v1") not in {"natural-language-v1", "memory-request-v1"}:
+                                            errors.append(f"{ability_label}.inputAdapter is unsupported")
+                                        if ability_kind == "workflow":
+                                            target = ability.get("target")
+                                            if target not in all_module_workflows:
+                                                errors.append(f"{ability_label}.target must reference a declared module workflow")
+                                            elif ability.get("enabled", True):
+                                                required_calls.add(target)
+                                        if ability_kind == "tool" and ability.get("adapter") != "declared-document-read-v1":
+                                            errors.append(f"{ability_label}.adapter is unsupported")
+                                    if len(ability_ids) != len(set(ability_ids)):
+                                        errors.append(f"{owned_node_label}.team ability IDs must be unique")
+                                    declared_calls = {binding if isinstance(binding, str) else binding.get("target") for binding in node.get("workflowCalls", []) if isinstance(binding, (str, dict))}
+                                    missing_calls = sorted(required_calls - declared_calls)
+                                    if missing_calls:
+                                        errors.append(f"{owned_node_label}.team workflow abilities require matching workflowCalls: {missing_calls}")
                             if owned.get("kind") == "module-internal":
                                 effective_locks = owned_locks if isinstance(owned_locks, list) else [{"moduleId": module_id, "collectionId": None}]
                                 for access in node.get("moduleAccess", []) if isinstance(node.get("moduleAccess", []), list) else []:
@@ -837,7 +905,7 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     ids: set[str] = set()
     safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     allowed_kinds = {"foreground", "turn-background", "global-background"}
-    allowed_types = {"agent", "code", "call", "gate", "join", "turn-finalize"}
+    allowed_types = {"agent", "code", "call", "team", "gate", "join", "turn-finalize"}
     contracts = module_contract_map(root)
     module_workflows = module_workflow_map(root)
     resource_catalogs = module_resource_catalog_map(root)
@@ -902,7 +970,78 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             if node.get("type", "agent") not in allowed_types:
                 errors.append(f"{node_label}.type is invalid")
             node_type = node.get("type", "agent")
+            team_workflow_abilities: list[str] = []
             validate_runtime_services(node, node_label, errors)
+            if node_type == "team":
+                team = node.get("team")
+                if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
+                    errors.append(f"{node_label}.team must be a schemaVersion 1 object")
+                else:
+                    members: list[dict[str, Any]] = []
+                    for role in ("leader", "secretary"):
+                        member = team.get(role)
+                        if not isinstance(member, dict):
+                            errors.append(f"{node_label}.team.{role} must be an object")
+                        else:
+                            members.append(member)
+                    experts = team.get("experts", [])
+                    if not isinstance(experts, list) or any(not isinstance(item, dict) for item in experts):
+                        errors.append(f"{node_label}.team.experts must be an array of objects")
+                    else:
+                        members.extend(experts)
+                    member_ids: list[str] = []
+                    for member_index, member in enumerate(members):
+                        member_label = f"{node_label}.team.members[{member_index}]"
+                        member_id, agent_id = member.get("id"), member.get("agentId")
+                        if not isinstance(member_id, str) or not safe_id.fullmatch(member_id):
+                            errors.append(f"{member_label}.id is invalid")
+                        else:
+                            member_ids.append(member_id)
+                        if not isinstance(agent_id, str) or not safe_id.fullmatch(agent_id):
+                            errors.append(f"{member_label}.agentId is invalid")
+                        if member.get("modelId") is not None and not isinstance(member.get("modelId"), str):
+                            errors.append(f"{member_label}.modelId must be a string or null")
+                        for text_field in ("focus", "prompt"):
+                            if member.get(text_field) is not None and not isinstance(member.get(text_field), str):
+                                errors.append(f"{member_label}.{text_field} must be a string")
+                    if len(member_ids) != len(set(member_ids)):
+                        errors.append(f"{node_label}.team member IDs must be unique")
+                    abilities = team.get("assistants", [])
+                    if not isinstance(abilities, list) or any(not isinstance(item, dict) for item in abilities):
+                        errors.append(f"{node_label}.team.assistants must be an array of objects")
+                        abilities = []
+                    base_retrieval = team.get("baseRetrieval")
+                    if base_retrieval is not None:
+                        if not isinstance(base_retrieval, dict):
+                            errors.append(f"{node_label}.team.baseRetrieval must be an object or null")
+                        else:
+                            abilities = [*abilities, base_retrieval]
+                    ability_ids: list[str] = []
+                    for ability_index, ability in enumerate(abilities):
+                        ability_label = f"{node_label}.team.abilities[{ability_index}]"
+                        ability_id, ability_kind = ability.get("id"), ability.get("kind")
+                        if not isinstance(ability_id, str) or not safe_id.fullmatch(ability_id):
+                            errors.append(f"{ability_label}.id is invalid")
+                        else:
+                            ability_ids.append(ability_id)
+                        if ability_kind not in {"workflow", "agent", "tool"}:
+                            errors.append(f"{ability_label}.kind is invalid")
+                        input_adapter = ability.get("inputAdapter", "natural-language-v1")
+                        if input_adapter not in {"natural-language-v1", "memory-request-v1"}:
+                            errors.append(f"{ability_label}.inputAdapter is unsupported")
+                        if ability_kind == "workflow":
+                            if ability.get("target") not in module_workflows:
+                                errors.append(f"{ability_label}.target must reference a declared module workflow")
+                            elif ability.get("enabled", True):
+                                team_workflow_abilities.append(ability["target"])
+                        if ability_kind == "agent" and (not isinstance(ability.get("agentId"), str) or not safe_id.fullmatch(ability["agentId"])):
+                            errors.append(f"{ability_label}.agentId is invalid")
+                        if ability_kind == "tool" and (not isinstance(ability.get("adapter"), str) or not safe_id.fullmatch(ability["adapter"])):
+                            errors.append(f"{ability_label}.adapter is invalid")
+                        elif ability_kind == "tool" and ability.get("adapter") != "declared-document-read-v1":
+                            errors.append(f"{ability_label}.adapter is unsupported")
+                    if len(ability_ids) != len(set(ability_ids)):
+                        errors.append(f"{node_label}.team ability IDs must be unique")
             if node_type == "call":
                 target = node.get("target")
                 target_workflow = module_workflows.get(target)
@@ -943,9 +1082,13 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             workflow_calls = node.get("workflowCalls", [])
             if not isinstance(workflow_calls, list):
                 errors.append(f"{node_label}.workflowCalls must be an array")
-            elif node_type not in {"agent", "code"} and workflow_calls:
-                errors.append(f"{node_label}.workflowCalls is supported only for agent and code nodes")
+            elif node_type not in {"agent", "code", "team"} and workflow_calls:
+                errors.append(f"{node_label}.workflowCalls is supported only for agent, code, and team nodes")
             else:
+                declared_workflow_calls = {binding if isinstance(binding, str) else binding.get("target") for binding in workflow_calls if isinstance(binding, (str, dict))}
+                missing_team_calls = sorted(set(team_workflow_abilities) - declared_workflow_calls)
+                if missing_team_calls:
+                    errors.append(f"{node_label}.team workflow abilities require matching workflowCalls: {missing_team_calls}")
                 seen_targets: set[str] = set()
                 for call_index, raw_call in enumerate(workflow_calls):
                     call_label = f"{node_label}.workflowCalls[{call_index}]"

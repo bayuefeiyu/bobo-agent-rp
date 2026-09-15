@@ -83,6 +83,7 @@ button { cursor: pointer; }
   border: 1px solid transparent;
   border-radius: 12px;
   color: #6b6158;
+  text-decoration: none;
   text-align: left;
   background: transparent;
 }
@@ -760,6 +761,8 @@ h2 {
 
 .config-toolbar { display: flex; align-items: end; gap: 10px; margin: 0 0 16px; }
 .config-toolbar label { display: grid; min-width: min(360px, 100%); gap: 7px; color: #62574e; font-size: 0.8rem; font-weight: 700; }
+#workflow-select.has-running-selection,
+#workflow-select option.workflow-running-option { font-weight: 700; }
 .config-toolbar button, .config-actions button, .node-binding-controls button, .run-node button, #activate-workflow {
   padding: 9px 13px; border: 1px solid rgba(143, 87, 66, 0.22); border-radius: 9px; color: #713f2f; background: rgba(255,255,255,.78); font: inherit; font-weight: 700;
 }
@@ -790,6 +793,8 @@ h2 {
 .node-binding-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
 .run-heading { margin-top: 30px; margin-bottom: 10px; }
 .run-node { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(75,62,49,.09); font-size: .8rem; }
+.run-node.team-run-node { flex-wrap: wrap; }
+.run-node.team-run-node > .workflow-runtime-detail { flex: 1 1 100%; margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
 .run-node .process-record-button { margin-left: auto; }
 .run-node.status-running, .workflow-run-card.status-running { border-color: rgba(55,123,92,.45); background: rgba(232,247,239,.72); }
 .run-node.status-failed, .run-node.status-awaiting-model-choice, .workflow-run-card.status-awaiting-model-choice { color: #7e3027; border-color: rgba(158,65,49,.35); }

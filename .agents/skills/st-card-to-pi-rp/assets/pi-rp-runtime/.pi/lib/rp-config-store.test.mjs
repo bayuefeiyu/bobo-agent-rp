@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import { createRpConfigStore } from "./rp-config-store.mjs";
+import { createConfigProfileStore } from "./rp-config-profiles.mjs";
 
 function testStore(root) {
   return createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache") });
@@ -95,4 +96,58 @@ test("keeps module workflows out of the top-level workflow store", async () => {
     interface: { inputs: {}, exports: {} },
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   }), /cannot be saved as top-level/);
+});
+
+test("applies an active named profile without rewriting authored Agent and model files", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
+  await profileStore.create({ id: "custom", name: "Custom", seed: {
+    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "custom", name: "Custom",
+    models: [{ schemaVersion: 1, id: "profile-model", name: "Profile", provider: "custom", model: "x", baseUrl: "https://example.test/v1" }],
+    agentOverrides: { "runtime/agent/writer": { prompt: "profile prompt" } }, workflowOverrides: {}, moduleOverrides: {},
+  } });
+  await profileStore.activate("custom");
+  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+  await store.ensure();
+  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "authored", defaultModelId: "pi:current" }, { scope: "global" });
+  assert.equal((await store.getAgent("writer")).effective.prompt, "profile prompt");
+  assert.deepEqual((await store.listModels()).map(model => model.id), ["profile-model"]);
+  assert.equal(JSON.parse(await readFile(resolve(root, "agents", "writer", "agent.json"), "utf8")).prompt, "authored");
+});
+
+test("stores workflow runtime policy inside the active configuration profile", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
+  await profileStore.create({ id: "custom", name: "Custom", seed: {
+    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "custom", name: "Custom",
+    models: [], agentOverrides: {}, workflowOverrides: {
+      runtimePolicy: { schemaVersion: 1, maxConcurrency: 4, modelFailure: { silentFallback: false, defaultFallbackModelId: null } },
+    }, moduleOverrides: {},
+  } });
+  await profileStore.activate("custom");
+  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+  await store.ensure();
+  assert.equal((await store.getRuntimePolicy()).maxConcurrency, 4);
+  await store.saveRuntimePolicy({ schemaVersion: 1, maxConcurrency: 7, modelFailure: { silentFallback: true, defaultFallbackModelId: "fallback" } });
+  const saved = await profileStore.get("custom");
+  assert.equal(saved.workflowOverrides.runtimePolicy.maxConcurrency, 7);
+  assert.equal(saved.workflowOverrides.runtimePolicy.modelFailure.defaultFallbackModelId, "fallback");
+});
+
+test("keeps incomplete profile model drafts out of runtime model listings", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
+  await profileStore.create({ id: "drafts", name: "Drafts", seed: {
+    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "drafts", name: "Drafts",
+    models: [
+      { schemaVersion: 1, id: "unfinished", name: "Unfinished", provider: "custom", model: "" },
+      { schemaVersion: 1, id: "ready", name: "Ready", provider: "custom", model: "ready-model" },
+    ],
+    agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {},
+  } });
+  await profileStore.activate("drafts");
+  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+  await store.ensure();
+  assert.deepEqual((await store.listModels()).map(model => model.id), ["ready"]);
+  assert.equal((await profileStore.get("drafts")).models.length, 2);
 });

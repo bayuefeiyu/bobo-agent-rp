@@ -1727,6 +1727,10 @@
                 {
                   "path": "/data/nextReviewTriggers",
                   "label": "nextReviewTriggers"
+                },
+                {
+                  "path": "/data/referenceUpdates",
+                  "label": "referenceUpdates"
                 }
               ]
             },
@@ -1768,6 +1772,10 @@
                 {
                   "path": "/data/nextReviewTriggers",
                   "label": "nextReviewTriggers"
+                },
+                {
+                  "path": "/data/referenceUpdates",
+                  "label": "referenceUpdates"
                 }
               ]
             },
@@ -1953,6 +1961,60 @@
         }
       }
     },
+    "reference-library": {
+      "storage": {
+        "kind": "record-log",
+        "partition": { "mode": "single" },
+        "initialRecordsFile": "collections/reference-library/initial/records.json"
+      },
+      "recordTypes": {
+        "director.reference-document": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/reference-document.schema.json",
+          "indexes": {
+            "title": { "path": "/data/title", "type": "string", "operators": ["eq"] }
+          },
+          "searchableFields": ["/data/title", "/data/summary", "/data/content"],
+          "views": {
+            "reference-index": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/title", "label": "title" },
+                { "path": "/data/summary", "label": "summary" }
+              ]
+            },
+            "director-reference": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/title", "label": "title" },
+                { "path": "/data/summary", "label": "summary" },
+                { "path": "/data/content", "label": "content" },
+                { "path": "/data/sources", "label": "sources" }
+              ]
+            },
+            "maintenance": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/title", "label": "title" },
+                { "path": "/data/summary", "label": "summary" },
+                { "path": "/data/content", "label": "content" },
+                { "path": "/data/sources", "label": "sources" }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/title", "label": "title" },
+                { "path": "/data/summary", "label": "summary" },
+                { "path": "/data/content", "label": "content" },
+                { "path": "/data/sources", "label": "sources" }
+              ]
+            }
+          },
+          "actions": ["create", "update", "archive", "restore"]
+        }
+      }
+    },
     "archive-outbox": {
       "storage": {
         "kind": "hybrid",
@@ -2131,6 +2193,44 @@
             "archive",
             "restore"
           ]
+        }
+      }
+    },
+    "health-dashboard": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": { "mode": "single" },
+        "initialSnapshotFile": "collections/health-dashboard/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "director.health-report": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/health-report.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "health": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/generatedAt", "label": "generatedAt" },
+                { "path": "/data/reference", "label": "reference" },
+                { "path": "/data/totals", "label": "totals" },
+                { "path": "/data/exceedsReference", "label": "exceedsReference" },
+                { "path": "/data/collections", "label": "collections" }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/generatedAt", "label": "generatedAt" },
+                { "path": "/data/reference", "label": "reference" },
+                { "path": "/data/totals", "label": "totals" },
+                { "path": "/data/exceedsReference", "label": "exceedsReference" },
+                { "path": "/data/collections", "label": "collections" }
+              ]
+            }
+          },
+          "actions": ["update"]
         }
       }
     },
@@ -2316,6 +2416,21 @@
         "deep-status"
       ]
     },
+    "director.reference.read": {
+      "collections": ["reference-library"],
+      "actions": ["query"],
+      "views": ["reference-index", "director-reference"]
+    },
+    "director.reference.write": {
+      "collections": ["reference-library"],
+      "actions": ["query", "create", "update"],
+      "views": ["reference-index", "director-reference", "maintenance"]
+    },
+    "director.reference.maintain": {
+      "collections": ["reference-library"],
+      "actions": ["query", "create", "update", "archive", "restore"],
+      "views": ["reference-index", "director-reference", "maintenance"]
+    },
     "director.archive.write": {
       "collections": [
         "archive-outbox"
@@ -2378,14 +2493,22 @@
       ],
       "views": [
         "runtime",
-        "maintenance"
+        "maintenance",
+        "frontend"
       ]
+    },
+    "director.health.write": {
+      "collections": ["health-dashboard"],
+      "actions": ["query", "update"],
+      "views": ["health"]
     },
     "director.frontend.read": {
       "collections": [
         "private-state",
         "deep-workbench",
+        "reference-library",
         "archive-outbox",
+        "health-dashboard",
         "settings"
       ],
       "actions": [

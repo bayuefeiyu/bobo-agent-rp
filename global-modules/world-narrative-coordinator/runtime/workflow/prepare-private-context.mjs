@@ -9,9 +9,10 @@ export async function execute({ workspace, data }) {
   await mkdir(resolve(root, "records"), { recursive: true });
   const privateItems = await queryAll(data, { moduleId: "world-narrative-coordinator", collectionId: "private-state", recordTypes: PRIVATE_TYPES, view: "director", includeInactive: true });
   const deepItems = await queryAll(data, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", recordTypes: ["director.deep-report", "director.deep-state"], view: "daily-director", includeInactive: true });
+  const references = await queryAll(data, { moduleId: "world-narrative-coordinator", collectionId: "reference-library", recordTypes: ["director.reference-document"], view: "director-reference", includeInactive: true });
   const settings = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "settings", id: "director-settings-current", view: "runtime" });
   const documents = [];
-  for (const item of [...privateItems, ...deepItems]) {
+  for (const item of [...privateItems, ...deepItems, ...references]) {
     const path = `records/${safeFileId(item.id)}.json`;
     await writeFile(resolve(root, path), json({ id: item.id, recordType: item.recordType, revision: item.revision, value: item.value }), "utf8");
     documents.push({ id: item.id, recordType: item.recordType, path });
@@ -42,5 +43,5 @@ export async function execute({ workspace, data }) {
     ...documents.map(item => `- \`${item.path}\`：${item.recordType} / ${item.id}`),
     "",
   ].join("\n"), "utf8");
-  return { directory: "private-context", recordCount: documents.length };
+  return { directory: "private-context", recordCount: documents.length, referenceCount: references.length };
 }

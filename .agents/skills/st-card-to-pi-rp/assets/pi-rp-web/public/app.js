@@ -48,7 +48,7 @@ const elements = {
   input: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
   errorBanner: document.querySelector("#error-banner"),
-  tabButtons: [...document.querySelectorAll(".tab-button")],
+  tabButtons: [...document.querySelectorAll(".tab-button:not([hidden])")],
   panels: [...document.querySelectorAll(".panel")],
   userSettingsForm: document.querySelector("#user-settings-form"),
   playerName: document.querySelector("#player-name"),
@@ -207,6 +207,19 @@ function showPanel(panelName) {
   for (const panel of elements.panels) panel.hidden = panel.id !== `panel-${panelName}`;
   if (panelName === "story" && state.snapshot?.openingId && !state.snapshot.busy) elements.input.focus();
   if (panelName === "user") elements.playerName.focus();
+  if (state.snapshot?.previewMode && panelName === "workflows") {
+    document.querySelectorAll("#panel-workflows button, #panel-workflows input, #panel-workflows textarea")
+      .forEach(control => { control.disabled = true; });
+    elements.workflowSelect.disabled = false;
+    elements.refreshWorkflows.disabled = false;
+    elements.showActiveWorkflow.disabled = false;
+  }
+  if (state.snapshot?.previewMode && panelName === "system") {
+    document.querySelectorAll("#module-display-settings-form button, #module-display-settings-form input, #module-display-settings-form textarea, #module-display-settings-form select, #comfy-connection-form button, #comfy-connection-form input, #comfy-connection-form textarea, #comfy-connection-form select")
+      .forEach(control => { control.disabled = true; });
+    elements.moduleSettingsStatus.textContent = "需要载入具体角色卡后才能保存模块显示覆盖。";
+    elements.comfyConnectionStatus.textContent = "需要载入安装了生图模块的角色卡后配置连接。";
+  }
 }
 
 function toggleCardModule(button) {
@@ -690,7 +703,7 @@ async function renderImageGenerationRegion(section) {
   quickLabel.append(quick, document.createTextNode(" 快速模式"));
   const actions = document.createElement("div"); actions.className = "image-generation-actions";
   const generate = document.createElement("button"); generate.type = "button"; generate.textContent = "生成图片"; generate.disabled = !(payload.profiles || []).length || !payload.sessionId;
-  generate.addEventListener("click", async () => { try { if (preferences.quickMode) await startImageRun(false); else openImageRunDialog(); } catch (error) { showError(error); } });
+  generate.addEventListener("click", async () => { try { if (preferences.quickMode && preferences.inputPolicy?.kind === "recent-turns") await startImageRun(false); else openImageRunDialog(); } catch (error) { showError(error); } });
   const customize = document.createElement("button"); customize.type = "button"; customize.className = "secondary-button"; customize.textContent = "定制本次"; customize.disabled = generate.disabled; customize.addEventListener("click", openImageRunDialog);
   actions.append(generate, customize); controls.append(profiles, quickLabel, actions);
   const gallery = document.createElement("div"); gallery.className = "image-gallery";
@@ -978,7 +991,8 @@ function renderFeatureModules(payload) {
     openDefinition.type = "button";
     openDefinition.className = "module-file-button";
     openDefinition.textContent = "修改模块";
-    openDefinition.title = "使用系统默认编辑器打开模块定义文件";
+    openDefinition.disabled = state.snapshot?.previewMode === true;
+    openDefinition.title = openDefinition.disabled ? "开发预览只展示模块外观" : "使用系统默认编辑器打开模块定义文件";
     openDefinition.addEventListener("click", () => openFeatureModuleDocument(module, "definition", openDefinition));
     actions.append(openData, openDefinition);
     heading.append(toggle, actions);
@@ -1242,6 +1256,12 @@ async function deleteSavedMessage(message, button) {
 function renderMessages(messages, scrollToEnd = false) {
   const fragment = document.createDocumentFragment();
   for (const message of messages) fragment.append(createMessageElement(message));
+  if (!messages.length && state.snapshot?.previewMode) {
+    const empty = document.createElement("p");
+    empty.className = "preview-empty";
+    empty.textContent = "根目录开发预览没有聊天内容；这里展示的是玩卡时使用的同一个聊天区域。";
+    fragment.append(empty);
+  }
   elements.messages.replaceChildren(fragment);
   if (scrollToEnd) {
     requestAnimationFrame(() => elements.messages.scrollTo({ top: elements.messages.scrollHeight, behavior: "smooth" }));
@@ -1253,18 +1273,23 @@ function applySnapshot(snapshot) {
   const previousMessages = state.snapshot?.messages || [];
   const previousPlayerName = state.snapshot?.playerName;
   state.snapshot = snapshot;
-  const started = Boolean(snapshot.openingId);
+  const previewMode = snapshot.previewMode === true;
+  const started = previewMode || Boolean(snapshot.openingId);
+  document.body.classList.toggle("development-preview", previewMode);
   elements.openingView.hidden = started;
   elements.chatView.hidden = !started;
-  elements.chooseChatButton.hidden = !started;
-  elements.chooseChatButton.disabled = snapshot.busy || state.switching;
+  elements.chooseChatButton.hidden = previewMode || !started;
+  elements.chooseChatButton.disabled = previewMode || snapshot.busy || state.switching;
   const blockingWorkflows = snapshot.blockingWorkflows || [];
-  elements.connectionStatus.textContent = blockingWorkflows.length
+  elements.connectionStatus.textContent = previewMode
+    ? "开发预览 · 未载入角色卡和聊天"
+    : blockingWorkflows.length
     ? `等待后台工作流：${blockingWorkflows.map(item => item.workflowTitle || item.workflowId).join("、")}`
     : snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
-  elements.input.disabled = snapshot.busy;
-  elements.sendButton.disabled = snapshot.busy || state.sending;
-  elements.sendButton.textContent = blockingWorkflows.length ? "等待后台任务" : snapshot.busy ? "等待 Pi" : "发送";
+  elements.input.disabled = previewMode || snapshot.busy;
+  elements.input.placeholder = previewMode ? "根目录预览模式不发送消息" : "输入你的行动或对话……";
+  elements.sendButton.disabled = previewMode || snapshot.busy || state.sending;
+  elements.sendButton.textContent = previewMode ? "仅预览" : blockingWorkflows.length ? "等待后台任务" : snapshot.busy ? "等待 Pi" : "发送";
   if (!state.playerNameDirty) elements.playerName.value = snapshot.playerName || "玩家";
 
   const messagesChanged = snapshot.messages.length !== previousCount || snapshot.messages.some((message, index) => {
@@ -1272,7 +1297,7 @@ function applySnapshot(snapshot) {
     return !previous || previous.sequence !== message.sequence || previous.content !== message.content || previous.editedAt !== message.editedAt;
   });
   const playerNameChanged = snapshot.playerName !== previousPlayerName;
-  if (started && (messagesChanged || playerNameChanged)) renderMessages(snapshot.messages, messagesChanged);
+  if (started && (messagesChanged || playerNameChanged || previewMode)) renderMessages(snapshot.messages, messagesChanged);
   for (const action of document.querySelectorAll(".message-action")) action.disabled = snapshot.busy;
 }
 
@@ -1479,6 +1504,12 @@ function renderCards() {
     button.addEventListener("click", () => selectCard(card, button));
     fragment.append(button);
   }
+  if (!cards.length && state.snapshot?.previewMode) {
+    const empty = document.createElement("p");
+    empty.className = "preview-empty";
+    empty.textContent = "根目录无法读取具体角色卡；进入 play 后，这里会显示可选择的角色卡。";
+    fragment.append(empty);
+  }
   elements.cardGrid.replaceChildren(fragment);
 }
 
@@ -1577,7 +1608,9 @@ async function saveUserSettings(event) {
       renderPlayerAvatarPreview();
       if (state.snapshot?.openingId) renderMessages(state.snapshot.messages);
     }
-    elements.userSettingsStatus.textContent = avatar ? "角色设定和头像已保存" : "角色设定已保存并加入固定上下文";
+    elements.userSettingsStatus.textContent = state.snapshot?.previewMode
+      ? (avatar ? "全局用户设置和头像已保存" : "全局用户设置已保存")
+      : (avatar ? "角色设定和头像已保存到当前卡" : "角色设定已保存到当前卡并加入固定上下文");
   } catch (error) {
     state.playerNameDirty = true;
     elements.userSettingsStatus.textContent = profileSaved ? "角色设定已保存，但头像上传失败" : "保存失败";
@@ -1603,7 +1636,7 @@ async function saveSystemSettings() {
       method: "POST",
       body: JSON.stringify({ fontSize }),
     });
-    elements.systemSettingsStatus.textContent = "已保存到公共设置文件";
+    elements.systemSettingsStatus.textContent = state.snapshot?.previewMode ? "已保存为全局显示默认" : "已保存为当前卡显示覆盖";
   } catch (error) {
     elements.systemSettingsStatus.textContent = "保存失败";
     showError(error);
@@ -1814,7 +1847,13 @@ async function saveAgent(scope) {
 
 function workflowKindLabel(kind) { return ({ foreground: "前台", "turn-background": "当前回合后台", "global-background": "全局后台" })[kind] || kind; }
 function statusLabel(status) { return ({ pending: "等待", running: "执行中", completed: "完成", skipped: "跳过", failed: "失败", cancelled: "已取消", "awaiting-retry": "等待重试", "awaiting-model-choice": "等待选择模型", "awaiting-recovery": "等待恢复原任务" })[status] || status; }
-function selectedWorkflow() { return state.workflows.find(item => item.id === elements.workflowSelect.value); }
+const terminalWorkflowStatuses = new Set(["completed", "skipped", "failed", "cancelled"]);
+function workflowReference(workflow) { return workflow.reference || (workflow.ownerModuleId ? `${workflow.ownerModuleId}/${workflow.id}` : workflow.id); }
+function runWorkflowReference(run) { return run.ownerModuleId ? `${run.ownerModuleId}/${run.workflowId}` : run.workflowId; }
+function isActiveWorkflowRun(run) { return run.live !== false && !terminalWorkflowStatuses.has(run.status); }
+function runningWorkflowReferences() { return new Set(state.workflowRuns.filter(isActiveWorkflowRun).map(runWorkflowReference)); }
+function currentForegroundRun() { return state.workflowRuns.slice().reverse().find(run => run.kind === "foreground" && isActiveWorkflowRun(run)) || null; }
+function selectedWorkflow() { return state.workflows.find(item => workflowReference(item) === elements.workflowSelect.value); }
 function workflowPanelHasFocus() {
   const active = document.activeElement;
   return document.querySelector("#panel-workflows")?.contains(active) === true && active?.matches("select, input, textarea");
@@ -1838,27 +1877,21 @@ function inheritedModel(workflow, nodeAgentId = "") {
 function renderWorkflow() {
   const workflow = selectedWorkflow();
   if (!workflow) return;
+  const reference = workflowReference(workflow);
+  const running = runningWorkflowReferences().has(reference);
+  const sourceLabel = workflow.source === "module" ? `模块 · ${workflow.moduleTitle || workflow.ownerModuleId}` : workflow.source === "card" ? "当前卡工作流" : "通用工作流";
   const summaryTitle = document.createElement("strong"); summaryTitle.textContent = workflow.title;
-  const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${workflow.source === "card" ? "当前卡副本" : "全局模板"}${workflow.id === state.activeWorkflowId ? " · 当前前台工作流" : ""}`;
+  const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${sourceLabel}${workflow.kind === "foreground" && workflow.id === state.activeWorkflowId ? " · 下轮默认前台" : ""}${running ? " · 正在运行" : ""}`;
   const summaryDescription = document.createElement("p"); summaryDescription.textContent = workflow.description || "无简介";
   elements.workflowSummary.replaceChildren(summaryTitle, summaryMeta, summaryDescription);
+  elements.workflowSelect.classList.toggle("has-running-selection", running);
+  elements.activateWorkflow.disabled = Boolean(workflow.ownerModuleId) || state.snapshot?.previewMode === true;
+  elements.activateWorkflow.title = workflow.ownerModuleId ? "模块工作流只能由所属模块或上级工作流调用；此处用于查看定义和运行状态。" : "激活前台工作流，或手动启动允许直接运行的后台工作流。";
   if (workflow.kind !== "foreground") {
-    const triggerControls = document.createElement("div"); triggerControls.className = "workflow-trigger-controls";
-    const triggerType = document.createElement("select"); triggerType.className = "setting-select"; triggerType.append(new Option("手动触发", "manual"), new Option("开场选定后", "after-opening"), new Option("工作流完成后", "after-workflow"), new Option("节点完成后", "node")); triggerType.value = workflow.trigger?.type || "manual";
-    const targetWorkflow = document.createElement("select"); targetWorkflow.className = "setting-select";
-    const targetNode = document.createElement("select"); targetNode.className = "setting-select";
-    const fillTargets = () => {
-      targetWorkflow.replaceChildren(...state.workflows.filter(item => item.id !== workflow.id && !item.invalid).map(item => new Option(item.title, item.id)));
-      targetWorkflow.value = workflow.trigger?.workflowId || targetWorkflow.options[0]?.value || "";
-      const selected = state.workflows.find(item => item.id === targetWorkflow.value);
-      targetNode.replaceChildren(...(selected?.nodes || []).map(item => new Option(item.title, item.id)));
-      targetNode.value = workflow.trigger?.nodeId || targetNode.options[0]?.value || "";
-    };
-    const syncVisibility = () => { targetWorkflow.hidden = !["after-workflow", "node"].includes(triggerType.value); targetNode.hidden = triggerType.value !== "node"; };
-    fillTargets(); syncVisibility(); triggerType.addEventListener("change", syncVisibility); targetWorkflow.addEventListener("change", () => { workflow.trigger = { ...workflow.trigger, workflowId: targetWorkflow.value, nodeId: "" }; fillTargets(); });
-    const saveTrigger = document.createElement("button"); saveTrigger.type = "button"; saveTrigger.textContent = "保存触发方式";
-    saveTrigger.addEventListener("click", async () => { try { await request(`/api/workflows/${encodeURIComponent(workflow.id)}/trigger`, { method: "PUT", body: JSON.stringify({ type: triggerType.value, workflowId: targetWorkflow.value, nodeId: targetNode.value }) }); await refreshWorkflowData(workflow.id, true); } catch (error) { showError(error); } });
-    triggerControls.append(triggerType, targetWorkflow, targetNode, saveTrigger); elements.workflowSummary.append(triggerControls);
+    const trigger = document.createElement("p");
+    trigger.className = "workflow-runtime-detail";
+    trigger.textContent = `触发：${workflow.trigger?.type || "manual"}${workflow.trigger?.workflowId ? ` · ${workflow.trigger.workflowId}` : ""}${workflow.trigger?.nodeId ? ` / ${workflow.trigger.nodeId}` : ""}`;
+    elements.workflowSummary.append(trigger);
   }
   const fragment = document.createDocumentFragment();
   for (const node of workflow.nodes || []) {
@@ -1868,25 +1901,20 @@ function renderWorkflow() {
     const nodeMeta = document.createElement("span"); nodeMeta.textContent = `${node.type}${node.cooldownTurns ? ` · CD ${node.cooldownTurns} 回合` : ""}`;
     title.append(nodeTitle, nodeMeta);
     const description = document.createElement("p"); description.textContent = node.description || "无节点说明";
-    const controls = document.createElement("div"); controls.className = "node-binding-controls";
-    const agent = document.createElement("select"); agent.className = "setting-select";
-    agent.append(new Option(`继承工作流默认 Agent（${agentLabel(workflow.defaults?.agentId)}）`, ""), ...state.agents.map(item => new Option(`${item.effective.name} · ${item.effective.id}`, item.effective.id))); agent.value = node.agentId || "";
-    const model = modelOptions(node.modelId || ""); model.className = "setting-select";
-    const inheritedModelOption = new Option("", "");
-    const updateInheritedModelLabel = () => {
-      const inherited = inheritedModel(workflow, agent.value);
-      inheritedModelOption.textContent = `继承${inherited.source}（${modelLabel(inherited.id)}）`;
-    };
-    updateInheritedModelLabel();
-    model.prepend(inheritedModelOption); model.value = node.modelId || "";
-    agent.addEventListener("change", () => {
-      const selectedAgent = state.agents.find(item => item.effective.id === agent.value)?.effective;
-      updateInheritedModelLabel();
-      if (!workflow.defaults?.modelId && selectedAgent?.defaultModelId) model.value = selectedAgent.defaultModelId;
-    });
-    const save = document.createElement("button"); save.type = "button"; save.textContent = "保存节点关联";
-    save.addEventListener("click", async () => { try { await request(`/api/workflows/${workflow.id}/nodes/${node.id}/binding`, { method: "PUT", body: JSON.stringify({ agentId: agent.value, modelId: model.value }) }); await refreshWorkflowData(workflow.id); } catch (error) { showError(error); } });
-    controls.append(agent, model, save); card.append(title, description, controls); fragment.append(card);
+    card.append(title, description);
+    if (node.type === "agent") {
+      const binding = document.createElement("p");
+      binding.className = "workflow-runtime-detail";
+      binding.textContent = `Agent：${agentLabel(node.agentId || workflow.defaults?.agentId)} · 模型：${modelLabel(node.modelId || inheritedModel(workflow, node.agentId).id)}`;
+      card.append(binding);
+    } else if (node.type === "team") {
+      const members = [node.team?.leader, ...(node.team?.experts || []), node.team?.secretary].filter(Boolean);
+      const binding = document.createElement("p");
+      binding.className = "workflow-runtime-detail";
+      binding.textContent = `会议成员：${members.map(member => `${member.role || member.id}=${agentLabel(member.agentId)} / ${modelLabel(member.modelId || inheritedModel(workflow, member.agentId).id)}`).join("；")} · 助理能力 ${node.team?.assistants?.length || 0}`;
+      card.append(binding);
+    }
+    fragment.append(card);
   }
   elements.workflowNodeList.replaceChildren(fragment);
   renderWorkflowRuns();
@@ -1911,6 +1939,30 @@ function renderWorkflowRuns() {
       const runNodeId = document.createElement("span"); runNodeId.textContent = node.id;
       const runNodeStatus = document.createElement("strong"); runNodeStatus.textContent = statusLabel(node.status);
       row.append(runNodeId, runNodeStatus);
+      if (node.team) {
+        row.classList.add("team-run-node");
+        const detail = document.createElement("span");
+        detail.className = "workflow-runtime-detail";
+        const tasks = Object.entries(node.team.taskCounts || {}).map(([status, count]) => `${status} ${count}`).join(" / ") || "无";
+        const budgets = Object.entries(node.team.budgets || {}).map(([id, value]) => `${id} ${value.used || 0}/${value.limit || 0}`).join("；");
+        detail.textContent = `会议：${node.team.phase} · 第 ${node.team.round || 0} 轮 · 发言 ${node.team.speechCount || 0} · 协助任务 ${tasks}${node.team.error ? ` · ${node.team.error}` : ""}${budgets ? ` · 额度 ${budgets}` : ""}`;
+        if (node.team.failedMember?.memberId) detail.textContent += ` · 失败成员 ${node.team.failedMember.memberId}`;
+        if ((node.team.usage?.unrecordedCalls || 0) > 0) detail.textContent += ` · ${node.team.usage.unrecordedCalls} 次调用用量未知`;
+        row.append(detail);
+        if (node.team.transcriptAvailable) {
+          const openTranscript = document.createElement("button");
+          openTranscript.type = "button";
+          openTranscript.className = "process-record-button";
+          openTranscript.textContent = "打开会议记录";
+          openTranscript.addEventListener("click", async () => {
+            openTranscript.disabled = true;
+            try { await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/nodes/${encodeURIComponent(node.id)}/team-transcript/open`, { method: "POST", body: "{}" }); }
+            catch (error) { showError(error); }
+            finally { openTranscript.disabled = false; }
+          });
+          row.append(openTranscript);
+        }
+      }
       if (node.processRecord?.available) {
         const openProcessRecord = document.createElement("button");
         openProcessRecord.type = "button";
@@ -1932,10 +1984,10 @@ function renderWorkflowRuns() {
         });
         row.append(openProcessRecord);
       }
-      if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status)) {
+      if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status) && (node.type !== "team" || node.team?.failedMember?.freezeKey)) {
         const model = modelOptions(node.attempts?.at(-1)?.modelId || "pi:current"); model.className = "setting-select";
         const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
-        const retryWith = async saveAsCardDefault => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId: model.value, saveAsCardDefault }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
+        const retryWith = async saveAsCardDefault => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId: model.value, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
         retry.addEventListener("click", () => retryWith(false));
         const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true));
         row.append(model, retry, saveAndRetry);
@@ -2069,8 +2121,18 @@ async function refreshWorkflowData(selectId, forceRender = false) {
   if (!forceRender && signature === state.workflowRenderSignature) return;
   state.workflowRenderSignature = signature;
   const selected = selectId || elements.workflowSelect.value || state.activeWorkflowId;
-  elements.workflowSelect.replaceChildren(...state.workflows.map(item => new Option(`${item.title} · ${workflowKindLabel(item.kind)}`, item.id)));
-  if (state.workflows.some(item => item.id === selected)) elements.workflowSelect.value = selected;
+  const running = runningWorkflowReferences();
+  const options = state.workflows.map(item => {
+    const reference = workflowReference(item);
+    const owner = item.source === "module" ? `${item.moduleTitle || item.ownerModuleId} · ` : "";
+    const option = new Option(`${owner}${item.title} · ${workflowKindLabel(item.kind)}`, reference);
+    if (running.has(reference)) { option.classList.add("workflow-running-option"); option.style.fontWeight = "700"; }
+    return option;
+  });
+  elements.workflowSelect.replaceChildren(...options);
+  elements.workflowSelect.disabled = false;
+  if (state.workflows.some(item => workflowReference(item) === selected)) elements.workflowSelect.value = selected;
+  else if (state.workflows.length) elements.workflowSelect.value = workflowReference(state.workflows[0]);
   renderWorkflow();
 }
 async function activateSelectedWorkflow() {
@@ -2173,7 +2235,15 @@ elements.restoreAgent.addEventListener("click", async () => { try { const id = e
 elements.workflowSelect.addEventListener("change", renderWorkflow);
 elements.activateWorkflow.addEventListener("click", activateSelectedWorkflow);
 elements.refreshWorkflows.addEventListener("click", () => refreshWorkflowData(undefined, true).catch(showError));
-elements.showActiveWorkflow.addEventListener("click", () => { elements.workflowSelect.value = state.activeWorkflowId; renderWorkflow(); });
+elements.showActiveWorkflow.addEventListener("click", () => {
+  const run = currentForegroundRun();
+  if (!run) { elements.workflowStatus.textContent = "当前没有正在运行的前台工作流。"; return; }
+  const reference = runWorkflowReference(run);
+  if (!state.workflows.some(item => workflowReference(item) === reference)) { elements.workflowStatus.textContent = "当前前台工作流仍在运行，但其定义已不在本卡工作流列表中。"; return; }
+  elements.workflowSelect.value = reference;
+  renderWorkflow();
+  elements.workflowStatus.textContent = `已定位到正在运行的前台工作流：${selectedWorkflow()?.title || run.workflowId}`;
+});
 elements.workflowPolicyForm.addEventListener("submit", saveWorkflowPolicy);
 elements.refreshTokens.addEventListener("click", () => refreshTokenUsage(true).catch(showError));
 elements.imageRunConfirm.addEventListener("click", event => {
@@ -2252,7 +2322,8 @@ async function initialize() {
     elements.historyList.textContent = "聊天记录读取失败。";
     showError(error);
   }
-  showPanel("story");
+  const requestedPanel = new URLSearchParams(window.location.search).get("panel");
+  showPanel(elements.tabButtons.some(button => button.dataset.panel === requestedPanel) ? requestedPanel : "story");
   window.setInterval(refreshState, 600);
 }
 

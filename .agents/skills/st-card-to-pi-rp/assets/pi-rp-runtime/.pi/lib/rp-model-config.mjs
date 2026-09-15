@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export const MODEL_TAIL_MESSAGE_TYPE = "rp-model-tail";
 
 function object(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
@@ -66,12 +67,27 @@ export function resolveNodeProfiles({ node, workflow, agent }) {
   return { agentId, modelId };
 }
 
-export function composeNodePrompt({ piSystemPrompt, modelHead, agentPrompt, fixedContext, dynamicContext, upstreamArtifacts, currentInput, nodePrompt, modelTail }) {
+export function composeNodePrompt({ piSystemPrompt, modelHead, agentPrompt, fixedContext, dynamicContext, upstreamArtifacts, currentInput, nodePrompt }) {
   const systemPrompt = [piSystemPrompt, modelHead, agentPrompt, fixedContext].filter(value => typeof value === "string" && value.trim()).join("\n\n");
-  const contextMessages = [dynamicContext, upstreamArtifacts, currentInput, nodePrompt, modelTail]
+  const contextMessages = [dynamicContext, upstreamArtifacts, currentInput, nodePrompt]
     .filter(value => typeof value === "string" && value.trim())
     .map(content => content.trim());
   return { systemPrompt, contextMessages };
+}
+
+export function moveModelTailToEnd(messages, modelTail, timestamp = Date.now()) {
+  const context = Array.isArray(messages)
+    ? messages.filter(message => message?.role !== "custom" || message.customType !== MODEL_TAIL_MESSAGE_TYPE)
+    : [];
+  if (typeof modelTail !== "string" || !modelTail.trim()) return context;
+  return [...context, {
+    role: "custom",
+    customType: MODEL_TAIL_MESSAGE_TYPE,
+    content: modelTail.trim(),
+    display: false,
+    details: { transient: true },
+    timestamp,
+  }];
 }
 
 export function composeWorkflowNodeDynamicContext({ workflowKind, turn, recentCompleteTurns, recentContext, callContext, documentWorkspace, handoffMirrorRoots = [], customContext }) {

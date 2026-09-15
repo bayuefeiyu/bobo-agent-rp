@@ -15,14 +15,14 @@
 
 1. 导演版前台正文：正文 Agent 完成情景分析和记忆检索后调用前置日常导演；前置写入 `private-state`，正文节点再调用 `materialize-guidance(publicationId=publication-narrative, channel=narrative)` 并继续创作。
 2. 后置导演：若卡片启用近场/广域叙事，采用 `integration/workflows/director-post-with-narratives/workflow.json` 为模板，把触发器中的正文工作流ID替换成实际ID。正文写作节点必须导出 `post-turn-context`，后置流程阻塞下一轮，依次完成主要复盘和委托决策、两个候选分支并行创作、导演第二次Agent调用统审、两个发布分支并行发布及通用来源捕获。若未启用这两个模块，可采用精简 `director-post-turn`。
-3. 深度包装：`global-background`，锁定 `deep-workbench`，由确定性启动节点根据后置交接中的 `shouldStart` 和 reasonCodes 调用 `deep-director-planning`；同一时间仅一份运行。
+3. 深度包装：复制并注册 `integration/workflows/director-deep-wrapper/workflow.json`。确定性启动节点根据后置交接中的 `shouldStart` 和 reasonCodes 读取 `settings.deep.workflowMode`：`single` 调用旧版 `deep-director-planning`，`team` 调用可变人数的 `deep-director-team-planning`。团队版先用短锁登记运行，会议期间不占写锁，最后再用短锁把深度报告与参考资料原子提交；失败、取消或跳过均通过生命周期收尾释放运行状态。
 4. 开场初始化：`turn-background`，`trigger.type=after-opening` 且阻塞首次输入，复用后置导演 Agent 并传入 `phase=opening`。另生成一个在初始化完成后检查深度启动建议的非阻塞包装工作流；是否建议启动由开场初始化结合 `settings.opening.deepMode` 决定。
-5. 手动维护和手动完整性修复：顶层手动工作流只负责准备用户请求/诊断并调用对应内部工作流。
+5. 统计、手动维护和手动完整性修复：复制并注册 `director-health-check`、`director-manual-maintenance` 与完整性修复包装。统计更新 `health-dashboard` 前端快照但不维护数据；维护和修复仍只由用户手动启动。
 
 导入时还必须把 `director-archive-source-capture` 的 `DIRECTOR_POST_WORKFLOW_ID` 替换为本卡实际采用的后置导演工作流ID；不要同时启用精简版和近场/广域统筹版后置流程。
 
-前置与后置不会同时执行，可以锁定同一 `private-state`。深度导演只锁 `deep-workbench`，允许与日常导演并行。旧模块未声明 `writeLocks` 时，模块内部写工作流默认锁整个模块，保持原有排他行为。
+前置与后置不会同时执行，可以锁定同一 `private-state`。旧版单 Agent 深度导演仍在运行期间锁定 `deep-workbench`；团队版只在 begin、commit、finish 三个短事务中锁相应目录，长时间讨论不占写入通道，并可与日常导演并行。旧模块未声明 `writeLocks` 时，模块内部写工作流默认锁整个模块，保持原有排他行为。
 
 导演归档交接由卡片现有通用 `narrative-memory-source-capture` 接入：只查询 `archive-outbox` 的 ready 条目和 `archive-source` 视图，成功捕获后由顶层确定性节点用回执更新 `status=captured` 与 `sourceCaptureId`。`contentVersion` 由确定性代码根据业务内容变化维护，Agent 不填写或决定该值；捕获身份绑定来源记录与该版本。近场、广域已发布故事也走同一来源捕获协议，并由叙事记忆中各自的预定义说明指导归档；不要创建模块专属归档 Agent。
 
-首次版本不创建前端，不修改现有会话，不自动维护数据，也不自动修复原地编辑。
+模块前端提供深度状态、参考资料正式记录、团队/单人模式设置、最近一次数据统计与手动维护入口。统计只提醒，不自动维护；直接查看正式记录供高级用户 DIY，项目不为越过工作流直接修改权威数据的后果兜底。导入不修改现有会话，也不自动修复原地编辑。

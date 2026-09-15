@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3, "id": "deep-director-planning", "ownerModuleId": "world-narrative-coordinator", "title": "深度导演推演", "description": "从冻结剧情、完整导演资料、作者未来资料和高预算记忆中生成一份完整的高层推演报告。", "kind": "module-internal", "agentCallable": false,
-  "interface": { "inputs": { "triggerReasons": { "type": "parameter", "required": true, "valueType": "array", "description": "仅说明为什么启动，不指定推演任务。" }, "story-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot", "document-set"], "description": "启动时冻结的明确剧情范围；自动回合优先复用前台快照，其他入口由代码按配置窗口生成。" } }, "exports": {} },
+  "interface": { "inputs": { "operationId": { "type": "parameter", "required": false, "valueType": "string", "description": "新旧深度导演共用的外层运行标识；旧流程内部仍使用自身运行ID提交。" }, "triggerReasons": { "type": "parameter", "required": true, "valueType": "array", "description": "仅说明为什么启动，不指定推演任务。" }, "story-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot", "document-set"], "description": "启动时冻结的明确剧情范围；自动回合优先复用前台快照，其他入口由代码按配置窗口生成。" } }, "exports": {} },
   "revision": "1", "defaults": { "agentId": "world-narrative-deep-director", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
   "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
   "nodes": [

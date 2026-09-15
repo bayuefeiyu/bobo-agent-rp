@@ -1,0 +1,25 @@
+[
+  {
+    "protocolVersion": 2,
+    "id": "director-health-current",
+    "moduleId": "world-narrative-coordinator",
+    "collectionId": "health-dashboard",
+    "recordType": "director.health-report",
+    "dataSchemaVersion": 1,
+    "sequence": 0,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-09-12T00:00:00.000Z",
+    "updatedAt": "2026-09-12T00:00:00.000Z",
+    "binding": { "messageId": null, "turn": 0 },
+    "data": {
+      "generatedAt": "2026-09-12T00:00:00.000Z",
+      "reference": { "recordCount": 250, "characters": 300000 },
+      "totals": { "recordCount": 0, "characters": 0 },
+      "exceedsReference": { "recordCount": false, "characters": false },
+      "collections": []
+    },
+    "note": null,
+    "provenance": {}
+  }
+]

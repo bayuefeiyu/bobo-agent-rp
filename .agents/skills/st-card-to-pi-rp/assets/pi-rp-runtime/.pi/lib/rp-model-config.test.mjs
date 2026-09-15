@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { composeNodePrompt, composeWorkflowNodeDynamicContext, normalizeAgentProfile, normalizeModelProfile, normalizeRuntimePolicy, resolveNodeProfiles } from "./rp-model-config.mjs";
+import { MODEL_TAIL_MESSAGE_TYPE, composeNodePrompt, composeWorkflowNodeDynamicContext, moveModelTailToEnd, normalizeAgentProfile, normalizeModelProfile, normalizeRuntimePolicy, resolveNodeProfiles } from "./rp-model-config.mjs";
 
 test("normalizes optional model head and tail prompts", () => {
   const model = normalizeModelProfile({
@@ -27,7 +27,7 @@ test("keeps agent default model as a low-priority convenience", () => {
   assert.equal(resolveNodeProfiles({ node: { agentId: "writer", modelId: null }, workflow: { defaults: {} }, agent }).modelId, "agent-default");
 });
 
-test("places the model head after Pi system text and the tail last", () => {
+test("places the model head after Pi system text and leaves the call-time tail out of persistent context", () => {
   const prompt = composeNodePrompt({
     piSystemPrompt: "PI",
     modelHead: "HEAD",
@@ -37,10 +37,29 @@ test("places the model head after Pi system text and the tail last", () => {
     upstreamArtifacts: "UPSTREAM",
     currentInput: "INPUT",
     nodePrompt: "NODE",
-    modelTail: "TAIL",
   });
   assert.equal(prompt.systemPrompt, "PI\n\nHEAD\n\nAGENT\n\nFIXED");
-  assert.deepEqual(prompt.contextMessages, ["DYNAMIC", "UPSTREAM", "INPUT", "NODE", "TAIL"]);
+  assert.deepEqual(prompt.contextMessages, ["DYNAMIC", "UPSTREAM", "INPUT", "NODE"]);
+});
+
+test("moves one transient model tail to the end before every model call", () => {
+  const initial = [{ role: "user", content: "CONTEXT", timestamp: 1 }];
+  const firstCall = moveModelTailToEnd(initial, "  TAIL  ", 2);
+  assert.deepEqual(firstCall.map(message => message.content), ["CONTEXT", "TAIL"]);
+  assert.equal(firstCall.at(-1).customType, MODEL_TAIL_MESSAGE_TYPE);
+  assert.equal(firstCall.at(-1).display, false);
+
+  const secondContext = [
+    ...firstCall,
+    { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "WORKSPACE-DOCUMENTS.md" } }], timestamp: 3 },
+    { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "DOCUMENT" }], isError: false, timestamp: 4 },
+    { role: "assistant", content: [{ type: "text", text: "LAST OUTPUT" }], timestamp: 5 },
+  ];
+  const secondCall = moveModelTailToEnd(secondContext, "TAIL", 6);
+  assert.equal(secondCall.filter(message => message.customType === MODEL_TAIL_MESSAGE_TYPE).length, 1);
+  assert.equal(secondCall.at(-1).content, "TAIL");
+  assert.deepEqual(secondCall.slice(0, -1).map(message => message.role), ["user", "assistant", "toolResult", "assistant"]);
+  assert.equal(secondCall.at(-1).timestamp, 6);
 });
 
 test("keeps fixed prompts while limiting implicit chat history to foreground nodes", () => {

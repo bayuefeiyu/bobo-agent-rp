@@ -14,11 +14,27 @@ Models store shareable provider/model configuration without credentials. Agents 
 
 ## Workflow kinds and graph boundaries
 
-Top-level kinds are `foreground`, `turn-background`, and `global-background`. Module-owned kinds are `module-external` and `module-internal`. Node types are `agent`, `code`, `call`, `gate`, `join`, `workflow-return`, and `turn-finalize`.
+Top-level kinds are `foreground`, `turn-background`, and `global-background`. Module-owned kinds are `module-external` and `module-internal`. Node types are `agent`, `team`, `code`, `call`, `gate`, `join`, `workflow-return`, and `turn-finalize`.
 
 Dependencies form an acyclic graph. Parallel roots may run together; joins support `all`, `any`, `first-success`, `quorum`, and `collect`. A module workflow is never spliced into a parent graph: the complete child graph executes behind one calling parent node. Module workflows have no triggers. Only top-level completion/node events may wake another top-level workflow.
 
 `module-external` is read/transform-only with respect to authority and irreversible effects and may run concurrently. `module-internal` may update its module's authority or cause external effects. An internal workflow without explicit `writeLocks` locks its whole owner module, preserving the legacy serial lane. An internal workflow may instead declare exact owner-module collection locks; disjoint collection locks may run concurrently, while a whole-module lock conflicts with all collection locks in that module. Internal workflows default to one instance. A deliberately keyed multi-instance internal workflow must declare a stable `dedupeKey`, a positive finite `maxConcurrentInstances`, and exact collection locks; its key is resolved from normalized call `arguments`, and the ordinary lock scheduler still serializes instances that touch the same collection. A module workflow may call only `module-external` workflows. Top-level workflows may call either kind.
+
+A module workflow may declare `terminalFinalizer` for selected terminal statuses. The target must be a same-owner module workflow and receives the declared forwarded arguments plus `terminalStatus` and, when available, `terminalError`. This is a bounded lifecycle exception that permits a module-external operation to call its own module-internal short cleanup workflow; it does not grant ordinary external-to-internal calls. The runtime invokes the finalizer at most once and records finalizer success or failure without rewriting the parent operation's terminal status.
+
+## Team meeting nodes
+
+A `team` node is one workflow node with its own deterministic phase machine rather than one Agent binding. It declares exactly one Leader and Secretary, zero or more experts, an optional required base-retrieval ability, zero or more supplemental assistant abilities, an elastic but bounded agenda, independent per-phase call pools, and formal report/reference output paths. Every member binds its own Agent and optional model; the scheduler applies ordinary global and per-model concurrency to each member call, while the outer team node holds no model slot.
+
+The fixed sequence is initial analysis, required base retrieval, proposal, bounded discussion, assistance drain, final statements, Secretary draft, exactly one review round, Secretary revision, optional reference writing, and ready. Discussion may end early or continue to its hard maximum. Closing cannot start until all accepted assistance has reached a terminal state, and closing/review may not open new requests. Mandatory delivery phases use independent pools so discussion cannot consume their capacity.
+
+Leader, Secretary, and experts keep separate persistent Pi sessions and receive the complete published transcript. Assistant Agent/workflow/tool tasks run in isolated workspaces and expose only their reports at the next round boundary. Leader and experts see a public ability catalog—purpose, limitations, and natural-language request examples—but not adapters or execution parameters. The Secretary converts natural-language requests into bounded runtime calls. Task identity, speeches, budgets, events, artifacts, and phase state persist under the node workspace; an uncertain interrupted assistance task requires explicit workflow recovery before it is requeued with the same identity.
+
+Before the first model call, the runtime resolves every member and Agent-assistant binding, validates every workflow ability against the node's exact `workflowCalls`, validates input/tool adapters, and freezes the non-secret member prompt plus resolved model identity in the run. A configuration failure is terminal configuration feedback, not a model failure. An exhausted member retry may replace only that member's frozen model binding; it must not silently replace the whole team.
+
+Team readers may access only the node's declared frozen inputs, published shared material, explicitly registered deliveries, and their own member-local files. Paths are resolved through their real paths so a symbolic link cannot widen that boundary. Assistance deliveries preserve whether the registered output is a file or directory; unpublished assistant sessions and workspaces remain private.
+
+The persisted meeting state contains immutable speech ranges, assistance-task attempts, phase cursors, usage coverage, and a durable event journal. Cancellation closes dispatch before waiting work can acquire a slot and rejects late results. Recorded usage is added by per-call increments; if a provider or nested call omits usage, the workflow exposes the subtotal as incomplete rather than presenting it as exact.
 
 ## One call-and-wait mechanism
 

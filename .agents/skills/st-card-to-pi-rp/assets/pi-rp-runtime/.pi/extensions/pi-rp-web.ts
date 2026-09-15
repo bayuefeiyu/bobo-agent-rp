@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,9 +23,11 @@ import {
   validateContextProcessorDefinition,
 } from "../lib/rp-context-processors.mjs";
 import { removeSavedUserProfile } from "../lib/rp-user-profiles.mjs";
+import { defaultCommonSettings, mergeCommonSettings, normalizeCommonSettings } from "../lib/rp-common-settings.mjs";
 import { createRpConfigStore } from "../lib/rp-config-store.mjs";
+import { createConfigProfileStore } from "../lib/rp-config-profiles.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
-import { composeNodePrompt, composeWorkflowNodeDynamicContext, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
+import { composeNodePrompt, composeWorkflowNodeDynamicContext, moveModelTailToEnd, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
 import { assertDocumentWorkspaceAgentTools, canonicalWorkflowRef, normalizeWorkflowDefinition, resolveCodeNodeRoute, resolveNodeQueryBudget, workflowTriggerMatches } from "../lib/rp-workflows.mjs";
 import { normalizeFeatureModuleManifest } from "../lib/rp-feature-modules.mjs";
 import { normalizeResourceCatalog } from "../lib/rp-resource-catalog.mjs";
@@ -36,7 +38,7 @@ import { capabilityAllows, normalizeDataContract } from "../lib/rp-data-contract
 import { RpDataStore } from "../lib/rp-data-store.mjs";
 import { getDataRecord, getDataRecordHistory, queryAllData, queryData, queryDataStable } from "../lib/rp-data-query.mjs";
 import { createDataBatchDraft, executeDataBatch, executeDataBatchOrThrow, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
-import { inspectDataImpact, inspectDataIntegrity } from "../lib/rp-data-transactions.mjs";
+import { inspectDataImpact, inspectDataIntegrity, readDataReceipt } from "../lib/rp-data-transactions.mjs";
 import { dataValueAt } from "../lib/rp-data-index.mjs";
 import { finalizeNodeData, resolveCodeSubmissionBinding, resolveCodeSubmissionSourceReferences } from "../lib/rp-data-node-runtime.mjs";
 import { cleanupArtifacts, workflowNodeWorkspace } from "../lib/rp-data-artifacts.mjs";
@@ -46,6 +48,8 @@ import { artifactSourceReference, messageSourceReference, narrativeSourceLabel, 
 import { applyFrontendSettingsValues, frontendRegion, normalizeModuleFrontendView, validateFrontendWorkflowPayload } from "../lib/rp-module-frontend.mjs";
 import { stageWorkflowCallInputs, stageWorkspaceHandoffs } from "../lib/rp-workspace-handoff.mjs";
 import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "../lib/rp-workspace-snapshot.mjs";
+import { runTeamMeeting } from "../lib/rp-team-runtime.mjs";
+import { readAuthorizedTeamMaterial, readDeclaredTeamDocuments } from "../lib/rp-team-access.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -103,6 +107,8 @@ type ActiveBridge = {
   pending: boolean;
   turn: number;
   configStore: any;
+  configProfiles: any;
+  configToken: string;
   comfyUi: any;
   workflowEngine: RpWorkflowEngine;
   activeWorkflowId: string;
@@ -192,16 +198,6 @@ type CardSettings = {
   settings: Record<string, unknown>;
 };
 
-const defaultCommonSettings: CommonSettings = {
-  schemaVersion: 1,
-  user: {
-    playerName: "玩家",
-    description: "",
-    savedProfiles: [{ name: "玩家", description: "" }],
-  },
-  system: { fontSize: 16 },
-};
-
 function normalizeModuleDisplaySettings(value: any, modules: FeatureModule[]): ModuleDisplaySettings {
   const frontendModules = modules
     .filter(module => module.surface === "frontend")
@@ -248,33 +244,6 @@ function parseSkillDescription(text: string, label: string) {
   const description = match[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
   if (!description) throw new Error(`${label} frontmatter must contain a one-line description.`);
   return description.replace(/^['"]|['"]$/g, "");
-}
-
-function normalizeCommonSettings(value: any): CommonSettings {
-  const playerName = typeof value?.user?.playerName === "string" && value.user.playerName.trim()
-    ? value.user.playerName.trim()
-    : "玩家";
-  const description = typeof value?.user?.description === "string" ? value.user.description : "";
-  const savedProfiles = Array.isArray(value?.user?.savedProfiles)
-    ? value.user.savedProfiles
-      .filter((profile: any) => typeof profile?.name === "string" && profile.name.trim())
-      .map((profile: any) => {
-        const normalized = {
-          name: profile.name.trim(),
-          description: typeof profile.description === "string" ? profile.description : "",
-        } as { name: string; description: string; avatar?: string };
-        if (typeof profile.avatar === "string" && /^avatars\/[a-f0-9]{64}\.(png|jpg|webp)$/.test(profile.avatar)) {
-          normalized.avatar = profile.avatar;
-        }
-        return normalized;
-      })
-    : [];
-  if (!savedProfiles.some(profile => profile.name === playerName)) savedProfiles.push({ name: playerName, description });
-  return {
-    schemaVersion: 1,
-    user: { playerName, description, savedProfiles },
-    system: { fontSize: Number.isInteger(value?.system?.fontSize) ? value.system.fontSize : 16 },
-  };
 }
 
 function avatarExtension(mimeType: string) {
@@ -523,6 +492,92 @@ function httpError(status: number, message: string) {
   return error;
 }
 
+function mergeConfigValue(base: any, override: any): any {
+  if (!override || typeof override !== "object" || Array.isArray(override)) return structuredClone(base);
+  const result = structuredClone(base);
+  for (const [key, value] of Object.entries(override)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && result[key] && typeof result[key] === "object" && !Array.isArray(result[key])) result[key] = mergeConfigValue(result[key], value);
+    else result[key] = structuredClone(value);
+  }
+  return result;
+}
+
+function workflowConfigFields(workflow: any) {
+  const fields: any[] = [];
+  if (workflow.kind === "foreground") {
+    fields.push({ path: "/turnContext/recentCompleteTurns", label: "最近完整正文回合数", type: "integer", minimum: 1, maximum: 50, help: "决定正文 Agent 和依赖正文快照的工作流可读取多少个最近完整回合；下一次工作流实例生效。" });
+  }
+  if (workflow.defaults && typeof workflow.defaults === "object") {
+    fields.push({ path: "/defaults/agentId", label: "默认 Agent", type: "agent", help: "节点没有单独指定 Agent 时使用；下一次工作流实例生效。" });
+    fields.push({ path: "/defaults/modelId", label: "默认模型", type: "model", help: "节点和 Agent 都没有更高优先级模型时使用；下一次工作流实例生效。" });
+  }
+  for (let index = 0; index < (workflow.nodes || []).length; index += 1) {
+    const node = workflow.nodes[index];
+    if (node.type !== "agent") continue;
+    fields.push({ path: `/nodes/${index}/agentId`, label: `${node.title || node.id} · Agent`, type: "agent", help: `${node.description || "Agent 节点"} 修改只影响之后启动的实例。` });
+    fields.push({ path: `/nodes/${index}/modelId`, label: `${node.title || node.id} · 模型`, type: "model", help: "节点级模型覆盖，优先于工作流和 Agent 默认模型；下一次实例生效。" });
+  }
+  return fields;
+}
+
+function applyModuleProfile(featureModules: FeatureModule[], profile: any) {
+  if (!profile) return featureModules;
+  return featureModules.map(module => ({
+    ...module,
+    workflows: module.workflows.map(workflow => {
+      const qualified = `module/${module.id}/workflow/${workflow.id}`;
+      const override = profile.workflowOverrides?.[qualified] || profile.workflowOverrides?.[workflow.id];
+      return override ? normalizeWorkflowDefinition(mergeConfigValue(workflow, override)) : workflow;
+    }),
+  }));
+}
+
+async function moduleAgentCatalog(module: FeatureModule) {
+  const directory = resolve(module.moduleDirectory, "agents");
+  const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  });
+  const result = [];
+  for (const entry of entries.filter(item => item.isDirectory()).sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = resolve(directory, entry.name, "agent.json");
+    const value = await readFile(path, "utf8").then(JSON.parse).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    });
+    if (value?.id) result.push({ key: `module/${module.id}/agent/${value.id}`, group: `模块 · ${module.title}`, moduleId: module.id, base: value });
+  }
+  return result;
+}
+
+async function activeConfigCatalog(target: ActiveBridge) {
+  const agents = (await target.configStore.listAgents()).map((item: any) => ({ key: `${item.source === "card" ? "card" : "runtime"}/agent/${item.effective.id}`, group: "通用", base: item.base }));
+  for (const module of target.featureModules) agents.push(...await moduleAgentCatalog(module));
+  const workflows = (await target.configStore.listWorkflows()).map((workflow: any) => ({ key: `${workflow.source === "card" ? "card" : "runtime"}/workflow/${workflow.id}`, group: "通用", base: workflow, fields: workflowConfigFields(workflow) }));
+  for (const module of target.featureModules) for (const workflow of module.workflows) workflows.push({ key: `module/${module.id}/workflow/${workflow.id}`, group: `模块 · ${module.title}`, moduleId: module.id, base: workflow, fields: workflowConfigFields(workflow) });
+  const modules = [];
+  for (const module of target.featureModules) {
+    let base = {};
+    const settings = module.contract?.collections?.settings;
+    if (settings?.storage?.initialSnapshotFile) {
+      const raw = await readFile(resolve(module.moduleDirectory, settings.storage.initialSnapshotFile), "utf8").then(JSON.parse).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      });
+      const record = Array.isArray(raw) ? raw[0] : raw;
+      if (record?.data && typeof record.data === "object") base = record.data;
+    }
+    modules.push({
+      id: module.id,
+      title: module.title,
+      description: module.description,
+      base,
+      fields: (module.view?.regions || []).filter((region: any) => region.type === "settings-form").flatMap((region: any) => (region.fields || []).map((field: any) => ({ ...field, help: field.help || region.description || module.description, applyMode: "new-session", regionId: region.id }))),
+    });
+  }
+  return { schemaVersion: 1, agents, workflows, modules, runtimePolicy: await target.configStore.getRuntimePolicy() };
+}
+
 function resolveCardDirectory(cwd: string, card: string) {
   const cardsRoot = resolve(cwd, "cards");
   const target = card.includes("/") || card.includes("\\") ? resolve(cwd, card) : resolve(cardsRoot, card);
@@ -657,9 +712,11 @@ export default function (pi: ExtensionAPI) {
   }
   async function ensureFeatureModuleRecords(target: ActiveBridge) {
     if (!target.recordId || !target.sessionDirectory) return;
+    const profile = await target.configProfiles.getActive();
     await new RpDataStore({
       sessionDirectory: target.sessionDirectory,
       modules: dataModuleBindings(target.featureModules),
+      initialOverrides: profile?.moduleOverrides || {},
     }).initialize();
   }
 
@@ -907,11 +964,62 @@ export default function (pi: ExtensionAPI) {
     if (!active?.recordId || !active.sessionDirectory) throw new Error("The workflow has no active RP chat.");
     const { workflow, run, node, agent, binding } = task;
     assertDocumentWorkspaceAgentTools(node, agent);
-    const usesWorkspace = ["agent", "code", "call"].includes(node.type);
-    if (usesWorkspace) await stageWorkflowCallInputs({ sessionDirectory: active.sessionDirectory, workflow, run, node });
+    const usesWorkspace = !task.teamMember && ["agent", "team", "code", "call"].includes(node.type);
+    const callInputs = usesWorkspace ? await stageWorkflowCallInputs({ sessionDirectory: active.sessionDirectory, workflow, run, node }) : [];
     const triggeredDocuments = usesWorkspace ? await stageTriggeredDocuments({ sessionDirectory: active.sessionDirectory, workflow, run, node }) : [];
     const upstreamHandoffs = usesWorkspace ? [...triggeredDocuments, ...await stageWorkspaceHandoffs({ sessionDirectory: active.sessionDirectory, workflow, run, node })] : [];
     if (upstreamHandoffs.length) await active.workflowEngine.addSourceReferences(run.id, upstreamHandoffs.map(artifactSourceReference));
+    if (node.type === "team") {
+      const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+      for (const ability of [...(node.team.assistants || []), ...(node.team.baseRetrieval ? [node.team.baseRetrieval] : [])]) {
+        if (ability.enabled && ability.kind === "tool" && ability.adapter !== "declared-document-read-v1") {
+          throw new Error(`Unsupported team tool adapter: ${ability.adapter}`);
+        }
+      }
+      await mkdir(resolve(nodeWorkspace, "team", "shared"), { recursive: true });
+      const inputs = [
+        ...callInputs.map((input: any) => ({ id: input.id, producerNode: "$caller", kind: input.kind, format: "call-input", path: input.path, narrativeSource: null })),
+        ...upstreamHandoffs.map((artifact: any) => ({
+          id: artifact.id,
+          producerNode: artifact.nodeId,
+          kind: artifact.kind,
+          format: artifact.format,
+          path: artifact.stagedPath,
+          narrativeSource: artifact.narrativeSource,
+        })),
+      ];
+      await writeFile(resolve(nodeWorkspace, "team", "shared", "INPUTS.json"), `${JSON.stringify(inputs, null, 2)}\n`, "utf8");
+      const meetingContext = [
+        `Card: ${active.cardName} (${active.cardId})`,
+        `Workflow: ${workflow.id}; run: ${run.id}; turn: ${run.turn ?? "unknown"}`,
+        "The full authorized input catalog is at shared/INPUTS.json. Paths in that catalog are relative to the team node workspace; use the team read tool to inspect them.",
+        typeof run.payload?.currentInput === "string" && run.payload.currentInput.trim() ? `Current input:\n${run.payload.currentInput.trim()}` : "",
+        node.prompt || node.description || "",
+      ].filter(Boolean).join("\n\n");
+      const invokeTeamTool = async (request: any) => {
+        if (request?.adapter !== "declared-document-read-v1") throw new Error(`Unsupported team tool adapter: ${request?.adapter || "missing"}`);
+        const documents = await readDeclaredTeamDocuments({ documents: request.documents, nodeWorkspace, maxCharacters: request.arguments?.maxCharacters });
+        return { output: { adapter: request.adapter, request: String(request.text || ""), documents }, usage: null };
+      };
+      const deliverables = await runTeamMeeting({
+        config: node.team,
+        workspace: nodeWorkspace,
+        runId: run.id,
+        nodeId: node.id,
+        context: meetingContext,
+        invokeMember: (request: any) => task.invokeAgent(request),
+        startWorkflow: (request: any, options: any) => task.invokeWorkflow(request, { ...options, parallel: true }),
+        invokeTool: invokeTeamTool,
+        isCancelled: task.isCancelled,
+      });
+      const teamState = await readFile(resolve(nodeWorkspace, "team", "state.json"), "utf8").then(JSON.parse);
+      return {
+        output: { deliverables },
+        usage: teamState.usage,
+        usageComplete: (teamState.usage?.unrecordedCalls || 0) === 0,
+        context: { mode: "team", members: node.team.members.map((member: any) => ({ id: member.id, role: member.role, agentId: member.agentId, modelId: member.modelId })) },
+      };
+    }
     if (node.type === "turn-finalize") {
       if (!rpRun || rpRun.workflowRunId !== run.id) throw new Error("Turn finalization is not bound to the current RP turn.");
       const sourceNode = workflow.nodes.find((candidate: any) => candidate.id === node.narrative.fromNode);
@@ -1054,19 +1162,20 @@ export default function (pi: ExtensionAPI) {
         return access;
       };
       const data = Object.freeze({
+        receipt: (batchId: string) => readDataReceipt(active.sessionDirectory, batchId),
         query: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
           const budget = resolveNodeQueryBudget(access, run.payload);
-          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
+          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
         },
         queryAll: (request: any, page: any = {}) => {
           const access = accessFor(request.moduleId, request.collectionId);
           const budget = resolveNodeQueryBudget(access, run.payload);
-          return queryAllData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters }, page);
+          return queryAllData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt }, page);
         },
         get: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
-          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views });
+          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
         },
         resolve: async (value: string) => (await store.resolveIdentity(value)).filter((entry: any) => {
           const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
@@ -1132,7 +1241,9 @@ export default function (pi: ExtensionAPI) {
     const { profile, model } = await resolveConfiguredModel(active, binding.modelId);
     if (!model) throw new Error("No model is available for this workflow node.");
     const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
-    const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
+    const nodeWorkspace = node.metadata?.teamMemberWorkspace
+      ? resolve(node.metadata.teamMemberWorkspace)
+      : workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
     await mkdir(nodeWorkspace, { recursive: true });
     const upstreamIds = node.context.fromNodes.length ? node.context.fromNodes : node.dependsOn;
     const upstream = node.context.mode === "fixed"
@@ -1259,14 +1370,44 @@ export default function (pi: ExtensionAPI) {
         ? run.payload.currentInput
         : typeof run.textInput === "string" ? run.textInput : "",
       nodePrompt: node.prompt || node.description,
-      modelTail: null,
     });
     const sdk: any = await import("@earendil-works/pi-coding-agent");
     const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+    let teamControl: any = null;
     const nodeToolFactory = {
       name: "rp-node-tools",
       hidden: true,
       factory(workerPi: any) {
+        if (node.metadata?.teamMember === true) {
+          const teamRoot = resolve(node.metadata.teamSharedRoot);
+          const teamNodeRoot = dirname(teamRoot);
+          const memberRoot = resolve(nodeWorkspace);
+          workerPi.registerTool({
+            name: "rp_team_read",
+            label: "Read team material",
+            description: "Read one explicitly named meeting input, published transcript, delivered assistant report, or member-local artifact. Paths beginning shared/ resolve from the team root; delivered task paths must appear in shared/DELIVERIES.json; member/ resolves from your private member workspace.",
+            parameters: Type.Object({ path: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }),
+            async execute(_id: string, parameters: any) {
+              const result = await readAuthorizedTeamMaterial({ path: parameters.path, teamRoot, teamNodeRoot, memberRoot });
+              return { content: [{ type: "text", text: result.content }], details: { path: result.path, characters: result.characters } };
+            },
+          });
+          if ((task.teamMember?.role || task.teamMember?.member?.role) === "leader" && ["discussion"].includes(task.teamMember?.phase)) {
+            workerPi.registerTool({
+              name: "rp_team_control",
+              label: "Control team discussion",
+              description: "After completing this round's substantive speech, choose whether the meeting should continue, wait only for already requested assistance, or close discussion and drain all requests before final summing statements.",
+              parameters: Type.Object({
+                action: Type.Union([Type.Literal("continue"), Type.Literal("wait"), Type.Literal("close")]),
+                reason: Type.String({ minLength: 1, maxLength: 1000 }),
+              }, { additionalProperties: false }),
+              async execute(_id: string, parameters: any) {
+                teamControl = structuredClone(parameters);
+                return { content: [{ type: "text", text: `Discussion control recorded: ${parameters.action}.` }], details: teamControl };
+              },
+            });
+          }
+        }
         if (agent?.tools?.includes("rp_roll")) {
         const random = createRpRandomService({
           sessionDirectory: active.sessionDirectory!,
@@ -1359,7 +1500,7 @@ export default function (pi: ExtensionAPI) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
             const budget = resolveNodeQueryBudget(access, run.payload);
-            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
+            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
             return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
           },
         });
@@ -1373,7 +1514,7 @@ export default function (pi: ExtensionAPI) {
           async execute(_id: string, parameters: any) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
-            const result = await getDataRecord(dataStore, parameters, { capabilities: access.capabilities, views: access.views });
+            const result = await getDataRecord(dataStore, parameters, { capabilities: access.capabilities, views: access.views, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
             return { content: [{ type: "text", text: result ? JSON.stringify(result, null, 2) : "Record not found." }], details: result };
           },
         });
@@ -1419,26 +1560,38 @@ export default function (pi: ExtensionAPI) {
       noThemes: true,
       noContextFiles: true,
       systemPrompt: prompt.systemPrompt,
-      extensionFactories: [...(profile?.tailPrompt ? [{
+      extensionFactories: [nodeToolFactory, ...(profile?.tailPrompt ? [{
         name: "rp-model-tail",
         hidden: true,
         factory(workerPi: any) {
           workerPi.on("context", (event: any) => ({
-            messages: [...event.messages, { role: "user", content: profile.tailPrompt, timestamp: Date.now() }],
+            messages: moveModelTailToEnd(event.messages, profile.tailPrompt),
           }));
         },
-      }] : []), nodeToolFactory],
+      }] : [])],
     });
     await loader.reload();
     const permittedBuiltins = new Set(["read", "write", "edit", "bash", "grep", "find", "ls", "powershell"]);
     const permittedDataTools = new Set(["rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"]);
     const permittedRuntimeTools = new Set(["rp_roll"]);
-    const tools = (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)));
+    const tools = node.metadata?.teamMember === true
+      ? ["rp_team_read", ...(task.teamMember?.member?.role === "leader" && task.teamMember?.phase === "discussion" ? ["rp_team_control"] : [])]
+      : (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)));
     const hasResolvedWorkflowCall = node.workflowCalls?.some((binding: any) => {
       const [moduleId] = binding.target.split("/");
       return active.featureModules.find(module => module.id === moduleId)?.workflows.some(candidate => canonicalWorkflowRef(candidate) === binding.target);
     });
     if (hasResolvedWorkflowCall) tools.push("rp_call");
+    const teamSessionDirectory = node.metadata?.teamMember === true ? resolve(nodeWorkspace, ".session") : null;
+    if (teamSessionDirectory) await mkdir(teamSessionDirectory, { recursive: true });
+    const teamSessionPointer = teamSessionDirectory ? resolve(teamSessionDirectory, "CURRENT.txt") : null;
+    const previousTeamSession = teamSessionPointer ? await readFile(teamSessionPointer, "utf8").then((value: string) => value.trim()).catch((error: any) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }) : null;
+    const sessionManager = previousTeamSession
+      ? sdk.SessionManager.open(previousTeamSession, teamSessionDirectory)
+      : teamSessionDirectory ? sdk.SessionManager.create(nodeWorkspace, teamSessionDirectory) : sdk.SessionManager.inMemory(nodeWorkspace);
     const { session } = await sdk.createAgentSession({
       cwd: nodeWorkspace,
       modelRuntime: (active.context.modelRegistry as any).runtime,
@@ -1446,11 +1599,16 @@ export default function (pi: ExtensionAPI) {
       ...(profile?.thinking && profile.thinking !== "off" ? { thinkingLevel: profile.thinking } : {}),
       ...(tools.length ? { tools } : { noTools: "all" }),
       resourceLoader: loader,
-      sessionManager: sdk.SessionManager.inMemory(nodeWorkspace),
+      sessionManager,
     });
+    const usageMessageStart = session.messages.length;
     try {
       const userPrompt = prompt.contextMessages.join("\n\n") || "Execute this workflow node and return its result.";
       await session.prompt(userPrompt, { expandPromptTemplates: false, source: "extension" });
+      if (teamSessionPointer) {
+        const persistedSession = session.sessionFile || session.sessionManager?.getSessionFile?.() || null;
+        if (persistedSession) await writeFile(teamSessionPointer, `${persistedSession}\n`, "utf8");
+      }
       const assistant = [...session.messages].reverse().find((message: any) => message.role === "assistant");
       const content = messageText(assistant);
       if (!content) throw new Error("Workflow agent returned no text output.");
@@ -1492,8 +1650,9 @@ export default function (pi: ExtensionAPI) {
       }
       return {
         output,
+        ...(node.metadata?.teamMember === true ? { content, control: teamControl } : {}),
         assistantMessageId: rpRun?.assistantMessageId || null,
-        usage: tokenUsageFromMessages(session.messages),
+        usage: tokenUsageFromMessages(session.messages.slice(usageMessageStart)),
         processRecord: lastAgentExchange(session.messages),
         context: {
           mode: node.context.mode,
@@ -1503,7 +1662,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error));
-      (wrapped as any).usage = tokenUsageFromMessages(session.messages);
+      (wrapped as any).usage = tokenUsageFromMessages(session.messages.slice(usageMessageStart));
       throw wrapped;
     } finally {
       session.dispose();
@@ -1529,28 +1688,37 @@ export default function (pi: ExtensionAPI) {
     const commonSettingsPath = resolve(commonSettingsDirectory, "common.json");
     const avatarsDirectory = resolve(commonSettingsDirectory, "avatars");
     const cardSettingsPath = resolve(cardDirectory, "settings.json");
-    const configStore = createRpConfigStore(context.cwd, cardDirectory);
+    const configProfiles = createConfigProfileStore({
+      rootDirectory: context.cwd,
+      directory: resolve(cardDirectory, "config-profiles"),
+      scope: "card",
+      ownerId: manifest.id,
+    });
+    await configProfiles.ensure();
+    const configStore = createRpConfigStore(context.cwd, cardDirectory, { profileStore: configProfiles });
+    const configToken = randomBytes(24).toString("base64url");
     await Promise.all([
       mkdir(commonSettingsDirectory, { recursive: true }),
       mkdir(avatarsDirectory, { recursive: true }),
       configStore.ensure(),
     ]);
-    const commonSettings = normalizeCommonSettings(await readOrCreateJson<CommonSettings>(commonSettingsPath, defaultCommonSettings));
-    await writeFile(commonSettingsPath, `${JSON.stringify(commonSettings, null, 2)}\n`, "utf8");
+    const globalCommonSettings = normalizeCommonSettings(await readOrCreateJson<CommonSettings>(commonSettingsPath, defaultCommonSettings));
+    await writeFile(commonSettingsPath, `${JSON.stringify(globalCommonSettings, null, 2)}\n`, "utf8");
     const cardSettings = await readOrCreateJson<CardSettings>(cardSettingsPath, {
       schemaVersion: 1,
       cardId: manifest.id,
       settings: {},
     });
+    if (!cardSettings.settings || typeof cardSettings.settings !== "object" || Array.isArray(cardSettings.settings)) {
+      cardSettings.settings = {};
+    }
+    const commonSettings = mergeCommonSettings(globalCommonSettings, cardSettings.settings.common) as CommonSettings;
     const stableCardContext = await readCardContextFile(cardDirectory, manifest.fixed_context, "fixed_context");
-    const featureModules = await readFeatureModules(cardDirectory, manifest.feature_modules);
+    const featureModules = applyModuleProfile(await readFeatureModules(cardDirectory, manifest.feature_modules), await configProfiles.getActive());
     const comfyUi = createComfyUiService({ rootDirectory: context.cwd, cardDirectory, featureModules });
     const contextProcessors = await readContextProcessors(cardDirectory, manifest.context_processors, featureModules);
     const messagePolicy = await readMessageRetrievalPolicy(cardDirectory, manifest.context_policy);
     const messageSkill = await readMessageRetrievalSkill(cardDirectory, manifest.context_skill, messagePolicy);
-    if (!cardSettings.settings || typeof cardSettings.settings !== "object" || Array.isArray(cardSettings.settings)) {
-      cardSettings.settings = {};
-    }
     cardSettings.settings.featureModules = normalizeModuleDisplaySettings(cardSettings.settings.featureModules, featureModules);
     if (typeof cardSettings.settings.activeWorkflowId !== "string") cardSettings.settings.activeWorkflowId = "standard-rp";
     await writeFile(cardSettingsPath, `${JSON.stringify(cardSettings, null, 2)}\n`, "utf8");
@@ -1597,6 +1765,8 @@ export default function (pi: ExtensionAPI) {
       pending: false,
       turn: messages.reduce((maximum, message) => Math.max(maximum, message.binding.turn), 0),
       configStore,
+      configProfiles,
+      configToken,
       comfyUi,
       workflowEngine: null as any,
       activeWorkflowId: cardSettings.settings.activeWorkflowId as string,
@@ -1836,6 +2006,49 @@ export default function (pi: ExtensionAPI) {
             common: active?.commonSettings || defaultCommonSettings,
             card: active?.cardSettings || { schemaVersion: 1, cardId: manifest.id, settings: {} },
           }),
+          getConfigContext: async () => ({ mode: "play", scope: "card", ownerId: manifest.id, token: active?.configToken || configToken }),
+          authorizeConfigMutation: async (value: unknown) => {
+            if (value !== (active?.configToken || configToken)) throw httpError(403, "Configuration session token is invalid.");
+            return true;
+          },
+          getConfigCatalog: async () => activeConfigCatalog(active!),
+          listConfigProfiles: async () => configProfiles.list(),
+          getConfigProfile: async (profileId: string) => profileId === "builtin" ? {
+            schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "builtin", name: "内置默认", builtin: true,
+            models: await configStore.listModels(), agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {},
+            compatibility: { moduleProtocol: 6, workflowProtocol: 3 },
+          } : configProfiles.get(profileId),
+          createConfigProfile: async (value: any) => {
+            const seed = value.seedFromId === "builtin" ? {
+              schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "builtin", name: "内置默认",
+              models: await configStore.listModels(), agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {},
+              compatibility: { moduleProtocol: 6, workflowProtocol: 3 },
+            } : value.seedFromId ? await configProfiles.exportProfile(value.seedFromId) : null;
+            return configProfiles.create({ id: value.id, name: value.name, description: value.description, seed });
+          },
+          saveConfigProfile: async (value: any) => {
+            const saved = await configProfiles.save(value);
+            const listing = await configProfiles.list();
+            if (active && listing.activeProfileId === saved.id) {
+              active.featureModules = applyModuleProfile(await readFeatureModules(cardDirectory, manifest.feature_modules), await configProfiles.getActive());
+              active.workflowEngine.policy = await configStore.getRuntimePolicy();
+            }
+            return saved;
+          },
+          renameConfigProfile: async (profileId: string, value: any) => configProfiles.rename(profileId, value.name),
+          duplicateConfigProfile: async (profileId: string, value: any) => configProfiles.duplicate(profileId, value),
+          deleteConfigProfile: async (profileId: string) => configProfiles.remove(profileId),
+          importConfigProfile: async (value: any) => configProfiles.importProfile(value.profile, { id: value.id, name: value.name }),
+          exportConfigProfile: async (profileId: string) => configProfiles.exportProfile(profileId),
+          saveConfigModelSecret: async (profileId: string, modelId: string, value: any) => configProfiles.saveModelSecret(profileId, modelId, value.apiKey || ""),
+          activateConfigProfile: async (profileId: string) => {
+            const result = await configProfiles.activate(profileId);
+            if (active) {
+              active.featureModules = applyModuleProfile(await readFeatureModules(cardDirectory, manifest.feature_modules), await configProfiles.getActive());
+              active.workflowEngine.policy = await configStore.getRuntimePolicy();
+            }
+            return { ...result, appliesToExistingModuleData: false, workflowInstancesKeepStartSnapshot: true };
+          },
           listModels: async () => ({
             profiles: await configStore.listModels(),
             current: context.model ? {
@@ -1890,10 +2103,16 @@ export default function (pi: ExtensionAPI) {
           listAgents: async () => ({ agents: await configStore.listAgents() }),
           saveAgent: async (value: any, scope: "card" | "global") => configStore.saveAgent(value, { scope }),
           restoreAgent: async (agentId: string) => configStore.restoreAgent(agentId),
-          listWorkflows: async () => ({
-            activeWorkflowId: active?.activeWorkflowId || "standard-rp",
-            workflows: await configStore.listWorkflows(),
-          }),
+          listWorkflows: async () => {
+            const topLevel = (await configStore.listWorkflows()).map((workflow: any) => ({ ...workflow, reference: workflow.id }));
+            const moduleWorkflows = (active?.featureModules || []).flatMap(module => module.workflows.map((workflow: any) => ({
+              ...workflow,
+              source: "module",
+              moduleTitle: module.title,
+              reference: `${module.id}/${workflow.id}`,
+            })));
+            return { activeWorkflowId: active?.activeWorkflowId || "standard-rp", workflows: [...topLevel, ...moduleWorkflows] };
+          },
           listWorkflowRuns: async () => {
             if (!active?.sessionDirectory) return { runs: [] };
             const persisted = await readFile(resolve(active.sessionDirectory, "workflow", "runs.jsonl"), "utf8").then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))).catch(error => {
@@ -1904,7 +2123,51 @@ export default function (pi: ExtensionAPI) {
             for (const run of persisted) latest.set(run.id, { ...run, live: false });
             const blockingRunIds = new Set(active.workflowEngine.blockingTurnRuns().map((item: any) => item.runId));
             for (const run of active.workflowEngine.snapshot()) latest.set(run.id, { ...run, live: true, blocksNextTurn: blockingRunIds.has(run.id) });
-            return { runs: [...latest.values()].sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt))) };
+            const runs = await Promise.all([...latest.values()].map(async run => {
+              const enriched = structuredClone(run);
+              for (const node of Object.values(enriched.nodes || {}) as any[]) {
+                const teamStatePath = resolve(workflowNodeWorkspace(active!.sessionDirectory!, run.workflowId, run.id, node.id), "team", "state.json");
+                const teamState = await readFile(teamStatePath, "utf8").then(JSON.parse).catch(error => {
+                  if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                  throw error;
+                });
+                if (!teamState) continue;
+                node.team = {
+                  status: teamState.status,
+                  phase: teamState.phase,
+                  round: teamState.round,
+                  speechCount: teamState.speechSeq || 0,
+                  taskCounts: Object.values(teamState.tasks || {}).reduce((counts: any, task: any) => ({ ...counts, [task.status]: (counts[task.status] || 0) + 1 }), {}),
+                  budgets: teamState.budgets || {},
+                  usage: teamState.usage || null,
+                  error: teamState.error || null,
+                  failedMember: teamState.lastMemberFailure || null,
+                  transcriptAvailable: true,
+                };
+              }
+              return enriched;
+            }));
+            return { runs: runs.sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt))) };
+          },
+          openWorkflowTeamTranscript: async (runId: string, nodeId: string) => {
+            if (!active?.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening a team transcript.");
+            const live = active.workflowEngine.snapshot().find((item: any) => item.id === runId);
+            const persistedRun = live ? null : await readFile(resolve(active.sessionDirectory, "workflow", "runs.jsonl"), "utf8")
+              .then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)).reverse().find(item => item.id === runId))
+              .catch(error => {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                throw error;
+              });
+            const run = live || persistedRun;
+            if (!run?.nodes?.[nodeId]) throw httpError(404, "Team workflow node was not found.");
+            const transcriptPath = resolve(workflowNodeWorkspace(active.sessionDirectory, run.workflowId, runId, nodeId), "team", "shared", "TRANSCRIPT.md");
+            await readFile(transcriptPath, "utf8").catch(error => {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") throw httpError(404, "Team transcript was not found.");
+              throw error;
+            });
+            try { await openLocalDocument(transcriptPath); }
+            catch (error) { throw httpError(500, `Could not open the team transcript: ${(error as Error).message}`); }
+            return { opened: true, path: relative(active.context.cwd, transcriptPath).replaceAll("\\", "/") };
           },
           openWorkflowNodeProcessRecord: async (runId: string, nodeId: string) => {
             if (!active?.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening a workflow process record.");
@@ -1971,10 +2234,19 @@ export default function (pi: ExtensionAPI) {
             const node = workflow.nodes.find((item: any) => item.id === nodeId);
             if (!node) throw httpError(404, "Workflow node was not found.");
             if (value.saveAsCardDefault === true) {
-              node.modelId = value.modelId;
+              if (node.type === "team" && typeof value.memberId === "string") {
+                const members = [node.team?.leader, node.team?.secretary, ...(node.team?.experts || [])];
+                const member = value.memberId.startsWith("member:")
+                  ? members.find((item: any) => item?.id === value.memberId.slice("member:".length))
+                  : value.memberId.startsWith("assistant:")
+                    ? (node.team?.assistants || []).find((item: any) => item?.id === value.memberId.slice("assistant:".length))
+                    : null;
+                if (!member) throw httpError(400, "The failed team member could not be resolved in the card workflow.");
+                member.modelId = value.modelId;
+              } else node.modelId = value.modelId;
               await configStore.saveCardWorkflow(workflow);
             }
-            const retried = await active.workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true });
+            const retried = await active.workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true, memberId: value.memberId || null });
             return retried;
           },
           recoverWorkflowNode: async (runId: string, nodeId: string) => {
@@ -2422,7 +2694,11 @@ export default function (pi: ExtensionAPI) {
             const avatar = `avatars/${digest}${avatarExtension(mimeType)}`;
             await writeFile(resolveAvatarFile(commonSettingsDirectory, avatar), body);
             profile.avatar = avatar;
-            await writeFile(commonSettingsPath, `${JSON.stringify(active.commonSettings, null, 2)}\n`, "utf8");
+            active.cardSettings.settings.common = {
+              ...(active.cardSettings.settings.common as Record<string, unknown> || {}),
+              user: structuredClone(active.commonSettings.user),
+            };
+            await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
             if (previousAvatar && previousAvatar !== avatar) {
               await rm(resolveAvatarFile(commonSettingsDirectory, previousAvatar), { force: true });
             }
@@ -2724,7 +3000,11 @@ export default function (pi: ExtensionAPI) {
             const existingProfile = active.commonSettings.user.savedProfiles.find(profile => profile.name === playerName);
             if (existingProfile) existingProfile.description = description;
             else active.commonSettings.user.savedProfiles.push({ name: playerName, description });
-            await writeFile(commonSettingsPath, `${JSON.stringify(active.commonSettings, null, 2)}\n`, "utf8");
+            active.cardSettings.settings.common = {
+              ...(active.cardSettings.settings.common as Record<string, unknown> || {}),
+              user: structuredClone(active.commonSettings.user),
+            };
+            await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
             await updateMetadata();
             return {
               sessionId: active.recordId,
@@ -2744,7 +3024,11 @@ export default function (pi: ExtensionAPI) {
               active.playerName = settings.user.playerName;
               active.playerDescription = settings.user.description;
             }
-            await writeFile(commonSettingsPath, `${JSON.stringify(active.commonSettings, null, 2)}\n`, "utf8");
+            active.cardSettings.settings.common = {
+              ...(active.cardSettings.settings.common as Record<string, unknown> || {}),
+              user: structuredClone(active.commonSettings.user),
+            };
+            await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
             if (removed.avatar && !settings.user.savedProfiles.some(profile => profile.avatar === removed.avatar)) {
               await rm(resolveAvatarFile(commonSettingsDirectory, removed.avatar), { force: true }).catch(error => {
                 console.warn(`Could not remove deleted player avatar ${removed.avatar}:`, (error as Error).message);
@@ -2765,7 +3049,11 @@ export default function (pi: ExtensionAPI) {
           updateSystemSettings: async ({ fontSize }: { fontSize: number }) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
             active.commonSettings.system.fontSize = fontSize;
-            await writeFile(commonSettingsPath, `${JSON.stringify(active.commonSettings, null, 2)}\n`, "utf8");
+            active.cardSettings.settings.common = {
+              ...(active.cardSettings.settings.common as Record<string, unknown> || {}),
+              system: structuredClone(active.commonSettings.system),
+            };
+            await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
             return {
               common: active.commonSettings,
               card: active.cardSettings,

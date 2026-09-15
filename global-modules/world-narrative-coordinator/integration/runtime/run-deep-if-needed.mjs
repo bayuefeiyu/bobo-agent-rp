@@ -1,5 +1,6 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { queryAll } from "../../runtime/lib/data.mjs";
 
 async function exists(path) { try { await access(path); return true; } catch { return false; } }
 
@@ -25,16 +26,42 @@ export async function execute({ run, node, conversation, data, calls, workspace 
   if (!recommendation?.shouldStart) return { started: false, reason: "not-recommended" };
   const state = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
   const stateValue = state?.value?.data || state?.value || {};
-  if (!state || stateValue.status === "running") return { started: false, reason: "already-running" };
+  const operationId = `${run.id}-deep-operation`;
+  if (!state) return { started: false, reason: "deep-state-missing" };
+  if (stateValue.status === "running" && stateValue.currentRunId !== operationId) return { started: false, reason: "already-running", operationId: stateValue.currentRunId };
+  const resuming = stateValue.status === "running" && stateValue.currentRunId === operationId;
   const latest = [...conversation.messages].reverse().find(message => message.binding?.turn <= run.turn) || null;
+  const workflow = settingsValue.deep?.workflowMode === "team"
+    ? "world-narrative-coordinator/deep-director-team-planning"
+    : "world-narrative-coordinator/deep-director-planning";
   try {
+    let basisPath = null;
+    if (workflow.endsWith("deep-director-team-planning")) {
+      const deepReport = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-report-current", view: "deep-status" });
+      const referenceRecords = await queryAll(data, { moduleId: "world-narrative-coordinator", collectionId: "reference-library", recordTypes: ["director.reference-document"], view: "reference-index", includeInactive: true });
+      const sourceMessages = conversation.messages
+        .filter(message => (message.binding?.turn || 0) <= (run.visibleThroughTurn ?? run.turn ?? 0))
+        .map(message => ({ id: message.id, revision: message.revision || 1, turn: message.binding?.turn || 0 }));
+      basisPath = "deep-publication-basis.json";
+      await writeFile(resolve(workspace, basisPath), `${JSON.stringify({ schemaVersion: 1, operationId, basisTurn: run.turn, deepReport: deepReport ? { id: deepReport.id, revision: deepReport.revision } : null, references: Object.fromEntries(referenceRecords.map(item => [item.id, item.revision])), sourceMessages }, null, 2)}\n`, "utf8");
+    }
     const inherited = "trigger/story-context";
     const storyContext = await exists(resolve(workspace, inherited, "DOCUMENTS.md"))
       ? inherited
       : await prepareFallbackStoryContext({ run, node, conversation, workspace });
-    const result = await calls.invoke({ workflow: "world-narrative-coordinator/deep-director-planning", arguments: { triggerReasons: recommendation.reasonCodes || [] }, documents: { "story-context": storyContext }, outputPaths: {} });
-    return { started: true, childRunId: result.callId, triggerReasons: recommendation.reasonCodes || [] };
+    if (workflow.endsWith("deep-director-team-planning") && !resuming) {
+      await calls.invoke({ workflow: "world-narrative-coordinator/begin-deep-operation", arguments: { operationId, triggerReasons: recommendation.reasonCodes || [] }, outputPaths: {} });
+    }
+    const result = await calls.invoke({ workflow, arguments: { operationId, triggerReasons: recommendation.reasonCodes || [] }, documents: { "story-context": storyContext }, outputPaths: workflow.endsWith("deep-director-team-planning") ? { report: "team-deep-report.json", references: "team-deep-references.json" } : {} });
+    if (workflow.endsWith("deep-director-team-planning")) {
+      await calls.invoke({ workflow: "world-narrative-coordinator/commit-deep-operation", arguments: { operationId }, documents: { report: result.outputs.report, references: result.outputs.references, basis: basisPath }, outputPaths: {} });
+    }
+    return { started: true, resumed: resuming, childRunId: result.callId, operationId, workflow, triggerReasons: recommendation.reasonCodes || [] };
   } catch (error) {
+    if (workflow.endsWith("deep-director-team-planning")) {
+      await calls.invoke({ workflow: "world-narrative-coordinator/finish-deep-operation", arguments: { operationId, terminalStatus: "failed", terminalError: error instanceof Error ? error.message : String(error) }, outputPaths: {} }).catch(() => {});
+      throw error;
+    }
     const current = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
     const value = current?.value?.data || current?.value || {};
     if (current) await data.submit({ protocolVersion: 1, batchId: `${run.id}-deep-fail`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `${run.id}-deep-fail-state`, moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", recordType: "director.deep-state", action: "update", targetId: current.id, expectedRevision: current.revision, data: { ...value, status: "failed", currentRunId: null, failure: error instanceof Error ? error.message : String(error) }, note: null }] }, latest ? { binding: { turn: latest.binding.turn, messageId: latest.id }, sourceMessageIds: [latest.id] } : {});
