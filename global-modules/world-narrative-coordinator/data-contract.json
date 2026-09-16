@@ -1958,6 +1958,70 @@
           "actions": [
             "update"
           ]
+        },
+        "director.deep-operation": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/deep-operation.schema.json",
+          "indexes": {
+            "status": {
+              "path": "/data/status",
+              "type": "enum",
+              "values": ["running", "completed", "failed", "cancelled", "skipped"],
+              "operators": ["eq"]
+            },
+            "rootRunId": {
+              "path": "/data/rootRunId",
+              "type": "string",
+              "operators": ["eq"]
+            }
+          },
+          "searchableFields": [],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/status", "label": "status" }
+              ]
+            },
+            "deep-director": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/operationId", "label": "operationId" },
+                { "path": "/data/rootRunId", "label": "rootRunId" },
+                { "path": "/data/status", "label": "status" },
+                { "path": "/data/openedTurn", "label": "openedTurn" },
+                { "path": "/data/closedTurn", "label": "closedTurn" },
+                { "path": "/data/terminalError", "label": "terminalError" }
+              ]
+            },
+            "deep-status": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/operationId", "label": "operationId" },
+                { "path": "/data/status", "label": "status" },
+                { "path": "/data/openedTurn", "label": "openedTurn" },
+                { "path": "/data/closedTurn", "label": "closedTurn" }
+              ]
+            },
+            "daily-director": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/operationId", "label": "operationId" },
+                { "path": "/data/status", "label": "status" },
+                { "path": "/data/openedTurn", "label": "openedTurn" },
+                { "path": "/data/closedTurn", "label": "closedTurn" }
+              ]
+            },
+            "frontend": {
+              "format": "object",
+              "fields": [
+                { "path": "/data/status", "label": "status" },
+                { "path": "/data/openedTurn", "label": "openedTurn" },
+                { "path": "/data/closedTurn", "label": "closedTurn" }
+              ]
+            }
+          },
+          "actions": ["create", "update"]
         }
       }
     },
@@ -2409,6 +2473,7 @@
       ],
       "actions": [
         "query",
+        "create",
         "update"
       ],
       "views": [

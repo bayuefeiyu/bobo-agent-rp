@@ -9,12 +9,15 @@ import { normalizeFeatureModuleManifest } from "../../../../.agents/skills/st-ca
 import { normalizeDataContract } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-contracts.mjs";
 import { RpDataStore } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-store.mjs";
 import { executeDataBatch } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-changes.mjs";
+import { readDataReceipt } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-transactions.mjs";
 import { getDataRecord, queryData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-query.mjs";
+import { createDataReadView, readDataReadViewCollection } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-read-view.mjs";
 import { normalizeWorkflowDefinition } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-workflows.mjs";
 import { execute as materialize } from "../workflow/materialize-guidance.mjs";
 import { execute as preparePrivate } from "../workflow/prepare-private-context.mjs";
 import { execute as beginDeepOperation } from "../workflow/begin-deep-operation.mjs";
 import { execute as commitDeepOperation } from "../workflow/commit-deep-operation.mjs";
+import { execute as finishDeepOperation } from "../workflow/finish-deep-operation.mjs";
 import { buildAgentChangeBatch } from "../lib/agent-change-batch.mjs";
 import { applyArchiveContentVersions } from "../lib/archive-content-version.mjs";
 import { execute as captureArchiveOutbox } from "../../integration/runtime/capture-archive-outbox.mjs";
@@ -69,6 +72,37 @@ test("director workflows prepare private and authored context independently befo
   assert.deepEqual(team.writeLocks, []);
 });
 
+test("current-run guidance commits are visible to a later materializer without admitting unrelated live state", async () => {
+  const { store, access } = await fixture();
+  const view = await createDataReadView({ sessionDirectory: store.sessionDirectory, store, sourceId: "director-root-run" });
+  const receipt = await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "same-run-guidance",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [
+      { operationId: "guidance", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.guidance", action: "create", targetId: "guidance-new", data: { title: "本轮必须纠偏", content: "本轮新增重要约束", status: "active", channels: ["narrative"], kind: "correction", contextNature: null, strength: "guardrail", lastReviewedTurn: 1 } },
+      { operationId: "publication", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.publication", action: "update", targetId: "publication-narrative", expectedRevision: 1, data: { channel: "narrative", items: [{ guidanceId: "guidance-new", note: null }] } },
+    ],
+  }, { access, context: { workflowId: "pre-director-update", workflowRunId: "pre-run", nodeId: "commit", binding: { turn: 1, messageId: null } } });
+  assert.equal(receipt.status, "committed");
+  const permissions = { capabilities: access[0].capabilities, views: access[0].views };
+  const dataFor = batchIds => ({
+    get: request => getDataRecord(store, request, {
+      ...permissions,
+      readCollection: (moduleId, collectionId) => readDataReadViewCollection({ sessionDirectory: store.sessionDirectory, store, viewId: view.viewId, batchIds, moduleId, collectionId }),
+    }),
+  });
+  const run = { arguments: { publicationId: "publication-narrative", channel: "narrative" } };
+  const baselineWorkspace = await mkdtemp(resolve(tmpdir(), "director-guidance-baseline-"));
+  const baseline = await materialize({ run, workspace: baselineWorkspace, data: dataFor([]) });
+  assert.equal(baseline.guidanceCount, 0);
+  const causalWorkspace = await mkdtemp(resolve(tmpdir(), "director-guidance-causal-"));
+  const causal = await materialize({ run, workspace: causalWorkspace, data: dataFor([receipt.batchId]) });
+  assert.equal(causal.guidanceCount, 1);
+  assert.match(await readFile(resolve(causalWorkspace, "guidance.md"), "utf8"), /本轮新增重要约束/);
+});
+
 test("team deep output commits report, references, and running state atomically", async () => {
   const { store } = await fixture();
   const access = [
@@ -76,14 +110,21 @@ test("team deep output commits report, references, and running state atomically"
     { moduleId: "world-narrative-coordinator", collectionId: "reference-library", capabilities: ["director.reference.write"], views: ["maintenance"] },
   ];
   const permissions = request => access.find(item => item.collectionId === request.collectionId);
+  const readSnapshotAt = new Date().toISOString();
   const data = {
-    get: request => { const allowed = permissions(request); return getDataRecord(store, request, { capabilities: allowed.capabilities, views: [request.view] }); },
+    receipt: batchId => readDataReceipt(store.sessionDirectory, batchId),
+    get: request => { const allowed = permissions(request); return getDataRecord(store, request, { capabilities: allowed.capabilities, views: [request.view], visibleThroughTurn: 1, visibleThroughTime: readSnapshotAt }); },
+    getCurrent: request => { const allowed = permissions(request); return getDataRecord(store, request, { capabilities: allowed.capabilities, views: [request.view] }); },
     submit: (batch, options = {}) => executeDataBatch(store, batch, { access, context: { initiatorKind: "code", initiatorId: "test", workflowId: "test", workflowRunId: "deep-run", nodeId: "test", binding: options.binding || { turn: 1, messageId: null }, sourceReferences: [] } }),
   };
   const run = { id: "deep-run", turn: 1, arguments: { operationId: "operation-1", triggerReasons: ["test"] } };
   const conversation = { messages: [] };
   const reportBasis = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-report-current", view: "deep-director" }, { capabilities: ["director.deep.write"], views: ["deep-director"] });
+  await new Promise(resolve => setTimeout(resolve, 15));
   await beginDeepOperation({ run, conversation, data });
+  assert.equal(await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" }), null);
+  const currentState = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" });
+  assert.equal((currentState.value.data || currentState.value).status, "running");
   const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-commit-"));
   await mkdir(resolve(workspace, "inputs"), { recursive: true });
   const referenceUpdates = [{ referenceId: "reference-example", title: "示例参考", summary: "用于验证团队参考资料提交。", change: "created" }];
@@ -102,12 +143,74 @@ test("team deep output commits report, references, and running state atomically"
   await commitDeepOperation({ run, workspace, conversation, data });
   const replay = await commitDeepOperation({ run, workspace, conversation, data });
   const state = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" }, { capabilities: ["director.deep.write"], views: ["deep-director"] });
+  const operation = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "operation-1", view: "deep-director" }, { capabilities: ["director.deep.write"], views: ["deep-director"] });
   const committedReport = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-report-current", view: "deep-director" }, { capabilities: ["director.deep.write"], views: ["deep-director"] });
   const reference = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "reference-library", id: "reference-example", view: "maintenance" }, { capabilities: ["director.reference.write"], views: ["maintenance"] });
   assert.equal((state.value.data || state.value).status, "idle");
+  assert.equal((operation.value.data || operation.value).status, "completed");
   assert.equal((committedReport.value.data || committedReport.value).summary, "团队深度报告");
   assert.equal((reference.value.data || reference.value).title, "示例参考");
-  assert.equal(replay.receipt.idempotentReplay, true);
+  assert.equal(replay.reused, true);
+  assert.equal(replay.receipt.status, "committed");
+});
+
+test("a closed deep operation cannot reacquire ownership and a new operation can start", async () => {
+  const { store } = await fixture();
+  const access = [{ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", capabilities: ["director.deep.write"], views: ["deep-director"] }];
+  const permissions = { capabilities: access[0].capabilities, views: access[0].views };
+  const data = {
+    receipt: batchId => readDataReceipt(store.sessionDirectory, batchId),
+    get: request => getDataRecord(store, request, permissions),
+    getCurrent: request => getDataRecord(store, request, permissions),
+    submit: (batch, options = {}) => executeDataBatch(store, batch, { access, context: { initiatorKind: "code", initiatorId: "test", workflowId: "test", workflowRunId: "deep-lifecycle", nodeId: "test", binding: options.binding || { turn: 1, messageId: null }, sourceReferences: [] } }),
+  };
+  const conversation = { messages: [] };
+  const oldRun = { id: "old-wrapper", turn: 1, arguments: { operationId: "old-operation", triggerReasons: ["test"] } };
+  await beginDeepOperation({ run: oldRun, conversation, data });
+  await finishDeepOperation({ run: { ...oldRun, arguments: { ...oldRun.arguments, terminalStatus: "failed", terminalError: "injected failure" } }, conversation, data });
+
+  await assert.rejects(beginDeepOperation({ run: oldRun, conversation, data }), error => {
+    assert.equal(error.code, "operation_closed");
+    assert.equal(error.operationId, "old-operation");
+    assert.deepEqual(error.restart, { workflow: "world-narrative-coordinator/director-deep-wrapper", requiresNewRun: true });
+    return true;
+  });
+  let state = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" });
+  assert.equal((state.value.data || state.value).status, "failed");
+  assert.equal((state.value.data || state.value).currentRunId, null);
+  const closedOperation = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "old-operation", view: "deep-director" });
+  assert.equal((closedOperation.value.data || closedOperation.value).status, "failed");
+
+  const newRun = { id: "new-wrapper", turn: 2, arguments: { operationId: "new-operation", triggerReasons: ["restart"] } };
+  await beginDeepOperation({ run: newRun, conversation, data });
+  const lateFinish = await finishDeepOperation({ run: { ...oldRun, arguments: { ...oldRun.arguments, terminalStatus: "failed" } }, conversation, data });
+  assert.deepEqual(lateFinish, { finalized: false, reason: "operation-no-longer-owns-state" });
+  state = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" });
+  assert.equal((state.value.data || state.value).status, "running");
+  assert.equal((state.value.data || state.value).currentRunId, "new-operation");
+  const currentOperation = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "new-operation", view: "deep-director" });
+  assert.equal((currentOperation.value.data || currentOperation.value).status, "running");
+});
+
+test("resuming a legacy running operation creates its durable manifest", async () => {
+  const { store } = await fixture();
+  const access = [{ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", capabilities: ["director.deep.write"], views: ["deep-director"] }];
+  const permissions = { capabilities: access[0].capabilities, views: access[0].views };
+  const submit = (batch, options = {}) => executeDataBatch(store, batch, { access, context: { initiatorKind: "code", initiatorId: "test", workflowId: "test", workflowRunId: "legacy", nodeId: "test", binding: options.binding || { turn: 3, messageId: null }, sourceReferences: [] } });
+  const state = await getDataRecord(store, { moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-director" }, permissions);
+  await submit({ protocolVersion: 1, batchId: "legacy-running-state", status: "pending", commitPolicy: "atomic", operations: [{ operationId: "legacy-running-state", moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", recordType: "director.deep-state", action: "update", targetId: state.id, expectedRevision: state.revision, data: { ...(state.value.data || state.value), status: "running", currentRunId: "legacy-operation", lastTriggerTurn: 3 }, note: null }] });
+  const data = {
+    receipt: batchId => readDataReceipt(store.sessionDirectory, batchId),
+    get: request => getDataRecord(store, request, permissions),
+    getCurrent: request => getDataRecord(store, request, permissions),
+    submit,
+  };
+  const result = await beginDeepOperation({ run: { id: "legacy-begin", turn: 3, arguments: { operationId: "legacy-operation", rootRunId: "legacy-wrapper", triggerReasons: [] } }, conversation: { messages: [] }, data });
+  assert.equal(result.reused, true);
+  assert.equal(result.manifestRecovered, true);
+  const operation = await data.getCurrent({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "legacy-operation", view: "deep-director" });
+  assert.equal((operation.value.data || operation.value).rootRunId, "legacy-wrapper");
+  assert.equal((operation.value.data || operation.value).status, "running");
 });
 
 test("team deep commit rejects stale output and preserves a concurrently maintained reference", async () => {
@@ -167,6 +270,87 @@ test("team deep commit rejects a revised or removed source message", async () =>
   assert.equal(submissions, 0);
 });
 
+test("an uncommitted saved package revalidates its original message revisions", async () => {
+  const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-saved-source-"));
+  await mkdir(resolve(workspace, "inputs"), { recursive: true });
+  const report = {
+    basisTurn: 1, basisWorldTime: null, coverage: [], assumptions: [], invalidatingSignals: [], summary: "report", content: "content",
+    worldNarrativeTopics: [
+      { topicId: "active", title: "active", status: "active", premise: "premise", conditions: [], boundaries: [], suggestedAngles: [], invalidatingSignals: [] },
+      { topicId: "backup", title: "backup", status: "backup", premise: "premise", conditions: [], boundaries: [], suggestedAngles: [], invalidatingSignals: [] },
+    ], nextReviewTriggers: [], referenceUpdates: [],
+  };
+  const basis = { schemaVersion: 1, operationId: "saved-op", basisTurn: 1, deepReport: { id: "deep-report-current", revision: 1 }, references: {}, sourceMessages: [{ id: "message-1", revision: 1, turn: 1 }] };
+  await writeFile(resolve(workspace, "inputs/report.json"), JSON.stringify(report), "utf8");
+  await writeFile(resolve(workspace, "inputs/references.json"), "[]", "utf8");
+  await writeFile(resolve(workspace, "inputs/basis.json"), JSON.stringify(basis), "utf8");
+  let attempts = 0;
+  const data = {
+    receipt: async () => null,
+    getCurrent: async request => request.id === "deep-state-current"
+      ? { id: request.id, revision: 2, value: { status: "running", currentRunId: "saved-op" } }
+      : request.id === "saved-op"
+        ? { id: request.id, revision: 1, value: { operationId: "saved-op", rootRunId: "saved-run", status: "running", openedTurn: 1, closedTurn: null, terminalError: null } }
+        : { id: request.id, revision: 1, value: {} },
+    get: async request => request.id === "deep-state-current"
+      ? { id: request.id, revision: 2, value: { status: "running", currentRunId: "saved-op" } }
+      : request.id === "saved-op"
+        ? { id: request.id, revision: 1, value: { operationId: "saved-op", rootRunId: "saved-run", status: "running", openedTurn: 1, closedTurn: null, terminalError: null } }
+        : { id: request.id, revision: 1, value: {} },
+    submit: async () => { attempts += 1; throw new Error("injected pre-transaction failure"); },
+  };
+  const run = { id: "saved-run", turn: 1, arguments: { operationId: "saved-op" } };
+  await assert.rejects(commitDeepOperation({ run, workspace, conversation: { messages: [{ id: "message-1", revision: 1, binding: { turn: 1 } }] }, data }), /injected pre-transaction failure/);
+  await assert.rejects(commitDeepOperation({ run, workspace, conversation: { messages: [{ id: "message-1", revision: 2, binding: { turn: 1 } }] }, data }), error => error.code === "deep_source_conflict");
+  assert.equal(attempts, 1);
+});
+
+test("a recovery-required team child retains the deep operation ownership", async () => {
+  const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-recovery-owner-"));
+  let state = { status: "idle", currentRunId: null };
+  const data = {
+    get: async request => request.collectionId === "settings" ? { value: { enabled: true, deep: { workflowMode: "team" } } }
+      : request.collectionId === "private-state" ? { value: { deepRecommendation: { shouldStart: true } } }
+      : request.id === "deep-report-current" ? { id: request.id, revision: 1, value: {} }
+      : { id: request.id, revision: 1, value: state },
+    getCurrent: async request => request.id === "deep-state-current" ? { id: request.id, revision: 1, value: state } : null,
+    query: async () => ({ items: [], nextCursor: null }),
+  };
+  const calls = { invoke: async request => {
+    if (request.workflow.endsWith("/begin-deep-operation")) { state = { status: "running", currentRunId: request.arguments.operationId }; return { outputs: {} }; }
+    if (request.workflow.endsWith("/deep-director-team-planning")) throw Object.assign(new Error("recovery required"), { code: "workflow_recovery_required" });
+    if (request.workflow.endsWith("/finish-deep-operation")) { state = { status: "failed", currentRunId: null }; return { outputs: {} }; }
+    throw new Error(`Unexpected call: ${request.workflow}`);
+  } };
+  const run = { id: "wrapper-recovery", turn: 1 };
+  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_recovery_required");
+  assert.deepEqual(state, { status: "running", currentRunId: "wrapper-recovery-deep-operation" });
+});
+
+test("a model-choice child wait retains the deep operation ownership", async () => {
+  const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-model-choice-owner-"));
+  let state = { status: "idle", currentRunId: null };
+  const data = {
+    get: async request => request.collectionId === "settings" ? { value: { enabled: true, deep: { workflowMode: "team" } } }
+      : request.collectionId === "private-state" ? { value: { deepRecommendation: { shouldStart: true } } }
+      : request.id === "deep-report-current" ? { id: request.id, revision: 1, value: {} }
+      : { id: request.id, revision: 1, value: state },
+    getCurrent: async request => request.id === "deep-state-current" ? { id: request.id, revision: 1, value: state } : null,
+    query: async () => ({ items: [], nextCursor: null }),
+  };
+  let finishCalls = 0;
+  const calls = { invoke: async request => {
+    if (request.workflow.endsWith("/begin-deep-operation")) { state = { status: "running", currentRunId: request.arguments.operationId }; return { outputs: {} }; }
+    if (request.workflow.endsWith("/deep-director-team-planning")) throw Object.assign(new Error("model choice required"), { code: "workflow_child_waiting", childRunId: "team-child" });
+    if (request.workflow.endsWith("/finish-deep-operation")) { finishCalls += 1; state = { status: "failed", currentRunId: null }; return { outputs: {} }; }
+    throw new Error(`Unexpected call: ${request.workflow}`);
+  } };
+  const run = { id: "wrapper-model-choice", turn: 1 };
+  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_child_waiting");
+  assert.equal(finishCalls, 0);
+  assert.deepEqual(state, { status: "running", currentRunId: "wrapper-model-choice-deep-operation" });
+});
+
 test("deep wrapper routes single and team modes through their intended call sequences", async () => {
   const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-wrapper-"));
   await mkdir(resolve(workspace, "trigger/story-context"), { recursive: true });
@@ -208,6 +392,8 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
   const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-wrapper-resume-"));
   await mkdir(resolve(workspace, "trigger/story-context"), { recursive: true });
   await writeFile(resolve(workspace, "trigger/story-context/DOCUMENTS.md"), "# Frozen story context\n", "utf8");
+  const frozenBasis = { schemaVersion: 1, operationId: "wrapper-resume-deep-operation", basisTurn: 7, deepReport: { id: "deep-report-current", revision: 1 }, references: {}, sourceMessages: [{ id: "original-message", revision: 1, turn: 6 }] };
+  await writeFile(resolve(workspace, "deep-publication-basis.json"), JSON.stringify(frozenBasis), "utf8");
   const run = { id: "wrapper-resume", turn: 7 };
   const callsMade = [];
   const data = {
@@ -227,7 +413,8 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
   } };
   const result = await runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace });
   assert.equal(result.resumed, true);
-  assert.deepEqual(callsMade.map(item => item.workflow), ["world-narrative-coordinator/deep-director-team-planning", "world-narrative-coordinator/commit-deep-operation"]);
+  assert.deepEqual(callsMade.map(item => item.workflow), ["world-narrative-coordinator/begin-deep-operation", "world-narrative-coordinator/deep-director-team-planning", "world-narrative-coordinator/commit-deep-operation"]);
+  assert.deepEqual(JSON.parse(await readFile(resolve(workspace, "deep-publication-basis.json"), "utf8")), frozenBasis);
 });
 
 test("materializer preserves channel boundaries and deterministic priority", async () => {

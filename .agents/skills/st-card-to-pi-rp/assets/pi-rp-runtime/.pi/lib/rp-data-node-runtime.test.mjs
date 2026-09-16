@@ -79,6 +79,8 @@ test("trusted code source selection resolves exact visible message revisions", (
     { id: "m3", revision: 2, binding: { turn: 3 }, metadata: { narrativeSource: { producerKind: "agent", layer: "story" } } },
   ];
   assert.deepEqual(resolveCodeSubmissionSourceReferences(["m1", "m2"], { messages, visibleThroughTurn: 2 }).map(item => [item.id, item.revision]), [["m1", 1], ["m2", 4]]);
+  assert.deepEqual(resolveCodeSubmissionSourceReferences(["m1"], { messages, visibleThroughTurn: 2, expectedRevisions: { m1: 1 } }).map(item => [item.id, item.revision]), [["m1", 1]]);
+  assert.throws(() => resolveCodeSubmissionSourceReferences(["m2"], { messages, visibleThroughTurn: 2, expectedRevisions: { m2: 3 } }), error => error.code === "source_revision_conflict");
   assert.throws(() => resolveCodeSubmissionSourceReferences(["missing"], { messages, visibleThroughTurn: 3 }), /unknown message/);
   assert.throws(() => resolveCodeSubmissionSourceReferences(["m3"], { messages, visibleThroughTurn: 2 }), /beyond/);
   assert.throws(() => resolveCodeSubmissionSourceReferences(["m1", "m1"], { messages }), /duplicates/);

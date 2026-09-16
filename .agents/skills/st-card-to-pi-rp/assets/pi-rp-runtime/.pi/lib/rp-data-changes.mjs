@@ -202,8 +202,21 @@ async function applyGroup(store, baseStates, batch, operations, access, context,
   const results = [];
   for (const operation of operations) {
     try {
-      const record = await applyOperation(store, states, batch, operation, access, context, handlers);
-      results.push({ operationId: operation.operationId, moduleId: operation.moduleId, collectionId: operation.collectionId, recordType: operation.recordType, status: "committed", recordId: record?.id || operation.targetId || null, revision: record?.revision || null });
+      const response = await applyOperation(store, states, batch, operation, access, context, handlers);
+      const state = states.get(`${operation.moduleId}/${operation.collectionId}`);
+      const recordId = response?.id || operation.targetId || null;
+      const persisted = recordId ? state?.records.find(record => record.id === recordId) || null : null;
+      results.push({
+        operationId: operation.operationId,
+        moduleId: operation.moduleId,
+        collectionId: operation.collectionId,
+        recordType: operation.recordType,
+        action: operation.action,
+        status: "committed",
+        recordId,
+        revision: persisted?.revision || null,
+        record: persisted ? clone(persisted) : null,
+      });
     } catch (error) {
       return { ok: false, states: baseStates, results: [...results, operationFailure(operation, error)] };
     }
@@ -291,7 +304,12 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
 }
 
 export async function executeDataBatch(store, value, options = {}) {
-  const key = store.sessionDirectory;
+  return withDataCommitLock(store.sessionDirectory, () => executeDataBatchUnlocked(store, value, options));
+}
+
+export async function withDataCommitLock(sessionDirectory, operation) {
+  if (typeof operation !== "function") throw new Error("Data commit lock requires an operation.");
+  const key = sessionDirectory;
   const previous = commitQueues.get(key) || Promise.resolve();
   let release;
   const current = new Promise(resolve => { release = resolve; });
@@ -299,7 +317,7 @@ export async function executeDataBatch(store, value, options = {}) {
   commitQueues.set(key, queued);
   await previous.catch(() => {});
   try {
-    return await executeDataBatchUnlocked(store, value, options);
+    return await operation();
   } finally {
     release();
     if (commitQueues.get(key) === queued) commitQueues.delete(key);

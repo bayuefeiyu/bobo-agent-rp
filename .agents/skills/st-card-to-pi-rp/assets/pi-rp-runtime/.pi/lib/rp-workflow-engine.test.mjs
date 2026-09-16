@@ -103,6 +103,91 @@ test("team preflight freezes member prompts before the first member call", async
   assert.equal(completed.nodes.meeting.status, "completed");
 });
 
+test("team preflight freezes effective model parameters before the first member call", async () => {
+  let providerModel = "original-provider-model";
+  let usedModel = null;
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-frozen-model",
+    kind: "global-background",
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent", modelId: "profile" }, secretary: { id: "secretary", agentId: "secretary-agent", modelId: "profile" }, experts: [], assistants: [] } }],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, tools: [] }),
+    resolveModel: async id => ({ id, provider: "test", model: providerModel, apiKey: "must-not-persist", maxConcurrency: 2 }),
+    executor: async task => {
+      if (task.node.type === "team") {
+        providerModel = "edited-during-meeting";
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", modelId: "profile", role: "leader", prompt: "phase" });
+      } else usedModel = task.model.model;
+      return { output: {} };
+    },
+  });
+  const started = await engine.start(workflow, { id: "team-frozen-model-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.equal(usedModel, "original-provider-model");
+  assert.equal(completed.teamPreflights.meeting.bindings["member:leader"].modelSnapshot.model, "original-provider-model");
+  assert.equal("apiKey" in completed.teamPreflights.meeting.bindings["member:leader"].modelSnapshot, false);
+});
+
+test("team preflight rejects a workflow ability whose adapted request violates the target contract", async () => {
+  let teamExecuted = false;
+  const workflow = {
+    schemaVersion: 3,
+    id: "team-workflow-ability-preflight",
+    kind: "global-background",
+    nodes: [{
+      id: "meeting",
+      type: "team",
+      team: {
+        schemaVersion: 1,
+        leader: { id: "leader", agentId: "leader-agent" },
+        secretary: { id: "secretary", agentId: "secretary-agent" },
+        experts: [],
+        assistants: [],
+        baseRetrieval: {
+          id: "memory",
+          kind: "workflow",
+          target: "memory/retrieve",
+          inputAdapter: "memory-request-v1",
+          fixedArguments: { undeclared: true },
+          exports: ["memory-context"],
+          publicDescription: { title: "Memory" },
+        },
+      },
+      workflowCalls: ["memory/retrieve"],
+    }],
+  };
+  const target = {
+    schemaVersion: 3,
+    id: "retrieve",
+    ownerModuleId: "memory",
+    kind: "module-external",
+    interface: {
+      inputs: {
+        request: { type: "text", required: true },
+        budget: { type: "parameter", required: false, valueType: "object" },
+      },
+      exports: { "memory-context": { format: "document-set" } },
+    },
+    nodes: [
+      { id: "build", type: "code", outputs: { "memory-context": { path: "memory-context", format: "document-set" } } },
+      { id: "return", type: "workflow-return", dependsOn: ["build"], exports: { "memory-context": { fromNode: "build", output: "memory-context" } } },
+    ],
+  };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, tools: [] }),
+    resolveWorkflow: async reference => reference === "memory/retrieve" ? target : null,
+    executor: async () => { teamExecuted = true; return { output: {} }; },
+  });
+  const started = await engine.start(workflow, { id: "team-workflow-ability-preflight-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "failed");
+  assert.equal(teamExecuted, false);
+  assert.match(completed.nodes.meeting.error, /undeclared parameter inputs: undeclared/);
+});
+
 test("team retry model override applies only to the selected failed member", async () => {
   const seenModels = [];
   const workflow = {
@@ -540,18 +625,136 @@ test("restores an interrupted blocking node as a visible blocker", async () => {
   const waiting = new Promise(resolve => { release = resolve; });
   const workflow = { schemaVersion: 3, id: "restored-archive", title: "Restored archive", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "code" }] };
   const first = new RpWorkflowEngine({ executor: async () => { await waiting; return { output: "done" }; } });
-  const started = await first.start(workflow, { id: "restore-run", turn: 4 });
+  const started = await first.start(workflow, { id: "restore-run", turn: 4, dataReadViewId: "persisted-view", dataReadBatchIds: ["persisted-batch"] });
   while (first.snapshot()[0].nodes.archive.status !== "running") await new Promise(resolve => setImmediate(resolve));
   const saved = first.snapshot()[0];
   assert.equal(saved.instanceKey, "top-level/restored-archive");
   const restored = new RpWorkflowEngine({ executor: async () => ({ output: "unused" }) });
   const restoredRun = await restored.restore(workflow, saved);
   assert.equal(restoredRun.status, "awaiting-model-choice");
+  assert.equal(restoredRun.dataReadViewId, "persisted-view");
+  assert.deepEqual(restoredRun.dataReadBatchIds, ["persisted-batch"]);
   assert.equal(restored.hasBlockingTurnRun(), true);
   assert.equal(restored.blockingTurnRuns()[0].nodes[0].status, "awaiting-model-choice");
   await assert.rejects(restored.restore(workflow, saved), /already active/);
   await restored.cancel(restoredRun.id);
   release();
+});
+
+test("a parent waits on the exact child model choice and resumes the original call after retry", async () => {
+  const child = {
+    schemaVersion: 3,
+    id: "model-choice-child",
+    ownerModuleId: "demo",
+    kind: "module-external",
+    interface: { inputs: { requestId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
+    defaults: { modelId: "old-model" },
+    instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.requestId" },
+    nodes: [
+      { id: "work", type: "agent", retry: { maxAttempts: 1 } },
+      { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} },
+    ],
+  };
+  const parent = {
+    schemaVersion: 3,
+    id: "model-choice-parent",
+    kind: "global-background",
+    writeLocks: [{ moduleId: "demo", collectionId: "state" }],
+    nodes: [{ id: "call", type: "call", target: "demo/model-choice-child", arguments: { requestId: "request-1" }, outputPaths: {} }],
+  };
+  const competitor = {
+    schemaVersion: 3,
+    id: "model-choice-competitor",
+    kind: "global-background",
+    writeLocks: [{ moduleId: "demo", collectionId: "state" }],
+    nodes: [{ id: "work", type: "code" }],
+  };
+  const models = [];
+  let parentExecutions = 0;
+  let competitorExecutions = 0;
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    resolveModel: async id => ({ id, maxConcurrency: 2 }),
+    executor: async task => {
+      if (task.workflow.id === parent.id) {
+        parentExecutions += 1;
+        return { output: await task.invokeWorkflow({ workflow: task.node.target, arguments: task.node.arguments, outputPaths: {} }) };
+      }
+      if (task.workflow.id === competitor.id) {
+        competitorExecutions += 1;
+        return { output: {} };
+      }
+      if (task.node.id === "work") {
+        models.push(task.binding.modelId);
+        if (task.binding.modelId === "old-model") throw new Error("provider offline");
+      }
+      return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
+    },
+  });
+  const started = await engine.start(parent, { id: "model-choice-parent-run" });
+  const waiting = await engine.wait(started.id);
+  assert.equal(waiting.status, "awaiting-child");
+  assert.equal(waiting.nodes.call.status, "awaiting-child");
+  assert.equal(waiting.nodes.call.waitingOn.status, "awaiting-model-choice");
+  const childRun = engine.snapshot().find(run => run.callContext?.parentRunId === started.id);
+  assert.equal(childRun.status, "awaiting-model-choice");
+  assert.equal(waiting.nodes.call.waitingOn.childRunId, childRun.id);
+
+  const competing = await engine.start(competitor, { id: "model-choice-competitor-run" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(competitorExecutions, 0);
+  assert.equal(engine.snapshot().find(run => run.id === competing.id).nodes.work.status, "pending");
+
+  await engine.retry(childRun.id, "work", "replacement-model");
+  while (engine.snapshot().find(run => run.id === started.id).status === "awaiting-child") await new Promise(resolve => setImmediate(resolve));
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.equal((await engine.wait(competing.id)).status, "completed");
+  assert.equal(competitorExecutions, 1);
+  assert.equal(engine.snapshot().filter(run => run.workflowId === child.id).length, 1);
+  assert.equal(parentExecutions, 2);
+  assert.deepEqual(models, ["old-model", "replacement-model"]);
+});
+
+test("restored child-wait metadata reconnects the parent after a targeted child retry", async () => {
+  const child = {
+    schemaVersion: 3,
+    id: "restored-model-choice-child",
+    ownerModuleId: "demo",
+    kind: "module-external",
+    interface: { inputs: { requestId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
+    defaults: { modelId: "old-model" },
+    instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.requestId" },
+    nodes: [
+      { id: "work", type: "agent", retry: { maxAttempts: 1 } },
+      { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} },
+    ],
+  };
+  const parent = { schemaVersion: 3, id: "restored-model-choice-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/restored-model-choice-child", arguments: { requestId: "request-1" }, outputPaths: {} }] };
+  const makeEngine = () => new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    resolveModel: async id => ({ id, maxConcurrency: 2 }),
+    executor: async task => {
+      if (task.workflow.id === parent.id) return { output: await task.invokeWorkflow({ workflow: task.node.target, arguments: task.node.arguments, outputPaths: {} }) };
+      if (task.node.id === "work" && task.binding.modelId === "old-model") throw new Error("provider offline");
+      return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
+    },
+  });
+  const first = makeEngine();
+  const started = await first.start(parent, { id: "restored-model-choice-parent-run" });
+  const waiting = await first.wait(started.id);
+  const savedChild = first.snapshot().find(run => run.callContext?.parentRunId === started.id);
+  assert.equal(waiting.status, "awaiting-child");
+
+  const restored = makeEngine();
+  await restored.restore(parent, waiting);
+  await restored.restore(child, savedChild);
+  await restored.retry(savedChild.id, "work", "replacement-model");
+  while (restored.snapshot().find(run => run.id === started.id).status === "awaiting-child") await new Promise(resolve => setImmediate(resolve));
+  const completed = await restored.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.nodes.call.attempts.length, 2);
+  assert.equal(restored.snapshot().filter(run => run.workflowId === child.id).length, 1);
 });
 
 test("a call node waits for a module workflow while releasing its scheduler slot", async () => {
@@ -680,6 +883,99 @@ test("supports bounded multi-level calls through module-external workflows", asy
   assert.deepEqual(leafRun.trigger, trigger);
 });
 
+test("completed child data batches become visible only to later causal child calls", async () => {
+  let readerBatches = null;
+  const parent = {
+    schemaVersion: 3,
+    id: "causal-parent",
+    kind: "global-background",
+    nodes: [
+      { id: "write", type: "code", workflowCalls: ["state/write"] },
+      { id: "read", type: "code", dependsOn: ["write"], workflowCalls: ["state/read"] },
+    ],
+  };
+  const child = id => ({
+    schemaVersion: 3,
+    id,
+    ownerModuleId: "state",
+    kind: "module-external",
+    interface: { inputs: {}, exports: {} },
+    nodes: [
+      { id: "work", type: "code" },
+      { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} },
+    ],
+  });
+  const workflows = new Map([["state/write", child("write")], ["state/read", child("read")]]);
+  const engine = new RpWorkflowEngine({
+    onRunStart: async ({ run }) => run.callContext ? null : { dataReadViewId: "root-view", dataReadBatchIds: [] },
+    resolveWorkflow: async reference => workflows.get(reference),
+    executor: async task => {
+      if (task.workflow.id === "causal-parent") {
+        await task.invokeWorkflow({ workflow: task.node.id === "write" ? "state/write" : "state/read" });
+      } else if (task.node.id === "work" && task.workflow.id === "write") {
+        task.run.nodes[task.node.id].dataReadBatchIds.push("batch-from-writer");
+        task.run.dataReadBatchIds.push("batch-from-writer");
+      } else if (task.node.id === "work" && task.workflow.id === "read") {
+        readerBatches = [...task.run.dataReadBatchIds];
+      }
+      return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
+    },
+  });
+  const started = await engine.start(parent, { id: "causal-parent-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(readerBatches, ["batch-from-writer"]);
+  assert.deepEqual(completed.dataReadBatchIds, ["batch-from-writer"]);
+});
+
+test("parallel sibling calls keep independent read views until their explicit join", async () => {
+  let releaseWriter;
+  const readerStarted = new Promise(resolve => { releaseWriter = resolve; });
+  let parallelReaderBatches = null;
+  let joinedReaderBatches = null;
+  const parent = {
+    schemaVersion: 3,
+    id: "parallel-causal-parent",
+    kind: "global-background",
+    nodes: [
+      { id: "writer", type: "code", workflowCalls: ["state/write"] },
+      { id: "parallel-reader", type: "code", workflowCalls: ["state/read"] },
+      { id: "joined-reader", type: "code", dependsOn: ["writer", "parallel-reader"], workflowCalls: ["state/inspect"] },
+    ],
+  };
+  const child = id => ({
+    schemaVersion: 3,
+    id,
+    ownerModuleId: "state",
+    kind: "module-external",
+    interface: { inputs: {}, exports: {} },
+    nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
+  });
+  const workflows = new Map([["state/write", child("write")], ["state/read", child("read")], ["state/inspect", child("inspect")]]);
+  const targets = { writer: "state/write", "parallel-reader": "state/read", "joined-reader": "state/inspect" };
+  const engine = new RpWorkflowEngine({
+    onRunStart: async ({ run }) => run.callContext ? null : { dataReadViewId: "root-view", dataReadBatchIds: [] },
+    resolveWorkflow: async reference => workflows.get(reference),
+    executor: async task => {
+      if (task.workflow.id === "parallel-causal-parent") await task.invokeWorkflow({ workflow: targets[task.node.id] });
+      else if (task.node.id === "work" && task.workflow.id === "write") {
+        await readerStarted;
+        task.run.nodes[task.node.id].dataReadBatchIds.push("parallel-writer-batch");
+        task.run.dataReadBatchIds.push("parallel-writer-batch");
+      } else if (task.node.id === "work" && task.workflow.id === "read") {
+        parallelReaderBatches = [...task.run.dataReadBatchIds];
+        releaseWriter();
+      } else if (task.node.id === "work" && task.workflow.id === "inspect") joinedReaderBatches = [...task.run.dataReadBatchIds];
+      return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
+    },
+  });
+  const started = await engine.start(parent, { id: "parallel-causal-parent-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(parallelReaderBatches, []);
+  assert.deepEqual(joinedReaderBatches, ["parallel-writer-batch"]);
+});
+
 test("serializes module-internal workflows per owning module", async () => {
   const update = {
     schemaVersion: 3,
@@ -784,6 +1080,45 @@ test("parent recovery reuses the recovered child workflow instead of starting th
   assert.equal(completed.status, "completed");
   assert.equal(childAttempts, 2);
   assert.equal(engine.snapshot().filter(run => run.workflowId === "remote-child").length, 1);
+});
+
+test("a state-dependent child can disable completed-call reuse", async () => {
+  const child = {
+    schemaVersion: 3,
+    id: "lease-check",
+    ownerModuleId: "lease",
+    kind: "module-internal",
+    interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
+    instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId", reuseCompleted: false },
+    writeLocks: [{ moduleId: "lease", collectionId: "state" }],
+    nodes: [{ id: "acquire", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["acquire"], exports: {} }],
+  };
+  const parent = {
+    schemaVersion: 3,
+    id: "lease-parent",
+    kind: "global-background",
+    nodes: [{ id: "call-twice", type: "code", workflowCalls: ["lease/lease-check"] }],
+  };
+  let acquisitions = 0;
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: async () => child,
+    executor: async task => {
+      if (task.workflow.id === "lease-parent") {
+        const request = { workflow: "lease/lease-check", arguments: { operationId: "operation-1" }, outputPaths: {} };
+        await task.invokeWorkflow(request);
+        await task.invokeWorkflow(request);
+        return { output: "done" };
+      }
+      if (task.node.id === "acquire") acquisitions += 1;
+      if (task.node.type === "workflow-return") return { output: { outputs: {} } };
+      return { output: "done" };
+    },
+  });
+  const started = await engine.start(parent, { id: "lease-parent-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed");
+  assert.equal(acquisitions, 2);
+  assert.equal(engine.snapshot().filter(run => run.workflowId === "lease-check").length, 2);
 });
 
 test("allows parallel module-internal workflows on distinct declared collections", async () => {

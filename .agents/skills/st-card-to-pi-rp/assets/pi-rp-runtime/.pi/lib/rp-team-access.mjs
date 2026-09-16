@@ -9,6 +9,14 @@ function safeRelativePath(value) {
   return path;
 }
 
+function safeDeliveryId(value) {
+  const id = String(value || "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
+    throw new Error("Team delivery id must be a safe catalog identifier.");
+  }
+  return id;
+}
+
 async function catalog(path) {
   return readFile(path, "utf8").then(JSON.parse).catch(error => {
     if (error.code === "ENOENT") return [];
@@ -29,13 +37,13 @@ async function assertRealContainment(base, target) {
   }
 }
 
-export async function readAuthorizedTeamMaterial({ path, teamRoot, teamNodeRoot, memberRoot, maxCharacters = 120000 }) {
+export async function readAuthorizedTeamMaterial({ path, teamRoot, teamNodeRoot, memberRoot, deliveryId = null, maxCharacters = 120000 }) {
   const relativePath = safeRelativePath(path);
   const memberPath = relativePath.startsWith("member/");
   const publishedPath = relativePath.startsWith("shared/") || relativePath.startsWith("speeches/") || relativePath.startsWith("rounds/");
   const [inputs, deliveries] = await Promise.all([
     catalog(resolve(teamRoot, "shared", "INPUTS.json")),
-    catalog(resolve(teamRoot, "shared", "DELIVERIES.json")),
+    deliveryId ? catalog(resolve(teamRoot, "shared", "deliveries", `${safeDeliveryId(deliveryId)}.json`)) : [],
   ]);
   const inputPath = catalogAllows(inputs, relativePath);
   const deliveredPath = catalogAllows(deliveries, relativePath);

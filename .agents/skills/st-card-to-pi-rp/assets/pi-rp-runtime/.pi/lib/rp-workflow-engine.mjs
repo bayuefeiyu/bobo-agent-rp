@@ -13,12 +13,15 @@ import {
   resolveInstanceKey,
   resolveWorkflowInstanceInput,
   requireWorkflowNodeRecovery,
+  resumeWorkflowNodeAfterChild,
   startWorkflowNode,
+  waitWorkflowNodeOnChild,
   workflowInvocationFingerprint,
   workflowRuntimeIdentity,
 } from "./rp-workflows.mjs";
 import { normalizeRuntimePolicy, resolveNodeProfiles } from "./rp-model-config.mjs";
 import { mergeSourceReferences } from "./rp-narrative-source.mjs";
+import { adaptAssistanceTaskInput } from "./rp-assistance-tasks.mjs";
 
 const TERMINAL_RUN_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 const TERMINAL_NODE_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
@@ -34,14 +37,21 @@ function modelLimit(models, modelId) {
   return models.get(modelId)?.maxConcurrency || 10;
 }
 
+function frozenModelSnapshot(model) {
+  if (!model || typeof model !== "object") return null;
+  const { apiKey: _apiKey, ...safe } = structuredClone(model);
+  return safe;
+}
+
 export class RpWorkflowEngine {
-  constructor({ executor, resolveAgent, resolveModel, resolveWorkflow, policy = {}, onChange = async () => {}, beforeNodeComplete = async ({ result }) => result, onNodeComplete = async () => null, onRunTerminal = async () => null, nodeHistory = () => null }) {
+  constructor({ executor, resolveAgent, resolveModel, resolveWorkflow, policy = {}, onRunStart = async () => null, onChange = async () => {}, beforeNodeComplete = async ({ result }) => result, onNodeComplete = async () => null, onRunTerminal = async () => null, nodeHistory = () => null }) {
     if (typeof executor !== "function") throw new Error("RpWorkflowEngine requires an executor.");
     this.executor = executor;
     this.resolveAgent = resolveAgent || (() => null);
     this.resolveModel = resolveModel || (() => null);
     this.resolveWorkflow = resolveWorkflow || (() => null);
     this.policy = normalizeRuntimePolicy(policy);
+    this.onRunStart = onRunStart;
     this.onChange = onChange;
     this.beforeNodeComplete = beforeNodeComplete;
     this.onNodeComplete = onNodeComplete;
@@ -125,6 +135,8 @@ export class RpWorkflowEngine {
     const sameWorkflow = [...this.runs.values()].filter(entry => entry.identity === identity && !TERMINAL_RUN_STATUSES.has(entry.run.status));
     if (sameWorkflow.length >= workflow.instancePolicy.maxConcurrentInstances) throw new Error(`Workflow ${workflow.id} reached its instance limit.`);
     const run = createWorkflowRun(workflow, { ...options, instanceKey: key, invocationFingerprint, invocationIdentity });
+    const initialized = await this.onRunStart({ run, workflow, restoring: false });
+    if (initialized && typeof initialized === "object" && !Array.isArray(initialized)) Object.assign(run, structuredClone(initialized));
     const entry = {
       workflow,
       identity,
@@ -151,6 +163,13 @@ export class RpWorkflowEngine {
     const run = structuredClone(savedRun);
     if (run.workflowId !== workflow.id) throw new Error("Restored run does not match its workflow definition.");
     run.sourceReferences = mergeSourceReferences(run.sourceReferences || []);
+    run.dataReadViewId = typeof run.dataReadViewId === "string" && run.dataReadViewId ? run.dataReadViewId : null;
+    run.dataReadBatchIds = [...new Set(Array.isArray(run.dataReadBatchIds) ? run.dataReadBatchIds.filter(id => typeof id === "string" && id) : [])];
+    run.inheritedDataReadBatchIds = [...new Set(Array.isArray(run.inheritedDataReadBatchIds) ? run.inheritedDataReadBatchIds.filter(id => typeof id === "string" && id) : run.dataReadBatchIds)];
+    if (!run.dataReadViewId) {
+      const initialized = await this.onRunStart({ run, workflow, restoring: true });
+      if (initialized && typeof initialized === "object" && !Array.isArray(initialized)) Object.assign(run, structuredClone(initialized));
+    }
     for (const node of workflow.nodes) {
       if (!run.nodes?.[node.id]) throw new Error(`Restored run is missing node ${node.id}.`);
       if (run.nodes[node.id].status === "running") {
@@ -165,6 +184,7 @@ export class RpWorkflowEngine {
       }
     }
     if (Object.values(run.nodes).some(state => state.status === "awaiting-model-choice")) run.status = "awaiting-model-choice";
+    else if (Object.values(run.nodes).some(state => state.status === "awaiting-child")) run.status = "awaiting-child";
     const identity = workflowRuntimeIdentity(workflow);
     const instanceInput = resolveWorkflowInstanceInput(workflow, run);
     const expectedKey = resolveInstanceKey(workflow, instanceInput, run.id);
@@ -187,13 +207,15 @@ export class RpWorkflowEngine {
     await this.onChange(entry.run, workflow);
     if (entry.run.status === "running") queueMicrotask(() => { void this.#pump(entry); });
     else if (TERMINAL_RUN_STATUSES.has(entry.run.status) && !entry.terminalFinalized) queueMicrotask(() => { void this.#changed(entry); });
+    else if (entry.run.status === "awaiting-child") queueMicrotask(() => { void this.#reconcileWaitingChildren(entry); });
+    if (TERMINAL_RUN_STATUSES.has(entry.run.status) && entry.terminalFinalized) queueMicrotask(() => { void this.#resumeWaitingParents(entry); });
     return structuredClone(entry.run);
   }
 
   async wait(runId) {
     const entry = this.runs.get(runId);
     if (!entry) throw new Error(`Unknown workflow run: ${runId}`);
-    while ((!TERMINAL_RUN_STATUSES.has(entry.run.status) || !entry.terminalFinalized || ["pending", "running"].includes(entry.run.terminalFinalization?.status)) && !["awaiting-model-choice", "awaiting-recovery"].includes(entry.run.status)) {
+    while ((!TERMINAL_RUN_STATUSES.has(entry.run.status) || !entry.terminalFinalized || ["pending", "running"].includes(entry.run.terminalFinalization?.status)) && !["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(entry.run.status)) {
       const current = entry.wake;
       await current.promise;
     }
@@ -364,6 +386,13 @@ export class RpWorkflowEngine {
     const invokeAgent = request => this.#invokeTeamMember(entry, node, request);
     try {
       if (entry.stopped || entry.run.status === "cancelled") return;
+      const nodeState = entry.run.nodes[node.id];
+      if (!Array.isArray(nodeState.dataReadBatchIds)) {
+        nodeState.dataReadBatchIds = [...new Set([
+          ...(entry.run.inheritedDataReadBatchIds || []),
+          ...node.dependsOn.flatMap(dependencyId => entry.run.nodes[dependencyId]?.dataReadBatchIds || []),
+        ])];
+      }
       startWorkflowNode(entry.workflow, entry.run, node.id, {
         agentId: binding.agentId,
         modelId: binding.modelId,
@@ -373,7 +402,7 @@ export class RpWorkflowEngine {
       await this.#changed(entry);
       try {
         if (isTeam) await this.#preflightTeam(entry, node);
-        let result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
+        let result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
         if (entry.stopped || entry.run.status === "cancelled") return;
         result = await this.beforeNodeComplete({ workflow: entry.workflow, run: entry.run, node, agent, binding, result: result || {} }) || result || {};
         if (entry.stopped || entry.run.status === "cancelled") return;
@@ -408,6 +437,18 @@ export class RpWorkflowEngine {
           await this.#changed(entry);
           return;
         }
+        if (error?.code === "workflow_child_waiting") {
+          waitWorkflowNodeOnChild(entry.workflow, entry.run, node.id, {
+            childRunId: error.childRunId,
+            workflow: error.workflow,
+            status: error.childStatus,
+            failedNodeIds: error.failedNodeIds || [],
+            invocationFingerprint: error.invocationFingerprint || null,
+          });
+          await this.#changed(entry);
+          await this.#reconcileWaitingChildren(entry, node.id);
+          return;
+        }
         const deterministic = ["workflow_child_failed", "team_configuration_invalid"].includes(error?.code);
         const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic ? { retryable: false, awaitModelChoice: false, output: error.output || null } : {});
         if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
@@ -436,8 +477,10 @@ export class RpWorkflowEngine {
     const frozen = entry.run.teamPreflights?.[parentNode.id]?.bindings?.[freezeKey] || null;
     const agentId = request.agentId || request.member?.agentId;
     const persistedBinding = entry.run.teamMemberBindings?.[freezeKey] || frozen;
-    const requestedModelId = entry.modelOverrides[parentNode.id]
+    const explicitModelOverride = entry.modelOverrides[parentNode.id]
       || entry.teamModelOverrides[parentNode.id]?.[freezeKey]
+      || null;
+    const requestedModelId = explicitModelOverride
       || persistedBinding?.resolvedModelId
       || request.modelId
       || request.member?.modelId
@@ -483,7 +526,10 @@ export class RpWorkflowEngine {
       },
     };
     const binding = resolveNodeProfiles({ node: pseudoNode, workflow: entry.workflow, agent });
-    const model = cached ? cached.model : binding.modelId === "pi:current" ? null : await this.resolveModel(binding.modelId);
+    const persistedModel = !explicitModelOverride && persistedBinding?.resolvedModelId === binding.modelId
+      ? persistedBinding.modelSnapshot || null
+      : null;
+    const model = cached ? cached.model : persistedModel || await this.resolveModel(binding.modelId);
     if (!cached) {
       entry.teamMembers.set(freezeKey, { agentId, requestedModelId, agent, model });
       entry.run.teamMemberBindings ||= {};
@@ -492,6 +538,7 @@ export class RpWorkflowEngine {
         requestedModelId,
         resolvedAgentId: agent.id || agentId,
         resolvedModelId: binding.modelId,
+        modelSnapshot: frozenModelSnapshot(model),
         agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
@@ -501,7 +548,7 @@ export class RpWorkflowEngine {
     const schedulingKind = entry.run.effectiveSchedulingKind || entry.workflow.kind;
     await this.#acquire(schedulingKind, binding.modelId, model, entry);
     try {
-      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: async () => { throw new Error("Team members cannot call workflows directly; ask an advertised assistant in natural language."); }, invokeAgent: null, teamMember: request, isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
+      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: async () => { throw new Error("Team members cannot call workflows directly; ask an advertised assistant in natural language."); }, invokeAgent: null, teamMember: request, dataReadBatchIds: entry.run.nodes[parentNode.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [], isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
       if (entry.stopped || entry.run.status === "cancelled") throw Object.assign(new Error("The team workflow was cancelled before this member result could be published."), { code: "workflow_cancelled" });
       return result;
     } finally {
@@ -520,7 +567,8 @@ export class RpWorkflowEngine {
       const agent = await this.resolveAgent(spec.agentId);
       if (!agent) throw Object.assign(new Error(`Unknown team Agent profile: ${spec.agentId}`), { code: "team_configuration_invalid" });
       const resolved = resolveNodeProfiles({ node: { id: node.id, type: "agent", agentId: spec.agentId, modelId: spec.modelId }, workflow: entry.workflow, agent });
-      if (resolved.modelId !== "pi:current" && !await this.resolveModel(resolved.modelId)) {
+      const resolvedModel = await this.resolveModel(resolved.modelId);
+      if (resolved.modelId !== "pi:current" && !resolvedModel) {
         throw Object.assign(new Error(`Unknown team model profile: ${resolved.modelId}`), { code: "team_configuration_invalid" });
       }
       bindings[spec.key] = {
@@ -528,6 +576,7 @@ export class RpWorkflowEngine {
         requestedModelId: spec.modelId,
         resolvedAgentId: agent.id || spec.agentId,
         resolvedModelId: resolved.modelId,
+        modelSnapshot: frozenModelSnapshot(resolvedModel),
         agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
@@ -536,7 +585,19 @@ export class RpWorkflowEngine {
     for (const ability of [...node.team.assistants, ...(node.team.baseRetrieval ? [node.team.baseRetrieval] : [])].filter(item => item.enabled && item.kind === "workflow")) {
       const target = await this.resolveWorkflow(ability.target);
       if (!target) throw Object.assign(new Error(`Unknown team workflow ability: ${ability.target}`), { code: "team_configuration_invalid" });
-      assertWorkflowCallAllowed(entry.workflow, node, normalizeWorkflowDefinition(target));
+      const normalizedTarget = normalizeWorkflowDefinition(target);
+      assertWorkflowCallAllowed(entry.workflow, node, normalizedTarget);
+      try {
+        const adapted = adaptAssistanceTaskInput(ability, { text: "Team ability preflight request.", requestId: "preflight", documents: {} });
+        normalizeWorkflowCallRequest(normalizedTarget, {
+          text: adapted.text,
+          arguments: adapted.arguments,
+          documents: adapted.documents,
+          outputPaths: Object.fromEntries(ability.exports.map(id => [id, `team/preflight/${ability.id}/${id}`])),
+        }, workflowCallAuthorization(node, ability.target));
+      } catch (error) {
+        throw Object.assign(new Error(`Team workflow ability ${ability.id} is incompatible with ${ability.target}: ${error instanceof Error ? error.message : String(error)}`, { cause: error }), { code: "team_configuration_invalid" });
+      }
     }
     entry.run.teamPreflights ||= {};
     entry.run.teamPreflights[node.id] = { nodeId: node.id, bindings, completedAt: new Date().toISOString() };
@@ -568,27 +629,38 @@ export class RpWorkflowEngine {
     };
     const invocationFingerprint = workflowInvocationFingerprint(invocationIdentity);
     const childInstanceKey = resolveInstanceKey(normalizedTarget, normalizedRequest.arguments);
-    const completedChild = [...this.runs.values()].find(candidate => (normalizedTarget.instancePolicy.mode === "multiple"
-      ? candidate.run.instanceKey === childInstanceKey
-      : candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id)
-      && candidate.run.status === "completed"
-      && candidate.run.invocationFingerprint === invocationFingerprint
-      && canonicalWorkflowRef(candidate.workflow) === targetReference);
+    const linkedWait = parentEntry.run.nodes[parentNode.id]?.waitingOn;
+    if (linkedWait?.childRunId && linkedWait.workflow === targetReference && linkedWait.invocationFingerprint === invocationFingerprint) {
+      const linkedChild = this.runs.get(linkedWait.childRunId);
+      if (linkedChild) {
+        if (["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(linkedChild.run.status)) {
+          throw this.#childWaitingError(linkedChild.run, targetReference, invocationFingerprint);
+        }
+        if (linkedChild.run.status !== "completed") {
+          parentEntry.run.nodes[parentNode.id].waitingOn = null;
+          throw Object.assign(new Error(`Module workflow ${targetReference} ended with status ${linkedChild.run.status}.`), { code: "workflow_child_failed", childRunId: linkedChild.run.id, output: structuredClone(linkedChild.run) });
+        }
+        parentEntry.run.nodes[parentNode.id].waitingOn = null;
+        return this.#completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, linkedChild.run);
+      }
+    }
+    const completedChild = normalizedTarget.instancePolicy.reuseCompleted
+      ? [...this.runs.values()].find(candidate => (normalizedTarget.instancePolicy.mode === "multiple"
+        ? candidate.run.instanceKey === childInstanceKey
+        : candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id)
+        && candidate.run.status === "completed"
+        && candidate.run.invocationFingerprint === invocationFingerprint
+        && canonicalWorkflowRef(candidate.workflow) === targetReference)
+      : null;
     if (completedChild) {
-      const returnNode = normalizedTarget.nodes.find(node => node.type === "workflow-return");
-      const outputs = completedChild.run.nodes[returnNode.id]?.output?.outputs || completedChild.run.nodes[returnNode.id]?.output || {};
-      return {
-        callId: completedChild.run.id,
-        workflow: targetReference,
-        outputs,
-        outputArtifacts: Object.fromEntries(Object.entries(outputs).map(([id, path]) => [id, { path, kind: normalizedTarget.interface?.exports?.[id]?.kind || "file", format: normalizedTarget.interface?.exports?.[id]?.format || null }])),
-        usage: completedChild.run.usage || null,
-      };
+      return this.#completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, completedChild.run);
     }
     if (normalizedTarget.kind === "module-internal" && normalizedTarget.instancePolicy.mode === "single") {
       const activeChild = this.instances.get(childInstanceKey);
       if (activeChild && !TERMINAL_RUN_STATUSES.has(activeChild.run.status)) {
         const prior = await this.wait(activeChild.run.id);
+        if (prior.status === "awaiting-recovery") throw Object.assign(new Error(`Module workflow ${targetReference} requires recovery.`), { code: "workflow_recovery_required", childRunId: prior.id, output: prior });
+        if (["awaiting-model-choice", "awaiting-child"].includes(prior.status)) throw this.#childWaitingError(prior, targetReference, invocationFingerprint);
         if (prior.status !== "completed") throw Object.assign(new Error(`Prior module workflow ${targetReference} ended with status ${prior.status}.`), { code: "workflow_child_failed", childRunId: prior.id, output: prior });
         return this.#invokeAndWait(parentEntry, parentNode, request, options);
       }
@@ -599,6 +671,8 @@ export class RpWorkflowEngine {
       turn: parentEntry.run.turn,
       visibleThroughTurn: parentEntry.run.visibleThroughTurn,
       readSnapshotAt: parentEntry.run.readSnapshotAt,
+      dataReadViewId: parentEntry.run.dataReadViewId,
+      dataReadBatchIds: parentEntry.run.nodes[parentNode.id]?.dataReadBatchIds || parentEntry.run.inheritedDataReadBatchIds || [],
       effectiveSchedulingKind: parentEntry.run.effectiveSchedulingKind || parentEntry.workflow.kind,
       sourceReferences: parentEntry.run.sourceReferences || [],
       trigger: parentEntry.run.trigger && typeof parentEntry.run.trigger === "object"
@@ -626,7 +700,26 @@ export class RpWorkflowEngine {
     });
     const completed = await this.wait(child.id);
     if (completed.status === "awaiting-recovery") throw Object.assign(new Error(`Module workflow ${targetReference} requires recovery.`), { code: "workflow_recovery_required", childRunId: completed.id, output: completed });
+    if (["awaiting-model-choice", "awaiting-child"].includes(completed.status)) throw this.#childWaitingError(completed, targetReference, invocationFingerprint);
     if (completed.status !== "completed") throw Object.assign(new Error(`Module workflow ${targetReference} ended with status ${completed.status}.`), { code: "workflow_child_failed", childRunId: completed.id, output: completed });
+    return this.#completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, completed);
+  }
+
+  #childWaitingError(childRun, targetReference, invocationFingerprint) {
+    const failedNodeIds = Object.values(childRun.nodes || {}).filter(state => ["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(state.status)).map(state => state.id);
+    return Object.assign(new Error(`Module workflow ${targetReference} is waiting for user action.`), {
+      code: "workflow_child_waiting",
+      childRunId: childRun.id,
+      childStatus: childRun.status,
+      workflow: targetReference,
+      invocationFingerprint,
+      failedNodeIds,
+      output: structuredClone(childRun),
+    });
+  }
+
+  async #completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, completed) {
+    await this.#mergeChildReadBatches(parentEntry, parentNode, completed);
     const returnNode = normalizedTarget.nodes.find(node => node.type === "workflow-return");
     const outputs = completed.nodes[returnNode.id]?.output?.outputs || completed.nodes[returnNode.id]?.output || {};
     return {
@@ -636,6 +729,36 @@ export class RpWorkflowEngine {
       outputArtifacts: Object.fromEntries(Object.entries(outputs).map(([id, path]) => [id, { path, kind: normalizedTarget.interface?.exports?.[id]?.kind || "file", format: normalizedTarget.interface?.exports?.[id]?.format || null }])),
       usage: completed.usage || null,
     };
+  }
+
+  async #reconcileWaitingChildren(parentEntry, onlyNodeId = null) {
+    if (parentEntry.stopped || parentEntry.run.status === "cancelled") return;
+    const waitingStates = Object.values(parentEntry.run.nodes || {}).filter(state => state.status === "awaiting-child" && (!onlyNodeId || state.id === onlyNodeId));
+    for (const state of waitingStates) {
+      const child = this.runs.get(state.waitingOn?.childRunId);
+      if (!child || !TERMINAL_RUN_STATUSES.has(child.run.status) || !child.terminalFinalized) continue;
+      parentEntry.exhaustionOverrides.add(state.id);
+      resumeWorkflowNodeAfterChild(parentEntry.run, state.id);
+      await this.#changed(parentEntry);
+      if (parentEntry.run.status === "running") queueMicrotask(() => { void this.#pump(parentEntry); });
+    }
+  }
+
+  async #resumeWaitingParents(childEntry) {
+    if (!TERMINAL_RUN_STATUSES.has(childEntry.run.status) || !childEntry.terminalFinalized) return;
+    const parents = [...this.runs.values()].filter(candidate => Object.values(candidate.run.nodes || {}).some(state => state.status === "awaiting-child" && state.waitingOn?.childRunId === childEntry.run.id));
+    for (const parent of parents) await this.#reconcileWaitingChildren(parent);
+  }
+
+  async #mergeChildReadBatches(parentEntry, parentNode, childRun) {
+    const nodeState = parentEntry.run.nodes[parentNode.id];
+    const nodeMerged = [...new Set([...(nodeState?.dataReadBatchIds || []), ...(childRun.dataReadBatchIds || [])])];
+    const runMerged = [...new Set([...(parentEntry.run.dataReadBatchIds || []), ...(childRun.dataReadBatchIds || [])])];
+    if (nodeMerged.length === (nodeState?.dataReadBatchIds || []).length && runMerged.length === (parentEntry.run.dataReadBatchIds || []).length) return;
+    if (nodeState) nodeState.dataReadBatchIds = nodeMerged;
+    parentEntry.run.dataReadBatchIds = runMerged;
+    parentEntry.run.updatedAt = new Date().toISOString();
+    await this.#changed(parentEntry);
   }
 
   async #acquire(kind, modelId, model, entry = null) {
@@ -739,5 +862,6 @@ export class RpWorkflowEngine {
     await this.onChange(entry.run, entry.workflow);
     entry.wake.resolve();
     entry.wake = deferred();
+    await this.#resumeWaitingParents(entry);
   }
 }

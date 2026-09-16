@@ -591,6 +591,7 @@ export function normalizeWorkflowDefinition(value) {
   const maxConcurrentInstances = Number.isSafeInteger(input.instancePolicy?.maxConcurrentInstances) && input.instancePolicy.maxConcurrentInstances > 0
     ? Math.min(input.instancePolicy.maxConcurrentInstances, 10)
     : kind === "module-external" ? 10 : 1;
+  const reuseCompleted = input.instancePolicy?.reuseCompleted !== false;
   const recentCompleteTurns = Number.isSafeInteger(input.turnContext?.recentCompleteTurns)
     ? input.turnContext.recentCompleteTurns
     : 5;
@@ -628,6 +629,7 @@ export function normalizeWorkflowDefinition(value) {
       mode: instanceMode,
       maxConcurrentInstances: instanceMode === "single" ? 1 : maxConcurrentInstances,
       dedupeKey,
+      reuseCompleted,
     },
     trigger: normalizeTrigger(input.trigger, kind),
     turnContext: kind === "foreground" ? { recentCompleteTurns } : null,
@@ -670,6 +672,9 @@ export function createWorkflowRun(definition, options = {}) {
     turn: Number.isSafeInteger(options.turn) ? options.turn : null,
     visibleThroughTurn: Number.isSafeInteger(options.visibleThroughTurn) ? options.visibleThroughTurn : null,
     readSnapshotAt: typeof options.readSnapshotAt === "string" && options.readSnapshotAt ? options.readSnapshotAt : now,
+    dataReadViewId: typeof options.dataReadViewId === "string" && options.dataReadViewId ? options.dataReadViewId : null,
+    dataReadBatchIds: [...new Set(Array.isArray(options.dataReadBatchIds) ? options.dataReadBatchIds.filter(id => typeof id === "string" && id) : [])],
+    inheritedDataReadBatchIds: [...new Set(Array.isArray(options.dataReadBatchIds) ? options.dataReadBatchIds.filter(id => typeof id === "string" && id) : [])],
     trigger: options.trigger || { type: "manual" },
     arguments: options.arguments && typeof options.arguments === "object" && !Array.isArray(options.arguments) ? structuredClone(options.arguments) : {},
     textInput: typeof options.textInput === "string" ? options.textInput : "",
@@ -692,9 +697,11 @@ export function createWorkflowRun(definition, options = {}) {
       route: null,
       output: null,
       context: null,
+      dataReadBatchIds: null,
       usage: null,
       processRecord: null,
       narrativeSource: workflowNodeNarrativeSource(workflow, node),
+      waitingOn: null,
       error: null,
       startedAt: null,
       completedAt: null,
@@ -801,6 +808,7 @@ export function completeWorkflowNode(definition, run, nodeId, result = {}, now =
   state.context = result.context ?? null;
   state.usage = attempt.usage;
   state.route = result.route ?? null;
+  state.waitingOn = null;
   state.completedAt = now;
   state.error = null;
   run.updatedAt = now;
@@ -820,6 +828,7 @@ export function failWorkflowNode(definition, run, nodeId, error, options = {}, n
   attempt.usage = normalizeTokenUsage(options.usage ?? error?.usage);
   attempt.usageComplete = attempt.usage ? options.usageComplete !== false : false;
   state.error = message;
+  state.waitingOn = null;
   if (Object.hasOwn(options, "output")) state.output = structuredClone(options.output);
   if (options.retryable !== false && state.attempts.length < node.retry.maxAttempts) state.status = "awaiting-retry";
   else if (options.awaitModelChoice !== false) state.status = "awaiting-model-choice";
@@ -848,6 +857,41 @@ export function requireWorkflowNodeRecovery(definition, run, nodeId, result = {}
   state.completedAt = null;
   run.status = "awaiting-recovery";
   run.error = state.error;
+  run.updatedAt = now;
+  return state;
+}
+
+export function waitWorkflowNodeOnChild(definition, run, nodeId, waitingOn, now = new Date().toISOString()) {
+  normalizeWorkflowDefinition(definition);
+  const state = run.nodes[nodeId];
+  if (!state || state.status !== "running") throw new Error(`Node ${nodeId} is not running.`);
+  if (!waitingOn || typeof waitingOn !== "object" || typeof waitingOn.childRunId !== "string" || !waitingOn.childRunId) {
+    throw new Error("A child wait must identify the child workflow run.");
+  }
+  const attempt = state.attempts.at(-1);
+  attempt.status = "awaiting-child";
+  attempt.completedAt = now;
+  attempt.error = null;
+  state.status = "awaiting-child";
+  state.waitingOn = structuredClone(waitingOn);
+  state.error = null;
+  state.completedAt = null;
+  run.status = "awaiting-child";
+  run.waitingOn = { nodeId, ...structuredClone(waitingOn) };
+  run.error = null;
+  run.updatedAt = now;
+  return state;
+}
+
+export function resumeWorkflowNodeAfterChild(run, nodeId, now = new Date().toISOString()) {
+  const state = run.nodes[nodeId];
+  if (!state || state.status !== "awaiting-child") throw new Error(`Node ${nodeId} is not waiting on a child workflow.`);
+  state.status = "pending";
+  state.error = null;
+  const remaining = Object.values(run.nodes).find(candidate => candidate.status === "awaiting-child");
+  run.status = remaining ? "awaiting-child" : "running";
+  run.waitingOn = remaining ? { nodeId: remaining.id, ...structuredClone(remaining.waitingOn) } : null;
+  run.error = null;
   run.updatedAt = now;
   return state;
 }
@@ -894,7 +938,7 @@ export function maybeFinalizeWorkflow(definition, run, now = new Date().toISOStr
     run.updatedAt = now;
     return run;
   }
-  if (states.some(state => ["running", "pending", "awaiting-retry", "awaiting-model-choice"].includes(state.status))) return run;
+  if (states.some(state => ["running", "pending", "awaiting-retry", "awaiting-model-choice", "awaiting-child"].includes(state.status))) return run;
   const requiredFailed = workflow.nodes.some(node => node.required && ["failed", "cancelled"].includes(run.nodes[node.id].status));
   run.status = requiredFailed ? "failed" : "completed";
   let usage = emptyTokenUsage();

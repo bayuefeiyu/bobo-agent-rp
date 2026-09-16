@@ -1,11 +1,21 @@
 import { createHash } from "node:crypto";
 
+import { addTokenUsage, emptyTokenUsage, normalizeTokenUsage } from "./rp-token-usage.mjs";
+
 function fingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+export function adaptAssistanceTaskInput(ability, task) {
+  const documents = { ...structuredClone(ability.documents || {}), ...structuredClone(task.documents || {}) };
+  if (ability.inputAdapter === "natural-language-v1" || ability.inputAdapter === "memory-request-v1") {
+    return { text: task.text, arguments: structuredClone(ability.fixedArguments || {}), documents };
+  }
+  throw new Error(`Unsupported team input adapter: ${ability.inputAdapter}`);
+}
+
 export class AssistanceTaskManager {
-  constructor({ state, store, abilities, startWorkflow, invokeAgent, invokeTool, onUsage = () => {}, isCancelled = () => false, concurrency = 2 }) {
+  constructor({ state, store, abilities, startWorkflow, invokeAgent, invokeTool, onUsage = () => {}, onRetry = () => {}, isCancelled = () => false, concurrency = 2 }) {
     this.state = state;
     this.store = store;
     this.abilities = new Map(abilities.map(entry => [entry.id, entry]));
@@ -13,6 +23,7 @@ export class AssistanceTaskManager {
     this.invokeAgent = invokeAgent;
     this.invokeTool = invokeTool;
     this.onUsage = onUsage;
+    this.onRetry = onRetry;
     this.isCancelled = isCancelled;
     this.concurrency = concurrency;
     this.running = new Map();
@@ -31,10 +42,13 @@ export class AssistanceTaskManager {
       if (prior.fingerprint !== taskFingerprint) throw Object.assign(new Error(`Assistance request ${requestId} was reused with different input.`), { code: "team_task_conflict" });
       const existing = this.state.tasks?.[prior.taskId];
       if (existing && ["failed", "timed-out"].includes(existing.status)) {
-        existing.attempt = (existing.attempt || 1) + 1;
+        const nextAttempt = (existing.attempt || 1) + 1;
+        await this.onRetry({ task: structuredClone(existing), nextAttempt });
+        existing.attempt = nextAttempt;
         existing.status = "queued";
         existing.error = null;
         existing.result = null;
+        delete existing.publication;
         delete existing.startedAt;
         delete existing.completedAt;
         if (!this.state.pendingTaskIds.includes(existing.taskId)) this.state.pendingTaskIds.push(existing.taskId);
@@ -77,10 +91,15 @@ export class AssistanceTaskManager {
 
   async wait(taskIds = null) {
     const ids = taskIds || Object.keys(this.state.tasks || {});
-    while (ids.some(id => !["succeeded", "failed", "timed-out", "cancelled"].includes(this.state.tasks[id]?.status))) {
-      const running = [...this.running.values()];
-      if (!running.length && !this.queue.length) break;
-      await Promise.race(running.length ? running : [new Promise(resolve => setTimeout(resolve, 10))]);
+    while (true) {
+      const running = ids.map(id => this.running.get(id)).filter(Boolean);
+      if (running.length) {
+        await Promise.race(running);
+        continue;
+      }
+      if (!ids.some(id => !["succeeded", "failed", "timed-out", "cancelled"].includes(this.state.tasks[id]?.status))) break;
+      if (!this.queue.length) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
     }
     return ids.map(id => this.get(id));
   }
@@ -102,14 +121,18 @@ export class AssistanceTaskManager {
 
   async #execute(task) {
     const ability = this.abilities.get(task.abilityId);
+    const attempt = task.attempt || 1;
+    const attemptId = `${task.taskId}#attempt-${attempt}`;
     task.status = "running";
     task.startedAt = new Date().toISOString();
     await this.store.event(this.state, "assistance-task-started", { taskId: task.taskId, abilityId: task.abilityId });
     let timer;
+    let timedOut = false;
+    let observedUsage = null;
     try {
       this.#assertActive();
-      const adapted = this.#adaptInput(ability, task);
-      const execution = ability.kind === "workflow"
+      const adapted = adaptAssistanceTaskInput(ability, task);
+      const execution = Promise.resolve(ability.kind === "workflow"
         ? this.startWorkflow({
             workflow: ability.target,
             text: adapted.text,
@@ -120,6 +143,7 @@ export class AssistanceTaskManager {
         : ability.kind === "agent"
           ? this.invokeAgent({
               executionId: task.taskId,
+              attemptId,
               abilityId: ability.id,
               agentId: ability.agentId,
               modelId: ability.modelId,
@@ -127,20 +151,24 @@ export class AssistanceTaskManager {
               prompt: [ability.prompt, task.text].filter(Boolean).join("\n\n"),
               documents: task.documents,
             })
-          : this.invokeTool({ adapter: ability.adapter, text: adapted.text, documents: adapted.documents, arguments: adapted.arguments });
-      const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`Assistance task timed out after ${ability.timeoutMs}ms.`), { code: "team_task_timeout" })), ability.timeoutMs); });
+          : this.invokeTool({ adapter: ability.adapter, text: adapted.text, documents: adapted.documents, arguments: adapted.arguments }));
+      execution.then(
+        result => { if (timedOut) void this.#recordLateUsage(task, ability, result?.usage || null, "late-succeeded", attempt); },
+        error => { if (timedOut) void this.#recordLateUsage(task, ability, error?.usage || null, "late-failed", attempt); },
+      );
+      const timeout = new Promise((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(Object.assign(new Error(`Assistance task timed out after ${ability.timeoutMs}ms.`), { code: "team_task_timeout" })); }, ability.timeoutMs); });
       const result = await Promise.race([execution, timeout]);
+      observedUsage = result?.usage || null;
+      await this.#recordAttemptUsage(task, ability, observedUsage, "returned", attempt);
       this.#assertActive();
-      this.onUsage(result?.usage || null, { task, ability });
       task.result = ability.kind === "workflow" && result && typeof result === "object"
         ? {
             ...result,
             outputs: Object.fromEntries(Object.entries(result.outputs || {}).map(([id, path]) => [id, typeof path === "string" && path.startsWith("team/") ? path.slice("team/".length) : path])),
           }
         : result;
-      task.status = "succeeded";
-      task.completedAt = new Date().toISOString();
-      await this.store.artifact(`tasks/${task.taskId}/report.json`, `${JSON.stringify(task.result, null, 2)}\n`);
+      task.status = "publishing";
+      const report = await this.store.artifact(`tasks/${task.taskId}/report.json`, `${JSON.stringify(task.result, null, 2)}\n`);
       const delivered = [
         { path: `tasks/${task.taskId}/report.json`, kind: "file", taskId: task.taskId },
         ...Object.entries(task.result?.outputs || {}).filter(([, path]) => typeof path === "string").map(([id, path]) => ({
@@ -150,11 +178,30 @@ export class AssistanceTaskManager {
         })),
       ];
       await this.store.registerDeliveries(delivered);
-      await this.store.event(this.state, "assistance-task-succeeded", { taskId: task.taskId, abilityId: task.abilityId });
+      task.completedAt = new Date().toISOString();
+      task.publication = {
+        status: "confirmed",
+        report,
+        deliveries: structuredClone(delivered),
+        confirmedAt: task.completedAt,
+      };
+      const confirmation = await this.store.event(this.state, "assistance-task-succeeded", {
+        taskId: task.taskId,
+        abilityId: task.abilityId,
+        completedAt: task.completedAt,
+        report,
+        deliveries: delivered,
+        finalStatus: "succeeded",
+      });
+      task.publication.confirmationEventSeq = confirmation.seq;
+      task.status = "succeeded";
+      await this.#recordAttemptUsage(task, ability, observedUsage, "succeeded", attempt);
     } catch (error) {
       task.status = error?.code === "workflow_cancelled" ? "cancelled" : error?.code === "team_task_timeout" ? "timed-out" : "failed";
       task.error = error instanceof Error ? error.message : String(error);
       task.completedAt = new Date().toISOString();
+      if (task.publication) task.publication.status = "unconfirmed";
+      await this.#recordAttemptUsage(task, ability, error?.usage || observedUsage || null, task.status, attempt);
       await this.store.event(this.state, `assistance-task-${task.status}`, { taskId: task.taskId, abilityId: task.abilityId, error: task.error });
     } finally {
       clearTimeout(timer);
@@ -163,19 +210,50 @@ export class AssistanceTaskManager {
     }
   }
 
-  #adaptInput(ability, task) {
-    const documents = { ...structuredClone(ability.documents), ...structuredClone(task.documents) };
-    if (ability.inputAdapter === "natural-language-v1") {
-      return { text: task.text, arguments: structuredClone(ability.fixedArguments), documents };
+  async #recordAttemptUsage(task, ability, rawUsage, outcome, attempt) {
+    const attemptId = `${task.taskId}#attempt-${attempt}`;
+    const normalized = normalizeTokenUsage(rawUsage && typeof rawUsage === "object" && !Number.isFinite(rawUsage.totalTokens) && Number.isFinite(rawUsage.total)
+      ? { ...rawUsage, totalTokens: rawUsage.total }
+      : rawUsage);
+    task.usageAttempts ||= {};
+    const existing = task.usageAttempts[attemptId] || null;
+    const previous = existing?.usage || null;
+    const merged = normalized
+      ? Object.fromEntries(["input", "output", "cacheRead", "cacheWrite", "totalTokens"].map(key => [key, Math.max(previous?.[key] || 0, normalized[key])]))
+      : previous;
+    const status = merged ? (rawUsage?.partial === true ? "partial" : "recorded") : "unknown";
+    const changed = Boolean(merged) && (!previous || Object.keys(merged).some(key => merged[key] !== previous[key]));
+    const shouldNotify = !existing?.accounted || changed || existing.status !== status;
+    task.usageAttempts[attemptId] = {
+      attemptId,
+      attempt,
+      status,
+      outcome,
+      usage: merged || null,
+      accounted: existing?.accounted || shouldNotify,
+      updatedAt: new Date().toISOString(),
+    };
+    const recorded = Object.values(task.usageAttempts).filter(entry => entry.usage);
+    task.usage = recorded.length ? recorded.reduce((total, entry) => addTokenUsage(total, entry.usage), emptyTokenUsage()) : null;
+    if (shouldNotify) await this.onUsage(merged || null, { attemptId, attempt, status, outcome, task, ability });
+    return { changed, status, usage: merged || null };
+  }
+
+  async #recordLateUsage(task, ability, usage, outcome, attempt) {
+    try {
+      const update = await this.#recordAttemptUsage(task, ability, usage, outcome, attempt);
+      if (!update.changed) return;
+      await this.store.event(this.state, "assistance-task-usage-supplemented", {
+        taskId: task.taskId,
+        abilityId: task.abilityId,
+        attempt,
+        attemptId: `${task.taskId}#attempt-${attempt}`,
+        outcome,
+        usage: update.usage,
+      });
+    } catch {
+      // Usage reconciliation must never publish a late business result or change the terminal task outcome.
     }
-    if (ability.inputAdapter === "memory-request-v1") {
-      return {
-        text: task.text,
-        arguments: { query: task.text, requestId: task.requestId, ...structuredClone(ability.fixedArguments) },
-        documents,
-      };
-    }
-    throw new Error(`Unsupported team input adapter: ${ability.inputAdapter}`);
   }
 
   #assertActive() {

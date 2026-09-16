@@ -50,6 +50,12 @@ function recordsVisibleThrough(state, visibleThroughTurn, visibleThroughTime, in
   return [...latest.values()].filter(record => includeInactive || record.status === "active");
 }
 
+async function readCollection(store, access, moduleId, collectionId) {
+  return typeof access.readCollection === "function"
+    ? access.readCollection(moduleId, collectionId)
+    : store.readCollection(moduleId, collectionId);
+}
+
 export async function queryData(store, request, access = {}) {
   const module = store.module(request.moduleId);
   const view = request.view || "rp";
@@ -65,9 +71,10 @@ export async function queryData(store, request, access = {}) {
   const nodeCharacters = Number.isSafeInteger(access.nodeCharacters) ? access.nodeCharacters : runtimeCharacters;
   const requestedCharacters = Number.isSafeInteger(request.maxCharacters) && request.maxCharacters > 0 ? request.maxCharacters : runtimeCharacters;
   const maxCharacters = Math.min(runtimeCharacters, nodeCharacters, requestedCharacters);
-  const state = await store.readCollection(request.moduleId, request.collectionId);
+  const customRead = typeof access.readCollection === "function";
+  const state = await readCollection(store, access, request.moduleId, request.collectionId);
   const visibleRecords = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true);
-  const index = Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
+  const index = customRead || Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
     ? buildDataIndex(visibleRecords, module.contract)
     : await store.readIndex(request.moduleId);
   let entries = queryDataIndex(index, module.contract, request);
@@ -129,7 +136,7 @@ export async function getDataRecord(store, request, access = {}) {
   if (!capabilityAllows(module.contract, access.capabilities || [], { collectionId: request.collectionId, action: "query", view })) {
     throw new Error(`The current node cannot read ${request.moduleId}/${request.collectionId} with view ${view}.`);
   }
-  const state = await store.readCollection(request.moduleId, request.collectionId);
+  const state = await readCollection(store, access, request.moduleId, request.collectionId);
   const record = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true).find(item => item.id === request.id);
   if (!record) return null;
   return { id: record.id, recordType: record.recordType, revision: record.revision, value: renderDataRecordView(record, module.contract, view) };
@@ -149,9 +156,10 @@ export async function queryDataStable(store, request, access = {}) {
   const signature = stableSignature(request);
   const cursor = decodeCursor(request.cursor, signature);
   const descending = request.order === "desc";
-  const state = await store.readCollection(request.moduleId, request.collectionId);
+  const customRead = typeof access.readCollection === "function";
+  const state = await readCollection(store, access, request.moduleId, request.collectionId);
   const visibleRecords = recordsVisibleThrough(state, access.visibleThroughTurn, access.visibleThroughTime, request.includeInactive === true);
-  const index = Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
+  const index = customRead || Number.isSafeInteger(access.visibleThroughTurn) || (typeof access.visibleThroughTime === "string" && access.visibleThroughTime)
     ? buildDataIndex(visibleRecords, module.contract)
     : await store.readIndex(request.moduleId);
   let entries = queryDataIndex(index, module.contract, { ...request, sort: [{ field: "sequence", order: descending ? "desc" : "asc" }] });
@@ -190,7 +198,7 @@ export async function getDataRecordHistory(store, request, access = {}) {
     if (!match) throw new Error("Invalid record-history cursor.");
     return Number(match[1]);
   })();
-  const state = await store.readCollection(request.moduleId, request.collectionId);
+  const state = await readCollection(store, access, request.moduleId, request.collectionId);
   const history = state.history.filter(record => record.id === request.id && record.revision < beforeRevision).sort((left, right) => right.revision - left.revision);
   const selected = history.slice(0, limit);
   return {

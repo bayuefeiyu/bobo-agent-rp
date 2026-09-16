@@ -37,6 +37,7 @@ import { appendWorkflowRunRecord, ensureWorkflowWorkspace, pruneWorkflowState, w
 import { capabilityAllows, normalizeDataContract } from "../lib/rp-data-contracts.mjs";
 import { RpDataStore } from "../lib/rp-data-store.mjs";
 import { getDataRecord, getDataRecordHistory, queryAllData, queryData, queryDataStable } from "../lib/rp-data-query.mjs";
+import { createDataReadView, deleteDataReadView, readDataReadViewCollection, resolveDataReadViewIdentity } from "../lib/rp-data-read-view.mjs";
 import { createDataBatchDraft, executeDataBatch, executeDataBatchOrThrow, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
 import { inspectDataImpact, inspectDataIntegrity, readDataReceipt } from "../lib/rp-data-transactions.mjs";
 import { dataValueAt } from "../lib/rp-data-index.mjs";
@@ -50,6 +51,7 @@ import { stageWorkflowCallInputs, stageWorkspaceHandoffs } from "../lib/rp-works
 import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "../lib/rp-workspace-snapshot.mjs";
 import { runTeamMeeting } from "../lib/rp-team-runtime.mjs";
 import { readAuthorizedTeamMaterial, readDeclaredTeamDocuments } from "../lib/rp-team-access.mjs";
+import { checkpointTeamSessionAttempt, rollbackTeamSessionAttempt } from "../lib/rp-team-session.mjs";
 
 type WebMessage = {
   sequence: number;
@@ -931,9 +933,19 @@ export default function (pi: ExtensionAPI) {
     await closing();
   }
 
-  async function resolveConfiguredModel(target: ActiveBridge, modelId: string, piCurrentOverride?: any) {
-    if (!modelId || modelId === "pi:current") return { profile: null, model: piCurrentOverride || target.context.model };
-    const profile = (await target.configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId);
+  async function resolveConfiguredModel(target: ActiveBridge, modelId: string, frozenOverride?: any) {
+    if (!modelId || modelId === "pi:current") {
+      if (!frozenOverride) return { profile: null, model: target.context.model };
+      const frozenModel = frozenOverride.provider && frozenOverride.model
+        ? target.context.modelRegistry.find(frozenOverride.provider, frozenOverride.model)
+        : null;
+      if (!frozenModel) throw new Error(`Frozen Pi model was not found: ${frozenOverride.provider}/${frozenOverride.model}.`);
+      return { profile: null, model: frozenModel };
+    }
+    const currentProfile = (await target.configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId);
+    const profile = frozenOverride
+      ? { ...structuredClone(frozenOverride), apiKey: currentProfile?.apiKey || "" }
+      : currentProfile;
     if (!profile) throw new Error(`Unknown model profile: ${modelId}`);
     if (profile.baseUrl) {
       const providerId = `rp-${profile.id}`;
@@ -960,9 +972,41 @@ export default function (pi: ExtensionAPI) {
     if (!model) throw new Error(`Pi model was not found: ${profile.provider}/${profile.model}`);
     return { profile, model };
   }
+  function rememberDataReceipt(run: any, nodeId: string, receipt: any) {
+    if (!receipt?.batchId || !["committed", "partial"].includes(receipt.status)) return receipt;
+    const nodeBatches = run.nodes?.[nodeId]?.dataReadBatchIds;
+    if (Array.isArray(nodeBatches) && !nodeBatches.includes(receipt.batchId)) nodeBatches.push(receipt.batchId);
+    run.dataReadBatchIds ||= [];
+    if (!run.dataReadBatchIds.includes(receipt.batchId)) run.dataReadBatchIds.push(receipt.batchId);
+    return receipt;
+  }
+
+  function workflowDataReadAccess(run: any, store: RpDataStore, batchIds: string[] = run.inheritedDataReadBatchIds || []) {
+    if (run.dataReadViewId) {
+      return {
+        readCollection: (moduleId: string, collectionId: string) => readDataReadViewCollection({
+          sessionDirectory: store.sessionDirectory,
+          store,
+          viewId: run.dataReadViewId,
+          batchIds,
+          moduleId,
+          collectionId,
+        }),
+      };
+    }
+    return { visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt };
+  }
+
+  function resolveWorkflowIdentity(run: any, store: RpDataStore, value: string, batchIds: string[] = run.inheritedDataReadBatchIds || []) {
+    return run.dataReadViewId
+      ? resolveDataReadViewIdentity({ sessionDirectory: store.sessionDirectory, store, viewId: run.dataReadViewId, batchIds, value })
+      : store.resolveIdentity(value);
+  }
+
   async function executeWorkflowNode(task: any) {
     if (!active?.recordId || !active.sessionDirectory) throw new Error("The workflow has no active RP chat.");
     const { workflow, run, node, agent, binding } = task;
+    const dataReadBatchIds = task.dataReadBatchIds || run.nodes?.[node.id]?.dataReadBatchIds || run.inheritedDataReadBatchIds || [];
     assertDocumentWorkspaceAgentTools(node, agent);
     const usesWorkspace = !task.teamMember && ["agent", "team", "code", "call"].includes(node.type);
     const callInputs = usesWorkspace ? await stageWorkflowCallInputs({ sessionDirectory: active.sessionDirectory, workflow, run, node }) : [];
@@ -1166,22 +1210,26 @@ export default function (pi: ExtensionAPI) {
         query: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
           const budget = resolveNodeQueryBudget(access, run.payload);
-          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
+          return queryData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, ...workflowDataReadAccess(run, store, dataReadBatchIds) });
         },
         queryAll: (request: any, page: any = {}) => {
           const access = accessFor(request.moduleId, request.collectionId);
           const budget = resolveNodeQueryBudget(access, run.payload);
-          return queryAllData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt }, page);
+          return queryAllData(store, request, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, ...workflowDataReadAccess(run, store, dataReadBatchIds) }, page);
         },
         get: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
-          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
+          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views, ...workflowDataReadAccess(run, store, dataReadBatchIds) });
         },
-        resolve: async (value: string) => (await store.resolveIdentity(value)).filter((entry: any) => {
+        getCurrent: (request: any) => {
+          const access = accessFor(request.moduleId, request.collectionId);
+          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views });
+        },
+        resolve: async (value: string) => (await resolveWorkflowIdentity(run, store, value, dataReadBatchIds)).filter((entry: any) => {
           const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
           return access && capabilityAllows(store.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
         }),
-        submit: (batch: any, options: any = {}) => executeDataBatchOrThrow(store, batch, {
+        submit: async (batch: any, options: any = {}) => rememberDataReceipt(run, node.id, await executeDataBatchOrThrow(store, batch, {
           access: node.moduleAccess,
           allowBestEffort: node.dataCommit?.allowBestEffort === true,
           context: {
@@ -1199,9 +1247,10 @@ export default function (pi: ExtensionAPI) {
               messages: active.messages,
               visibleThroughTurn: run.visibleThroughTurn ?? run.turn,
               fallback: run.sourceReferences || [],
+              expectedRevisions: options.sourceMessageRevisions ?? null,
             }),
           },
-        }),
+        })),
       });
       const services: Record<string, any> = { comfy: active.comfyUi };
       if (node.runtimeServices?.includes("random")) {
@@ -1238,7 +1287,7 @@ export default function (pi: ExtensionAPI) {
       return { output, route: resolveCodeNodeRoute(node, output), assistantMessageId: rpRun?.assistantMessageId || null };
     }
 
-    const { profile, model } = await resolveConfiguredModel(active, binding.modelId);
+    const { profile, model } = await resolveConfiguredModel(active, binding.modelId, task.teamMember ? task.model : null);
     if (!model) throw new Error("No model is available for this workflow node.");
     const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
     const nodeWorkspace = node.metadata?.teamMemberWorkspace
@@ -1388,7 +1437,7 @@ export default function (pi: ExtensionAPI) {
             description: "Read one explicitly named meeting input, published transcript, delivered assistant report, or member-local artifact. Paths beginning shared/ resolve from the team root; delivered task paths must appear in shared/DELIVERIES.json; member/ resolves from your private member workspace.",
             parameters: Type.Object({ path: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }),
             async execute(_id: string, parameters: any) {
-              const result = await readAuthorizedTeamMaterial({ path: parameters.path, teamRoot, teamNodeRoot, memberRoot });
+              const result = await readAuthorizedTeamMaterial({ path: parameters.path, teamRoot, teamNodeRoot, memberRoot, deliveryId: task.teamMember?.deliveryId || null });
               return { content: [{ type: "text", text: result.content }], details: { path: result.path, characters: result.characters } };
             },
           });
@@ -1500,7 +1549,7 @@ export default function (pi: ExtensionAPI) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
             const budget = resolveNodeQueryBudget(access, run.payload);
-            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
+            const result = await queryData(dataStore, parameters, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, ...workflowDataReadAccess(run, dataStore, dataReadBatchIds) });
             return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
           },
         });
@@ -1514,7 +1563,7 @@ export default function (pi: ExtensionAPI) {
           async execute(_id: string, parameters: any) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
-            const result = await getDataRecord(dataStore, parameters, { capabilities: access.capabilities, views: access.views, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: run.readSnapshotAt });
+            const result = await getDataRecord(dataStore, parameters, { capabilities: access.capabilities, views: access.views, ...workflowDataReadAccess(run, dataStore, dataReadBatchIds) });
             return { content: [{ type: "text", text: result ? JSON.stringify(result, null, 2) : "Record not found." }], details: result };
           },
         });
@@ -1526,7 +1575,7 @@ export default function (pi: ExtensionAPI) {
           description: "Resolve one registered ID, display name, or alias within this node's authorized collections.",
           parameters: Type.Object({ value: Type.String() }),
           async execute(_id: string, parameters: any) {
-            const matches = (await dataStore.resolveIdentity(parameters.value)).filter((entry: any) => {
+            const matches = (await resolveWorkflowIdentity(run, dataStore, parameters.value, dataReadBatchIds)).filter((entry: any) => {
               const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
               return access && capabilityAllows(dataStore.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
             });
@@ -1544,7 +1593,7 @@ export default function (pi: ExtensionAPI) {
             const output = node.outputs?.[parameters.output];
             if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
             const batch = JSON.parse(await readFile(resolve(nodeWorkspace, output.path), "utf8"));
-            const receipt = await executeDataBatch(dataStore, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: node.type === "code" ? "code" : "agent", initiatorId: agent?.id || node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null }, sourceReferences: run.sourceReferences || [] } });
+            const receipt = rememberDataReceipt(run, node.id, await executeDataBatch(dataStore, batch, { access: node.moduleAccess, allowBestEffort: node.dataCommit?.allowBestEffort === true, context: { initiatorKind: node.type === "code" ? "code" : "agent", initiatorId: agent?.id || node.id, workflowId: workflow.id, workflowRunId: run.id, nodeId: node.id, binding: { turn: run.turn || 0, messageId: rpRun?.assistantMessageId || null }, sourceReferences: run.sourceReferences || [] } }));
             return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
           },
         });
@@ -1602,6 +1651,7 @@ export default function (pi: ExtensionAPI) {
       sessionManager,
     });
     const usageMessageStart = session.messages.length;
+    const teamSessionCheckpoint = teamSessionDirectory ? checkpointTeamSessionAttempt(sessionManager) : null;
     try {
       const userPrompt = prompt.contextMessages.join("\n\n") || "Execute this workflow node and return its result.";
       await session.prompt(userPrompt, { expandPromptTemplates: false, source: "extension" });
@@ -1612,6 +1662,14 @@ export default function (pi: ExtensionAPI) {
       const assistant = [...session.messages].reverse().find((message: any) => message.role === "assistant");
       const content = messageText(assistant);
       if (!content) throw new Error("Workflow agent returned no text output.");
+      if (node.metadata?.teamMember === true && typeof task.teamMember?.validateOutput === "function") {
+        try { task.teamMember.validateOutput(content); }
+        catch (error) {
+          const rejected = error instanceof Error ? error : new Error(String(error));
+          (rejected as any).rejectedContent = content;
+          throw rejected;
+        }
+      }
       let output: any = content;
       if (agent?.outputMode === "json") {
         const normalized = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
@@ -1663,6 +1721,22 @@ export default function (pi: ExtensionAPI) {
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error));
       (wrapped as any).usage = tokenUsageFromMessages(session.messages.slice(usageMessageStart));
+      if (teamSessionCheckpoint) {
+        try {
+          rollbackTeamSessionAttempt(sessionManager, teamSessionCheckpoint, {
+            executionId: task.teamMember?.executionId || null,
+            attemptId: task.teamMember?.attemptId || null,
+            error: wrapped.message,
+          });
+          const persistedSession = session.sessionFile || session.sessionManager?.getSessionFile?.() || null;
+          if (persistedSession && teamSessionPointer) await writeFile(teamSessionPointer, `${persistedSession}\n`, "utf8");
+        } catch (rollbackError) {
+          const rollbackFailure = new Error(`${wrapped.message} Team session rollback failed: ${(rollbackError as Error).message}`, { cause: wrapped });
+          (rollbackFailure as any).code = "team_session_rollback_failed";
+          (rollbackFailure as any).usage = (wrapped as any).usage;
+          throw rollbackFailure;
+        }
+      }
       throw wrapped;
     } finally {
       session.dispose();
@@ -1853,7 +1927,13 @@ export default function (pi: ExtensionAPI) {
     active.workflowEngine = new RpWorkflowEngine({
       policy: await configStore.getRuntimePolicy(),
       resolveAgent: async (agentId: string | null) => agentId ? (await configStore.getAgent(agentId)).effective : null,
-      resolveModel: async (modelId: string) => (await configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId) || null,
+      resolveModel: async (modelId: string) => {
+        if (modelId === "pi:current") {
+          const current = active?.context.model;
+          return current ? { id: "pi:current", provider: current.provider, model: current.id, maxConcurrency: 10 } : null;
+        }
+        return (await configStore.listModels({ includeSecrets: true })).find((item: any) => item.id === modelId) || null;
+      },
       resolveWorkflow: async (reference: string) => {
         for (const module of active?.featureModules || []) {
           const workflow = module.workflows.find(candidate => canonicalWorkflowRef(candidate) === reference);
@@ -1861,11 +1941,31 @@ export default function (pi: ExtensionAPI) {
         }
         return null;
       },
+      onRunStart: async ({ run }: any) => {
+        if (run.dataReadViewId) return null;
+        if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow data read view has no active RP chat.");
+        const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
+        const view = await createDataReadView({
+          sessionDirectory: active.sessionDirectory,
+          store,
+          sourceId: run.callContext?.rootRunId || run.id,
+          visibleThroughTurn: run.visibleThroughTurn,
+          visibleThroughTime: run.readSnapshotAt,
+        });
+        return { dataReadViewId: view.viewId, dataReadBatchIds: run.dataReadBatchIds || [] };
+      },
       executor: executeWorkflowNode,
       beforeNodeComplete: async ({ workflow, run, node, result }: any) => {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow data commit has no active RP chat.");
         const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
-        return finalizeNodeData({ sessionDirectory: active.sessionDirectory, store, workflow, run, node, result });
+        const finalized = await finalizeNodeData({ sessionDirectory: active.sessionDirectory, store, workflow, run, node, result });
+        for (const receipt of finalized.dataReceipts || []) rememberDataReceipt(run, node.id, receipt);
+        return finalized;
+      },
+      onRunTerminal: async ({ run }: any) => {
+        if (!run.callContext && run.dataReadViewId && active?.sessionDirectory && active.recordId === run.chatId) {
+          await deleteDataReadView({ sessionDirectory: active.sessionDirectory, viewId: run.dataReadViewId });
+        }
       },
       nodeHistory: (workflowId: string, nodeId: string) => nodeCompletionTurns.get(`${workflowId}:${nodeId}`) ?? null,
       onNodeComplete: async ({ workflow, run, node, agent, binding, result }: any) => {
@@ -3142,6 +3242,7 @@ export default function (pi: ExtensionAPI) {
         runtimeCharacters: budget.maxCharacters,
         nodeLimit: budget.maxRecords,
         nodeCharacters: budget.maxCharacters,
+        ...workflowDataReadAccess(entry.run, store, entry.run.nodes[node.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || []),
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
     },
@@ -3156,7 +3257,7 @@ export default function (pi: ExtensionAPI) {
       const { entry, node, store } = currentDataNode();
       await requireCurrentAgentTool(entry, node, "rp_data_get");
       const access = nodeDataAccess(node, parameters.moduleId, parameters.collectionId);
-      const result = await getDataRecord(store, parameters, { capabilities: access.capabilities, views: access.views });
+      const result = await getDataRecord(store, parameters, { capabilities: access.capabilities, views: access.views, ...workflowDataReadAccess(entry.run, store, entry.run.nodes[node.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || []) });
       return { content: [{ type: "text", text: result ? JSON.stringify(result, null, 2) : "Record not found." }], details: result };
     },
   });
@@ -3169,7 +3270,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, parameters) {
       const { entry, node, store } = currentDataNode();
       await requireCurrentAgentTool(entry, node, "rp_data_resolve");
-      const matches = (await store.resolveIdentity(parameters.value)).filter((entry: any) => {
+      const matches = (await resolveWorkflowIdentity(entry.run, store, parameters.value, entry.run.nodes[node.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [])).filter((entry: any) => {
         const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
         return access && capabilityAllows(store.module(entry.moduleId).contract, access.capabilities, { collectionId: entry.collectionId, action: "query" });
       });
@@ -3216,11 +3317,11 @@ export default function (pi: ExtensionAPI) {
       if (!output || output.format !== "unified-change-batch") throw new Error(`Node output ${parameters.output} is not a declared unified change batch.`);
       const path = resolve(workflowNodeWorkspace(active!.sessionDirectory!, entry.workflow.id, entry.run.id, node.id), output.path);
       const batch = JSON.parse(await readFile(path, "utf8"));
-      const receipt = await executeDataBatch(store, batch, {
+      const receipt = rememberDataReceipt(entry.run, node.id, await executeDataBatch(store, batch, {
         access: node.moduleAccess,
         allowBestEffort: node.dataCommit?.allowBestEffort === true,
         context: { initiatorKind: "agent", initiatorId: node.agentId || node.id, workflowId: entry.workflow.id, workflowRunId: entry.run.id, nodeId: node.id, binding: { turn: entry.run.turn || 0, messageId: rpRun?.assistantMessageId || null }, sourceReferences: entry.run.sourceReferences || [] },
-      });
+      }));
       return { content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }], details: receipt };
     },
   });

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["operationId", "rootRunId", "status", "openedTurn", "closedTurn", "terminalError"],
+  "properties": {
+    "operationId": { "type": "string", "minLength": 1 },
+    "rootRunId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["running", "completed", "failed", "cancelled", "skipped"] },
+    "openedTurn": { "type": "integer", "minimum": 0 },
+    "closedTurn": { "type": ["integer", "null"], "minimum": 0 },
+    "terminalError": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

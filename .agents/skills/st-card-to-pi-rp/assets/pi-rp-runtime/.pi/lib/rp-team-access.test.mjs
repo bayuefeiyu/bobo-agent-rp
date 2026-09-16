@@ -23,10 +23,13 @@ test("team reads expose only declared inputs, published material, deliveries, an
     await writeFile(resolve(memberRoot, "notes.md"), "private member note", "utf8");
     await writeFile(resolve(teamRoot, "shared", "INPUTS.json"), JSON.stringify([{ path: "inputs/story.md", kind: "file" }]), "utf8");
     await writeFile(resolve(teamRoot, "shared", "DELIVERIES.json"), JSON.stringify([{ path: "tasks/task-1/report.md", kind: "file" }]), "utf8");
+    await mkdir(resolve(teamRoot, "shared", "deliveries"), { recursive: true });
+    await writeFile(resolve(teamRoot, "shared", "deliveries", "round-1.json"), JSON.stringify([{ path: "tasks/task-1/report.md", kind: "file" }]), "utf8");
 
     assert.equal((await readAuthorizedTeamMaterial({ path: "shared/TRANSCRIPT.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot })).content, "published transcript");
     assert.equal((await readAuthorizedTeamMaterial({ path: "inputs/story.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot })).content, "declared story");
-    assert.equal((await readAuthorizedTeamMaterial({ path: "tasks/task-1/report.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot })).content, "delivered report");
+    await assert.rejects(readAuthorizedTeamMaterial({ path: "tasks/task-1/report.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot }), /outside the meeting areas/);
+    assert.equal((await readAuthorizedTeamMaterial({ path: "tasks/task-1/report.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot, deliveryId: "round-1" })).content, "delivered report");
     assert.equal((await readAuthorizedTeamMaterial({ path: "member/notes.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot })).content, "private member note");
     await assert.rejects(readAuthorizedTeamMaterial({ path: "tasks/private/secret.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot }), /outside the meeting areas/);
     await assert.rejects(readAuthorizedTeamMaterial({ path: "../secret.md", teamRoot, teamNodeRoot: nodeRoot, memberRoot }), /safe relative path/);

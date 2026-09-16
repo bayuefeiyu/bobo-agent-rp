@@ -9,19 +9,20 @@
   "interface": {
     "inputs": {
       "operationId": { "type": "parameter", "required": true, "valueType": "string" },
+      "rootRunId": { "type": "parameter", "required": true, "valueType": "string" },
       "triggerReasons": { "type": "parameter", "required": true, "valueType": "array" }
     },
     "exports": {}
   },
   "revision": "1",
-  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId" },
+  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId", "reuseCompleted": false },
   "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
   "nodes": [
     {
       "id": "begin",
       "type": "code",
       "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }],
-      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/begin-deep-operation.mjs", "argumentInputs": ["operationId", "triggerReasons"] }
+      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/begin-deep-operation.mjs", "argumentInputs": ["operationId", "rootRunId", "triggerReasons"] }
     },
     { "id": "return", "type": "workflow-return", "dependsOn": ["begin"], "exports": {} }
   ]

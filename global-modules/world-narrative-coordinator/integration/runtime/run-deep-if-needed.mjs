@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { queryAll } from "../../runtime/lib/data.mjs";
 
@@ -24,7 +24,7 @@ export async function execute({ run, node, conversation, data, calls, workspace 
   const brief = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "private-state", id: "turn-brief-current", view: "director" });
   const recommendation = brief?.value?.deepRecommendation || brief?.value?.data?.deepRecommendation;
   if (!recommendation?.shouldStart) return { started: false, reason: "not-recommended" };
-  const state = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
+  const state = await (data.getCurrent || data.get)({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
   const stateValue = state?.value?.data || state?.value || {};
   const operationId = `${run.id}-deep-operation`;
   if (!state) return { started: false, reason: "deep-state-missing" };
@@ -43,14 +43,23 @@ export async function execute({ run, node, conversation, data, calls, workspace 
         .filter(message => (message.binding?.turn || 0) <= (run.visibleThroughTurn ?? run.turn ?? 0))
         .map(message => ({ id: message.id, revision: message.revision || 1, turn: message.binding?.turn || 0 }));
       basisPath = "deep-publication-basis.json";
-      await writeFile(resolve(workspace, basisPath), `${JSON.stringify({ schemaVersion: 1, operationId, basisTurn: run.turn, deepReport: deepReport ? { id: deepReport.id, revision: deepReport.revision } : null, references: Object.fromEntries(referenceRecords.map(item => [item.id, item.revision])), sourceMessages }, null, 2)}\n`, "utf8");
+      const basisFile = resolve(workspace, basisPath);
+      const existingBasis = await readFile(basisFile, "utf8").then(JSON.parse).catch(error => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (existingBasis) {
+        if (existingBasis.schemaVersion !== 1 || existingBasis.operationId !== operationId || existingBasis.basisTurn !== run.turn) throw new Error("Existing deep publication basis does not belong to this operation and turn.");
+      } else {
+        await writeFile(basisFile, `${JSON.stringify({ schemaVersion: 1, operationId, basisTurn: run.turn, deepReport: deepReport ? { id: deepReport.id, revision: deepReport.revision } : null, references: Object.fromEntries(referenceRecords.map(item => [item.id, item.revision])), sourceMessages }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      }
     }
     const inherited = "trigger/story-context";
     const storyContext = await exists(resolve(workspace, inherited, "DOCUMENTS.md"))
       ? inherited
       : await prepareFallbackStoryContext({ run, node, conversation, workspace });
-    if (workflow.endsWith("deep-director-team-planning") && !resuming) {
-      await calls.invoke({ workflow: "world-narrative-coordinator/begin-deep-operation", arguments: { operationId, triggerReasons: recommendation.reasonCodes || [] }, outputPaths: {} });
+    if (workflow.endsWith("deep-director-team-planning")) {
+      await calls.invoke({ workflow: "world-narrative-coordinator/begin-deep-operation", arguments: { operationId, rootRunId: run.id, triggerReasons: recommendation.reasonCodes || [] }, outputPaths: {} });
     }
     const result = await calls.invoke({ workflow, arguments: { operationId, triggerReasons: recommendation.reasonCodes || [] }, documents: { "story-context": storyContext }, outputPaths: workflow.endsWith("deep-director-team-planning") ? { report: "team-deep-report.json", references: "team-deep-references.json" } : {} });
     if (workflow.endsWith("deep-director-team-planning")) {
@@ -59,10 +68,12 @@ export async function execute({ run, node, conversation, data, calls, workspace 
     return { started: true, resumed: resuming, childRunId: result.callId, operationId, workflow, triggerReasons: recommendation.reasonCodes || [] };
   } catch (error) {
     if (workflow.endsWith("deep-director-team-planning")) {
-      await calls.invoke({ workflow: "world-narrative-coordinator/finish-deep-operation", arguments: { operationId, terminalStatus: "failed", terminalError: error instanceof Error ? error.message : String(error) }, outputPaths: {} }).catch(() => {});
+      if (["workflow_recovery_required", "workflow_child_waiting", "operation_closed"].includes(error?.code)) throw error;
+      const terminalStatus = error?.code === "workflow_cancelled" ? "cancelled" : "failed";
+      await calls.invoke({ workflow: "world-narrative-coordinator/finish-deep-operation", arguments: { operationId, terminalStatus, terminalError: error instanceof Error ? error.message : String(error) }, outputPaths: {} }).catch(() => {});
       throw error;
     }
-    const current = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
+    const current = await (data.getCurrent || data.get)({ moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", id: "deep-state-current", view: "deep-status" });
     const value = current?.value?.data || current?.value || {};
     if (current) await data.submit({ protocolVersion: 1, batchId: `${run.id}-deep-fail`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `${run.id}-deep-fail-state`, moduleId: "world-narrative-coordinator", collectionId: "deep-workbench", recordType: "director.deep-state", action: "update", targetId: current.id, expectedRevision: current.revision, data: { ...value, status: "failed", currentRunId: null, failure: error instanceof Error ? error.message : String(error) }, note: null }] }, latest ? { binding: { turn: latest.binding.turn, messageId: latest.id }, sourceMessageIds: [latest.id] } : {});
     throw error;

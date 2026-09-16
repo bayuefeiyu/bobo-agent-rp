@@ -28,7 +28,7 @@ export function resolveCodeSubmissionBinding(requested, { messages = [], visible
   return { turn: requested.turn, messageId: requested.messageId };
 }
 
-export function resolveCodeSubmissionSourceReferences(requestedMessageIds, { messages = [], visibleThroughTurn = null, fallback = [] } = {}) {
+export function resolveCodeSubmissionSourceReferences(requestedMessageIds, { messages = [], visibleThroughTurn = null, fallback = [], expectedRevisions = null } = {}) {
   if (requestedMessageIds === undefined || requestedMessageIds === null) return mergeSourceReferences(fallback);
   if (!Array.isArray(requestedMessageIds) || requestedMessageIds.some(id => typeof id !== "string" || !id)) {
     throw new Error("Code data submission sourceMessageIds must be an array of message IDs.");
@@ -40,6 +40,10 @@ export function resolveCodeSubmissionSourceReferences(requestedMessageIds, { mes
     if (!message) throw new Error(`Code data submission source references an unknown message: ${id}.`);
     if (Number.isSafeInteger(visibleThroughTurn) && message.binding?.turn > visibleThroughTurn) {
       throw new Error(`Code data submission source ${id} is beyond the workflow's visible turn.`);
+    }
+    if (expectedRevisions !== null) {
+      if (!expectedRevisions || typeof expectedRevisions !== "object" || Array.isArray(expectedRevisions) || !Number.isSafeInteger(expectedRevisions[id]) || expectedRevisions[id] < 1) throw new Error(`Code data submission source ${id} is missing its expected revision.`);
+      if (message.revision !== expectedRevisions[id]) throw Object.assign(new Error(`Code data submission source ${id} changed from expected revision ${expectedRevisions[id]} to ${message.revision}.`), { code: "source_revision_conflict" });
     }
     return messageSourceReference(message);
   });

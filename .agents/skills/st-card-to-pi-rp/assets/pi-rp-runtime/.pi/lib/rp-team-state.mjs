@@ -1,10 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
+
+import { normalizeTokenUsage } from "./rp-token-usage.mjs";
 
 function hash(value) {
   return createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 }
+
+const deliveryCommitQueues = new Map();
 
 async function atomicJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
@@ -50,6 +54,7 @@ export function initialTeamState(config, { runId = null, nodeId = null } = {}) {
     pendingTaskIds: [],
     budgets: Object.fromEntries(Object.entries(config.budgets).map(([pool, budget]) => [pool, { limit: budget.calls, reserved: 0, used: 0 }])),
     usage: { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, recordedCalls: 0, unrecordedCalls: 0 },
+    usageAttempts: {},
     deliverables: { report: null, references: null },
     error: null,
     updatedAt: new Date().toISOString(),
@@ -93,16 +98,41 @@ export function consumeTeamBudget(state, executionId, usage = null) {
   return reservation;
 }
 
-export function recordTeamUsage(state, usage) {
-  if (!usage || typeof usage !== "object") return false;
-  for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
-    if (Number.isFinite(usage[key])) state.usage[key] += usage[key];
+export function recordTeamUsage(state, usage, { attemptId = null, status = null, outcome = null, source = null } = {}) {
+  const normalized = normalizeTokenUsage(usage && typeof usage === "object" && !Number.isFinite(usage.totalTokens) && Number.isFinite(usage.total)
+    ? { ...usage, totalTokens: usage.total }
+    : usage);
+  if (!attemptId) {
+    if (!normalized) return false;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) state.usage[key] += normalized[key];
+    state.usage.recordedCalls = (state.usage.recordedCalls || 0) + 1;
+    state.usage.unrecordedCalls = Math.max(0, (state.usage.unrecordedCalls || 0) - 1);
+    return true;
   }
-  const totalTokens = Number.isFinite(usage.totalTokens) ? usage.totalTokens : usage.total;
-  if (Number.isFinite(totalTokens)) state.usage.totalTokens += totalTokens;
-  state.usage.recordedCalls = (state.usage.recordedCalls || 0) + 1;
-  state.usage.unrecordedCalls = Math.max(0, (state.usage.unrecordedCalls || 0) - 1);
-  return true;
+
+  state.usageAttempts ||= {};
+  const existing = state.usageAttempts[attemptId] || null;
+  const previous = existing?.usage || null;
+  const merged = normalized
+    ? Object.fromEntries(["input", "output", "cacheRead", "cacheWrite", "totalTokens"].map(key => [key, Math.max(previous?.[key] || 0, normalized[key])]))
+    : previous;
+  const changed = Boolean(merged) && (!previous || Object.keys(merged).some(key => merged[key] !== previous[key]));
+  if (changed) {
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) state.usage[key] += merged[key] - (previous?.[key] || 0);
+    if (!previous) {
+      state.usage.recordedCalls = (state.usage.recordedCalls || 0) + 1;
+      state.usage.unrecordedCalls = Math.max(0, (state.usage.unrecordedCalls || 0) - 1);
+    }
+  }
+  state.usageAttempts[attemptId] = {
+    attemptId,
+    status: merged ? (status === "partial" ? "partial" : "recorded") : "unknown",
+    outcome: outcome || existing?.outcome || null,
+    source: source || existing?.source || null,
+    usage: merged || null,
+    updatedAt: new Date().toISOString(),
+  };
+  return changed;
 }
 
 export function releaseTeamBudget(state, executionId) {
@@ -194,32 +224,124 @@ export class TeamStateStore {
     return { path, relativePath: relativePath.replaceAll("\\", "/"), hash: hash(content), characters: content.length };
   }
 
-  async readArtifact(relativePath) {
+  async readArtifact(relativePath, expectedHash = null) {
     const path = resolve(this.root, relativePath);
     const relation = relative(this.root, path);
     if (!relation || relation.startsWith("..") || relation.includes(`..${sep}`)) throw new Error("Team artifact path escapes the team workspace.");
-    return readFile(path, "utf8");
+    const content = await readFile(path, "utf8");
+    if (expectedHash && hash(content) !== expectedHash) throw Object.assign(new Error(`Team artifact hash mismatch: ${relativePath}.`), { code: "team_artifact_corrupt", relativePath });
+    return content;
   }
 
   async registerDeliveries(entries) {
-    const path = resolve(this.root, "shared", "DELIVERIES.json");
-    await mkdir(dirname(path), { recursive: true });
-    const current = await readFile(path, "utf8").then(JSON.parse).catch(error => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
     const normalized = entries.map(entry => ({
       path: String(entry.path || "").replaceAll("\\", "/"),
       kind: entry.kind === "directory" ? "directory" : "file",
-      taskId: entry.taskId || null,
+      taskId: entry.taskId ? String(entry.taskId) : null,
     }));
-    const merged = [...current];
     for (const entry of normalized) {
       if (!entry.path || entry.path.startsWith("/") || /^[A-Za-z]:/.test(entry.path) || entry.path.split("/").includes("..")) throw new Error("Team delivery path must be safe and relative.");
-      if (!merged.some(item => item.path === entry.path && item.kind === entry.kind)) merged.push(entry);
     }
-    await atomicJson(path, merged);
-    return structuredClone(merged);
+    return this.#deliveryTransaction(async () => {
+      const sharedRoot = resolve(this.root, "shared");
+      const manifestRoot = resolve(sharedRoot, "delivery-manifests");
+      await mkdir(manifestRoot, { recursive: true });
+      const byTask = new Map();
+      for (const entry of normalized.filter(item => item.taskId)) {
+        if (!byTask.has(entry.taskId)) byTask.set(entry.taskId, []);
+        byTask.get(entry.taskId).push(entry);
+      }
+      for (const [taskId, taskEntries] of byTask) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(taskId)) throw new Error("Team delivery task ID must be filesystem-safe.");
+        const manifest = {
+          schemaVersion: 1,
+          taskId,
+          entries: [...taskEntries].sort((left, right) => `${left.path}\0${left.kind}`.localeCompare(`${right.path}\0${right.kind}`)),
+        };
+        manifest.hash = hash(manifest.entries);
+        const manifestPath = resolve(manifestRoot, `${taskId}.json`);
+        const existing = await readFile(manifestPath, "utf8").then(JSON.parse).catch(error => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (existing) {
+          if (existing.hash !== manifest.hash || JSON.stringify(existing.entries) !== JSON.stringify(manifest.entries)) {
+            throw Object.assign(new Error(`Team delivery manifest conflict: ${taskId}.`), { code: "team_delivery_manifest_conflict", taskId });
+          }
+        } else await atomicJson(manifestPath, manifest);
+      }
+
+      const catalogPath = resolve(sharedRoot, "DELIVERIES.json");
+      const current = await readFile(catalogPath, "utf8").then(JSON.parse).catch(error => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+      const manifests = [];
+      for (const entry of await readdir(manifestRoot, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const manifest = JSON.parse(await readFile(resolve(manifestRoot, entry.name), "utf8"));
+        if (manifest.hash !== hash(manifest.entries)) throw Object.assign(new Error(`Team delivery manifest hash mismatch: ${entry.name}.`), { code: "team_delivery_manifest_corrupt" });
+        manifests.push(...manifest.entries);
+      }
+      const merged = [];
+      for (const entry of [...current, ...manifests, ...normalized.filter(item => !item.taskId)]) {
+        const prior = merged.find(item => item.path === entry.path && item.kind === entry.kind);
+        if (prior && prior.taskId !== entry.taskId) throw Object.assign(new Error(`Team delivery path is already owned by another task: ${entry.path}.`), { code: "team_delivery_path_conflict", path: entry.path });
+        if (!prior) merged.push(entry);
+      }
+      merged.sort((left, right) => `${left.taskId || ""}\0${left.path}\0${left.kind}`.localeCompare(`${right.taskId || ""}\0${right.path}\0${right.kind}`));
+      await atomicJson(catalogPath, merged);
+      return structuredClone(merged);
+    });
+  }
+
+  async registerDeliverySnapshot(deliveryId, taskIds) {
+    if (typeof deliveryId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(deliveryId)) throw new Error("Team delivery snapshot ID must be filesystem-safe.");
+    const allowedTaskIds = new Set(taskIds || []);
+    return this.#deliveryTransaction(async () => {
+      const deliveries = await readFile(resolve(this.root, "shared", "DELIVERIES.json"), "utf8").then(JSON.parse).catch(error => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+      const snapshot = deliveries.filter(entry => allowedTaskIds.has(entry.taskId));
+      const snapshotPath = resolve(this.root, "shared", "deliveries", `${deliveryId}.json`);
+      const existing = await readFile(snapshotPath, "utf8").then(JSON.parse).catch(error => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (existing) {
+        if (JSON.stringify(existing) !== JSON.stringify(snapshot)) throw Object.assign(new Error(`Team delivery snapshot conflict: ${deliveryId}.`), { code: "team_delivery_snapshot_conflict", deliveryId });
+        return structuredClone(existing);
+      }
+      await atomicJson(snapshotPath, snapshot);
+      return structuredClone(snapshot);
+    });
+  }
+
+  async #deliveryTransaction(operation) {
+    const previous = deliveryCommitQueues.get(this.root) || Promise.resolve();
+    const queued = previous.then(async () => {
+      const sharedRoot = resolve(this.root, "shared");
+      const lockPath = resolve(sharedRoot, ".delivery-write.lock");
+      await mkdir(sharedRoot, { recursive: true });
+      let lock;
+      try {
+        lock = await open(lockPath, "wx");
+      } catch (error) {
+        if (error.code === "EEXIST") throw Object.assign(new Error("Another process owns the team delivery writer lock."), { code: "team_delivery_writer_conflict", lockPath });
+        throw error;
+      }
+      try {
+        await lock.writeFile(`${JSON.stringify({ pid: process.pid, root: this.root, acquiredAt: new Date().toISOString() })}\n`, "utf8");
+        await lock.sync();
+        return await operation();
+      } finally {
+        await lock.close();
+        await rm(lockPath, { force: true });
+      }
+    });
+    deliveryCommitQueues.set(this.root, queued.catch(() => {}));
+    return queued;
   }
 
   async publishSpeech(state, { executionId, memberId, phase, round = null, content, deliveryId = null }) {
@@ -233,7 +355,7 @@ export class TeamStateStore {
       .sort((left, right) => left.artifactId.localeCompare(right.artifactId));
     const transcript = [];
     for (const speech of speeches) {
-      transcript.push(`## ${speech.artifactId} · ${speech.memberId} · ${speech.phase}${speech.round === null ? "" : ` · round ${speech.round}`}`, "", (await this.readArtifact(speech.artifact.relativePath)).trim(), "");
+      transcript.push(`## ${speech.artifactId} · ${speech.memberId} · ${speech.phase}${speech.round === null ? "" : ` · round ${speech.round}`}`, "", (await this.readArtifact(speech.artifact.relativePath, speech.artifact.hash)).trim(), "");
     }
     await this.artifact("shared/TRANSCRIPT.md", transcript.join("\n"));
     return { speechId, ...artifact };

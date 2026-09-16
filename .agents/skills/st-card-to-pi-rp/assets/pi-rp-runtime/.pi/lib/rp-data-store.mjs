@@ -171,7 +171,15 @@ export class RpDataStore {
     const collection = module.contract.collections[collectionId];
     if (!collection) throw new Error(`Unknown collection ${moduleId}/${collectionId}.`);
     const root = this.collectionRoot(moduleId, collectionId);
-    const history = collection.storage.kind === "snapshot" ? [] : await this.#readHistory(root, module.contract);
+    let history = collection.storage.kind === "snapshot" ? [] : await this.#readHistory(root, module.contract);
+    if (collection.storage.kind === "hybrid" && collection.storage.initialSnapshotFile) {
+      const initial = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
+      const seeded = (Array.isArray(initial) ? initial : [initial]).map(record => validateDataRecord(record, module.contract));
+      const override = collectionId === "settings" ? this.initialOverrides[moduleId] : null;
+      if (override && seeded.length) seeded[0] = { ...seeded[0], data: mergeDefined(seeded[0].data, override) };
+      const identities = new Set(history.map(record => `${record.id}:${record.revision}`));
+      history = [...seeded.filter(record => !identities.has(`${record.id}:${record.revision}`)), ...history];
+    }
     const snapshot = collection.storage.kind === "record-log" ? null : await json(safeResolve(root, "snapshot.json"), []);
     const records = snapshot === null ? latestRecords(history) : (Array.isArray(snapshot) ? snapshot : [snapshot]).map(record => validateDataRecord(record, module.contract));
     for (const record of records) await this.validateRecordData(record);

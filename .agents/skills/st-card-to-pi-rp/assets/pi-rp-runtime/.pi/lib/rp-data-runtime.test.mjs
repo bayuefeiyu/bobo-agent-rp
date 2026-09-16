@@ -7,6 +7,7 @@ import { normalizeDataContract } from "./rp-data-contracts.mjs";
 import { RpDataStore } from "./rp-data-store.mjs";
 import { assertCommittedDataReceipt, executeDataBatch, executeDataBatchOrThrow } from "./rp-data-changes.mjs";
 import { getDataRecord, getDataRecordHistory, queryData, queryDataStable } from "./rp-data-query.mjs";
+import { createDataReadView, readDataReadViewCollection } from "./rp-data-read-view.mjs";
 import { commitDataFiles, inspectDataImpact, inspectDataIntegrity } from "./rp-data-transactions.mjs";
 
 const contract = normalizeDataContract({
@@ -82,6 +83,26 @@ async function fixture(t) {
   await store.initialize();
   return { root, store };
 }
+
+test("a persisted data read view exposes only causally accepted batches, including deletions", async t => {
+  const { store } = await fixture(t);
+  const view = await createDataReadView({ sessionDirectory: store.sessionDirectory, store, sourceId: "root-run" });
+  const submit = (batchId, operations) => executeDataBatch(store, { protocolVersion: 1, batchId, status: "pending", commitPolicy: "atomic", operations }, {
+    access: { rumors: ["rumor.write"] },
+    context: { workflowId: "child", workflowRunId: batchId, nodeId: "commit", binding: { turn: 1, messageId: null } },
+  });
+  const accepted = await submit("causal-create", [{ operationId: "create", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.causal", data: { content: "causal", source: "character.queen" } }]);
+  await submit("unrelated-create", [{ operationId: "create", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.unrelated", data: { content: "unrelated", source: "character.queen" } }]);
+  assert.equal(accepted.results[0].record.id, "rumor.causal");
+  const readCollection = (moduleId, collectionId) => readDataReadViewCollection({ sessionDirectory: store.sessionDirectory, store, viewId: view.viewId, batchIds: ["causal-create"], moduleId, collectionId });
+  const visible = await queryData(store, { moduleId: "rumors", collectionId: "entries", view: "rp" }, { capabilities: ["rumor.query"], views: ["rp"], runtimeLimit: 20, readCollection });
+  assert.deepEqual(visible.items.map(item => item.id), ["rumor.causal"]);
+  const deleted = await submit("causal-delete", [{ operationId: "delete", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "delete", targetId: "rumor.causal", expectedRevision: 1 }]);
+  assert.equal(deleted.results[0].action, "delete");
+  assert.equal(deleted.results[0].record, null);
+  const afterDelete = await readDataReadViewCollection({ sessionDirectory: store.sessionDirectory, store, viewId: view.viewId, batchIds: ["causal-create", "causal-delete"], moduleId: "rumors", collectionId: "entries" });
+  assert.deepEqual(afterDelete.records, []);
+});
 
 test("unified batches commit, index, query, budget, and replay idempotently", async t => {
   const { store } = await fixture(t);
