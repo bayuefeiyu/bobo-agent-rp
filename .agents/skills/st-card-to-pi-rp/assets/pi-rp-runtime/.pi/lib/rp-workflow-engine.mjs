@@ -441,7 +441,16 @@ export class RpWorkflowEngine {
         const task = { workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, node.id), isCancelled: () => entry.stopped || entry.run.status === "cancelled" };
         let result = await this.executor(task);
         if (entry.stopped || entry.run.status === "cancelled") return;
-        result = await this.beforeNodeComplete({ workflow: entry.workflow, run: entry.run, node, agent, binding, result: result || {} }) || result || {};
+        try {
+          result = await this.beforeNodeComplete({ workflow: entry.workflow, run: entry.run, node, agent, binding, result: result || {} }) || result || {};
+        } catch (error) {
+          // Staging a node's outputs and committing its change batches happen after the model has
+          // answered, but a failure here is still not something another model fixes: retrying
+          // re-runs the node and re-renders the change. Recorded by origin rather than by error
+          // code, because these codes come from the data layer, the filesystem and the card's own
+          // scripts, and no list of them stays complete.
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), { nodeEndCommit: true });
+        }
         if (entry.stopped || entry.run.status === "cancelled") return;
         const executionStatus = result?.executionStatus || result?.output?.executionStatus || "completed";
         if (["recovery-required", "partially-completed"].includes(executionStatus) && (result?.output?.recoveryRequired !== false)) {
@@ -490,7 +499,10 @@ export class RpWorkflowEngine {
         // there was stopped by the runtime, and that verdict is recorded on the team node.
         const modelDispatched = MODEL_INVOKING_NODE_TYPES.has(node.type) && nodeState.attempts?.at(-1)?.modelDispatched === true;
         const deterministic = !modelDispatched || DETERMINISTIC_FAILURE_CODES.has(error?.code);
-        const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic ? { retryable: false, awaitModelChoice: false, deterministic: true, output: error.output || null } : {});
+        const failure = { nodeEndCommit: error?.nodeEndCommit === true, failureCode: error?.code || null };
+        const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic
+          ? { ...failure, retryable: false, awaitModelChoice: false, deterministic: true, output: error.output || null }
+          : failure);
         if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
         if (state.status === "awaiting-retry") prepareWorkflowNodeRetry(entry.run, node.id);
         else if (state.status === "awaiting-model-choice" && this.policy.modelFailure.silentFallback) {

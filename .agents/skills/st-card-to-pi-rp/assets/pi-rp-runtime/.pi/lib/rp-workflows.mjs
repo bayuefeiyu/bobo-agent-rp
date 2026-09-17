@@ -802,6 +802,20 @@ export function markWorkflowNodeModelDispatched(run, nodeId) {
   if (attempt) attempt.modelDispatched = true;
 }
 
+/**
+ * Clear every trace of a node's previous failure.
+ *
+ * The failure fields are read by the panel, so they must disappear together with the error the
+ * moment the node leaves the failed state — a stale cause next to a fresh attempt would describe
+ * the wrong retry.
+ */
+function clearNodeFailure(state) {
+  state.error = null;
+  state.failureKind = null;
+  state.failureCause = null;
+  state.failureCode = null;
+}
+
 export function completeWorkflowNode(definition, run, nodeId, result = {}, now = new Date().toISOString()) {
   normalizeWorkflowDefinition(definition);
   const state = run.nodes[nodeId];
@@ -818,7 +832,7 @@ export function completeWorkflowNode(definition, run, nodeId, result = {}, now =
   state.route = result.route ?? null;
   state.waitingOn = null;
   state.completedAt = now;
-  state.error = null;
+  clearNodeFailure(state);
   run.updatedAt = now;
   return maybeFinalizeWorkflow(definition, run, now);
 }
@@ -840,6 +854,11 @@ export function failWorkflowNode(definition, run, nodeId, error, options = {}, n
   // Carries the runtime's own classification to the host: a deterministic failure cannot be
   // fixed by choosing another model, so the UI must not offer that as the remedy.
   state.failureKind = options.deterministic === true ? "deterministic" : "model";
+  // Where the failure happened, also for the host. A node-end commit or output-staging failure is
+  // retried by re-running the node, which re-renders the change, so the remedy is a plain retry
+  // even though a model did run in this attempt and the failure is not deterministic.
+  state.failureCause = options.nodeEndCommit === true ? "node_end_commit" : null;
+  state.failureCode = options.failureCode || null;
   if (Object.hasOwn(options, "output")) state.output = structuredClone(options.output);
   if (options.retryable !== false && state.attempts.length < node.retry.maxAttempts) state.status = "awaiting-retry";
   else if (options.awaitModelChoice !== false) state.status = "awaiting-model-choice";
@@ -885,7 +904,7 @@ export function waitWorkflowNodeOnChild(definition, run, nodeId, waitingOn, now 
   attempt.error = null;
   state.status = "awaiting-child";
   state.waitingOn = structuredClone(waitingOn);
-  state.error = null;
+  clearNodeFailure(state);
   state.completedAt = null;
   run.status = "awaiting-child";
   run.waitingOn = { nodeId, ...structuredClone(waitingOn) };
@@ -898,7 +917,7 @@ export function resumeWorkflowNodeAfterChild(run, nodeId, now = new Date().toISO
   const state = run.nodes[nodeId];
   if (!state || state.status !== "awaiting-child") throw new Error(`Node ${nodeId} is not waiting on a child workflow.`);
   state.status = "pending";
-  state.error = null;
+  clearNodeFailure(state);
   const remaining = Object.values(run.nodes).find(candidate => candidate.status === "awaiting-child");
   run.status = remaining ? "awaiting-child" : "running";
   run.waitingOn = remaining ? { nodeId: remaining.id, ...structuredClone(remaining.waitingOn) } : null;
@@ -913,7 +932,7 @@ export function prepareWorkflowNodeRetry(run, nodeId, now = new Date().toISOStri
     throw new Error(`Node ${nodeId} cannot be retried.`);
   }
   state.status = "pending";
-  state.error = null;
+  clearNodeFailure(state);
   run.status = "running";
   run.error = null;
   run.updatedAt = now;

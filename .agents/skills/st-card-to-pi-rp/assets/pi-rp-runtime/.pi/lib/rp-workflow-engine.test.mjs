@@ -1317,6 +1317,50 @@ test("a node-end commit refused by state or by the model's own data stays on the
   }
 });
 
+test("reports where a failure happened so the panel can offer the right retry", { timeout: 5000 }, async () => {
+  const workflow = { schemaVersion: 3, id: "commit-origin", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const engine = new RpWorkflowEngine({
+    executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
+    beforeNodeComplete: async () => { throw Object.assign(new Error("Record X revision conflict."), { code: "revision_conflict" }); },
+  });
+  const settled = await engine.wait((await engine.start(workflow, { id: "commit-origin-run" })).id);
+  // Both fields describe the same failure, and the code survives for the hint text.
+  assert.equal(settled.nodes.task.failureCause, "node_end_commit");
+  assert.equal(settled.nodes.task.failureCode, "revision_conflict");
+
+  // A failure from the executor itself is not a commit failure, and carries no code here.
+  const plain = new RpWorkflowEngine({ executor: async task => { task.markModelDispatched?.(); throw new Error("provider is offline"); } });
+  const plainSettled = await plain.wait((await plain.start({ ...workflow, id: "plain-run" }, { id: "plain-run" })).id);
+  assert.equal(plainSettled.nodes.task.failureCause, null);
+  assert.equal(plainSettled.nodes.task.failureCode, null);
+});
+
+test("retrying a node clears the previous failure's cause and code", { timeout: 5000 }, async () => {
+  // The panel reads these fields, so a stale cause beside a fresh attempt would describe the wrong
+  // retry — the marks must disappear with the error.
+  const workflow = { schemaVersion: 3, id: "commit-recovery", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  let attempt = 0;
+  const engine = new RpWorkflowEngine({
+    executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
+    beforeNodeComplete: async ({ result }) => {
+      attempt += 1;
+      if (attempt === 1) throw Object.assign(new Error("Record X revision conflict."), { code: "revision_conflict" });
+      return result;
+    },
+  });
+  const started = await engine.start(workflow, { id: "commit-recovery-run" });
+  const failed = await engine.wait(started.id);
+  assert.equal(failed.nodes.task.status, "awaiting-model-choice");
+  assert.equal(failed.nodes.task.failureCause, "node_end_commit");
+  await engine.retry(started.id, "task", null);
+  const retried = await engine.wait(started.id);
+  assert.equal(retried.status, "completed");
+  assert.equal(retried.nodes.task.error, null);
+  assert.equal(retried.nodes.task.failureKind, null);
+  assert.equal(retried.nodes.task.failureCause, null);
+  assert.equal(retried.nodes.task.failureCode, null);
+});
+
 test("a throwing onChange neither hangs waiters nor escapes the scheduler", { timeout: 5000 }, async () => {
   // The host hook fails after start(), so the failure lands inside the scheduler's own
   // propagation path. Previously the waiter's wake was never resolved (wait() hung forever)

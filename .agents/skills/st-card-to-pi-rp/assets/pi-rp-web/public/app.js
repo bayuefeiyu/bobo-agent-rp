@@ -2004,6 +2004,14 @@ function renderWorkflowRuns() {
           retry.addEventListener("click", () => retryWith(false, retryModel));
           const hint = document.createElement("span"); hint.className = "workflow-node-hint"; hint.textContent = "非模型故障：修正卡片或配置后再试";
           row.append(retry, hint);
+        } else if (node.failureCause === "node_end_commit") {
+          // The model answered; the node's own output or commit stage refused the result. Retrying
+          // re-runs the node and re-renders the change, which is the remedy — another model is not.
+          const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "重试";
+          retry.addEventListener("click", () => retryWith(false, retryModel));
+          const hint = document.createElement("span"); hint.className = "workflow-node-hint";
+          hint.textContent = node.failureCode ? `提交未通过（${node.failureCode}）：重试会重新生成本轮改动` : "提交未通过：重试会重新生成本轮改动";
+          row.append(retry, hint);
         } else {
           const model = modelOptions(retryModel); model.className = "setting-select";
           const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
