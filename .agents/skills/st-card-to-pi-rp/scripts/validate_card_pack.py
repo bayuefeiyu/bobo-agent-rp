@@ -1158,9 +1158,13 @@ def foreground_design_problems(label: str, by_id: dict[str, Any], ancestors_for,
     if required_calls:
         narrative_agents = [node for node in by_id.values() if node.get("type") == "agent" and any(isinstance(output, dict) and output.get("format") == "narrative" for output in node.get("outputs", {}).values())]
         for target in required_calls:
-            exposed = [binding if isinstance(binding, str) else binding.get("target") for node in narrative_agents for binding in node.get("workflowCalls", [])]
-            if not narrative_agents or target not in exposed:
+            if not narrative_agents:
                 problems.append(f"{label} narrative Agent must expose {target}")
+                continue
+            for node in narrative_agents:
+                exposed = [binding if isinstance(binding, str) else binding.get("target") for binding in node.get("workflowCalls", [])]
+                if target not in exposed:
+                    problems.append(f"{label} narrative Agent must expose {target}; node {node.get('id', '<unknown>')} does not")
     return problems
 
 

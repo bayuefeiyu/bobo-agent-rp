@@ -8,7 +8,7 @@ import { RpDataStore } from "./rp-data-store.mjs";
 import { assertCommittedDataReceipt, executeDataBatch, executeDataBatchOrThrow } from "./rp-data-changes.mjs";
 import { getDataRecord, getDataRecordHistory, queryData, queryDataStable } from "./rp-data-query.mjs";
 import { createDataReadView, readDataReadViewCollection } from "./rp-data-read-view.mjs";
-import { commitDataFiles, inspectDataImpact, inspectDataIntegrity } from "./rp-data-transactions.mjs";
+import { commitDataFiles, inspectDataImpact, inspectDataIntegrity, recoverDataTransactions } from "./rp-data-transactions.mjs";
 
 const contract = normalizeDataContract({
   schemaVersion: 1,
@@ -413,7 +413,7 @@ test("a partial receipt is still replayed idempotently", async t => {
   assert.equal((await store.readCollection("rumors", "entries")).history.length, 2);
 });
 
-test("re-running a batch whose commit failed exposes a conflict instead of double-writing", async t => {
+test("a throw after commit returns the persisted outcome instead of overwriting it", async t => {
   const { store } = await fixture(t);
   const seed = await executeDataBatch(store, {
     protocolVersion: 1,
@@ -424,8 +424,8 @@ test("re-running a batch whose commit failed exposes a conflict instead of doubl
   }, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 1, messageId: null } } });
   assert.equal(seed.status, "committed");
 
-  // The one place where a `failed` receipt does not imply "nothing landed": the transaction wrote
-  // its files and then reported failure. Re-running must not write a second time.
+  // A host wrapper throws after the transaction has already persisted its success receipt. The
+  // receipt is the commit marker, so the caller must still see success and replay it idempotently.
   const realCommit = store.commit.bind(store);
   let failAfterWriting = true;
   store.commit = async (...args) => {
@@ -444,18 +444,89 @@ test("re-running a batch whose commit failed exposes a conflict instead of doubl
     operations: [{ operationId: "update", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "update", targetId: "rumor.boundary", expectedRevision: 1, data: { content: "写入后", source: "character.queen" } }],
   };
   const interrupted = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
-  assert.equal(interrupted.status, "failed");
-  assert.equal(interrupted.results.at(-1).code, "commit_failed");
+  assert.equal(interrupted.status, "committed");
+  assert.equal(interrupted.recoveredAfterCommitError, true);
   const written = (await store.readCollection("rumors", "entries")).records[0];
   assert.equal(written.revision, 2);
 
   const retried = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
-  assert.equal(retried.idempotentReplay ?? false, false);
-  assert.equal(retried.status, "failed");
-  assert.equal(retried.results[0].code, "revision_conflict");
+  assert.equal(retried.idempotentReplay, true);
+  assert.equal(retried.status, "committed");
   const afterRetry = (await store.readCollection("rumors", "entries")).records[0];
   assert.equal(afterRetry.revision, 2);
   assert.equal(afterRetry.data.content, "写入后");
+});
+
+test("a create without targetId is not duplicated when a host throws after commit", async t => {
+  const { store } = await fixture(t);
+  const realCommit = store.commit.bind(store);
+  let failAfterWriting = true;
+  store.commit = async (...args) => {
+    const result = await realCommit(...args);
+    if (failAfterWriting) {
+      failAfterWriting = false;
+      throw new Error("host failed after the transaction committed");
+    }
+    return result;
+  };
+  const batch = {
+    protocolVersion: 1,
+    batchId: "commit-boundary-create",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "create", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", data: { content: "唯一事件", source: "character.queen" } }],
+  };
+  const first = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] } });
+  const replay = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] } });
+  assert.equal(first.status, "committed");
+  assert.equal(first.recoveredAfterCommitError, true);
+  assert.equal(replay.idempotentReplay, true);
+  const records = (await store.readCollection("rumors", "entries")).records;
+  assert.equal(records.length, 1);
+  assert.equal(records[0].provenance.batchId, batch.batchId);
+  assert.equal(records[0].provenance.operationId, "create");
+});
+
+test("an unresolved transaction journal blocks batch re-execution", async t => {
+  const { store } = await fixture(t);
+  const transactionRoot = join(store.sessionDirectory, "workspace", "transactions");
+  await mkdir(transactionRoot, { recursive: true });
+  await writeFile(join(transactionRoot, "unknown-batch.json"), JSON.stringify({ schemaVersion: 1, batchId: "unknown-batch", status: "rollback-failed", entries: [] }), "utf8");
+  const receipt = await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "unknown-batch",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "create", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", data: { content: "不得落地", source: "character.queen" } }],
+  }, { access: { rumors: ["rumor.write"] } });
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.results[0].code, "commit_outcome_unknown");
+  assert.equal((await store.readCollection("rumors", "entries")).records.length, 0);
+});
+
+test("startup recovery completes an interrupted rollback before allowing later work", async t => {
+  const root = await mkdtemp(join(tmpdir(), "rp-recovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sessionDirectory = join(root, "session");
+  const transactionRoot = join(sessionDirectory, "workspace", "transactions");
+  const stagingRoot = join(transactionRoot, "recover-batch");
+  const target = join(sessionDirectory, "modules", "state.json");
+  const backup = join(stagingRoot, "000000.previous");
+  await mkdir(join(target, ".."), { recursive: true });
+  await mkdir(stagingRoot, { recursive: true });
+  await writeFile(target, "partially-applied", "utf8");
+  await writeFile(backup, "before", "utf8");
+  await writeFile(join(transactionRoot, "recover-batch.json"), JSON.stringify({
+    schemaVersion: 1,
+    batchId: "recover-batch",
+    status: "rollback-failed",
+    entries: [{ target, backup, existed: true }],
+  }), "utf8");
+
+  assert.deepEqual(await recoverDataTransactions(sessionDirectory), ["recover-batch"]);
+  assert.equal(await readFile(target, "utf8"), "before");
+  const journal = JSON.parse(await readFile(join(transactionRoot, "recover-batch.json"), "utf8"));
+  assert.equal(journal.status, "recovered-rolled-back");
 });
 
 test("module-local processors implement guarded custom record operations", async t => {
@@ -483,6 +554,9 @@ test("multi-file transaction failure restores an already replaced target", async
   await mkdir(join(first, ".."), { recursive: true });
   await mkdir(invalidTarget, { recursive: true });
   await writeFile(first, "before", "utf8");
-  await assert.rejects(commitDataFiles(sessionDirectory, "rollback-test", [{ path: first, content: "after" }, { path: invalidTarget, content: "cannot replace directory" }], { batchId: "rollback-test" }));
+  await assert.rejects(
+    commitDataFiles(sessionDirectory, "rollback-test", [{ path: first, content: "after" }, { path: invalidTarget, content: "cannot replace directory" }], { batchId: "rollback-test" }),
+    error => error.transactionOutcome === "rolled-back",
+  );
   assert.equal(await readFile(first, "utf8"), "before");
 });

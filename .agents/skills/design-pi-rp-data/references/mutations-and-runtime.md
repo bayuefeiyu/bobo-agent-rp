@@ -20,7 +20,7 @@ Choose commit policy deliberately:
 - `grouped` when authored groups are independently atomic;
 - `best-effort` only when partial application is an intended result and the workflow node explicitly permits it.
 
-Batch IDs and operation IDs are idempotency keys. A committed ID cannot be reused for different content. Commits within one session are serialized, and multi-file failure rolls back replacements within the transaction boundary. Workflow collection locks improve safe concurrency but do not replace transaction serialization, atomicity, or expected-revision checks.
+Batch IDs and operation IDs are idempotency keys. A committed ID cannot be reused for different content. Commits within one session are serialized, and multi-file failure rolls back replacements within the transaction boundary. The receipt is installed last as the commit marker. A failed batch may re-execute only after validation/application failed before commit or rollback was confirmed complete; an unresolved transaction journal blocks replay with `commit_outcome_unknown` until recovery establishes its durable result. Workflow collection locks improve safe concurrency but do not replace transaction serialization, atomicity, or expected-revision checks.
 
 ## Submission and recovery
 
@@ -34,7 +34,7 @@ Receipts and record provenance retain the normalized source set. `inspectDataImp
 
 `inspectDataIntegrity()` may compare current authoritative message revisions with receipt sources and return module-scoped warnings. A module can acknowledge a reviewed range with its own guarded coverage record; the public diagnostic remains read-only and does not decide that a record is false. Declarative frontend alerts may prefill a statically allowed repair workflow, but only a user action starts it.
 
-Design receipt handling for validation failures, permission denial, revision conflicts, rollback, and corrected resubmission. Retrying a failed batch may reuse its identity only according to the runtime receipt contract; never turn a conflict into an unconditional overwrite.
+Design receipt handling for validation failures, permission denial, revision conflicts, confirmed rollback, unresolved commit outcome, and corrected resubmission. Retrying a failed batch may reuse its identity only according to the runtime receipt contract; never turn a conflict or unresolved journal into an unconditional overwrite.
 
 Message-suffix deletion removes bound revisions through the common store and restores the latest surviving effective state. This structural suffix operation remains distinct from in-place editing. Manual repair, maintenance, and migration use explicitly selected workflows and the unified write service.
 

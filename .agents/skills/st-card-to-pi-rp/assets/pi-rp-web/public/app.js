@@ -1995,7 +1995,7 @@ function renderWorkflowRuns() {
         });
         row.append(openProcessRecord);
       }
-      if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status) && (node.type !== "team" || node.team?.failedMember?.freezeKey)) {
+      if (run.live && !(run.kind === "foreground" && terminalWorkflowStatuses.has(run.status)) && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status) && (node.type !== "team" || node.team?.failedMember?.freezeKey)) {
         const retryModel = node.attempts?.at(-1)?.modelId || "pi:current";
         const retryWith = async (saveAsCardDefault, modelId) => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
         if (node.failureKind === "deterministic") {

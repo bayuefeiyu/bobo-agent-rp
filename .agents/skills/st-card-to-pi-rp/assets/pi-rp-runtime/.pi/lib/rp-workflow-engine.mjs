@@ -261,6 +261,9 @@ export class RpWorkflowEngine {
   async retry(runId, nodeId, modelId, { saveOverride = false, memberId = null } = {}) {
     const entry = this.runs.get(runId);
     if (!entry) throw new Error(`Unknown workflow run: ${runId}`);
+    if (entry.workflow.kind === "foreground" && TERMINAL_RUN_STATUSES.has(entry.run.status)) {
+      throw Object.assign(new Error("A terminal foreground turn cannot be retried in place; submit a new player turn."), { code: "foreground_turn_terminal" });
+    }
     const retryNode = entry.workflow.nodes.find(item => item.id === nodeId);
     if (retryNode?.type === "team") {
       const freezeKey = typeof memberId === "string" && memberId ? memberId : null;
@@ -373,18 +376,38 @@ export class RpWorkflowEngine {
 
   async #executeWhenAvailable(entry, node) {
     const isTeam = node.type === "team";
-    const agent = isTeam ? null : node.agentId || entry.workflow.defaults.agentId ? await this.resolveAgent(node.agentId || entry.workflow.defaults.agentId) : null;
-    const binding = isTeam
-      ? { agentId: null, modelId: null }
-      : resolveNodeProfiles({ node: { ...node, modelId: entry.modelOverrides[node.id] || node.modelId }, workflow: entry.workflow, agent });
-    const model = isTeam || binding.modelId === "pi:current" ? null : await this.resolveModel(binding.modelId);
     const schedulingKind = entry.run.effectiveSchedulingKind || entry.workflow.kind;
-    if (!isTeam) {
-      try { await this.#acquire(schedulingKind, binding.modelId, model, entry); }
-      catch (error) {
-        if (error?.code === "workflow_cancelled") return;
-        throw error;
-      }
+    let agent = null;
+    let binding = { agentId: null, modelId: null };
+    let model = null;
+    try {
+      const agentId = node.agentId || entry.workflow.defaults.agentId || null;
+      agent = isTeam || !agentId ? null : await this.resolveAgent(agentId);
+      binding = isTeam
+        ? binding
+        : resolveNodeProfiles({ node: { ...node, modelId: entry.modelOverrides[node.id] || node.modelId }, workflow: entry.workflow, agent });
+      model = isTeam || binding.modelId === "pi:current" ? null : await this.resolveModel(binding.modelId);
+      if (!isTeam) await this.#acquire(schedulingKind, binding.modelId, model, entry);
+    } catch (error) {
+      if (entry.stopped || entry.run.status === "cancelled" || error?.code === "workflow_cancelled") return;
+      // Profile resolution and scheduler acquisition are part of this node attempt. They happen
+      // before a model can be dispatched, so record a deterministic node failure instead of
+      // letting the scheduler-level catch leave the run permanently running with a pending node.
+      startWorkflowNode(entry.workflow, entry.run, node.id, {
+        agentId: binding.agentId,
+        modelId: binding.modelId,
+        resolvedModel: model ? { provider: model.provider, model: model.model } : null,
+        allowAfterExhaustion: entry.exhaustionOverrides.delete(node.id),
+      });
+      failWorkflowNode(entry.workflow, entry.run, node.id, error, {
+        retryable: false,
+        awaitModelChoice: false,
+        deterministic: true,
+        failureCode: error?.code || null,
+      });
+      maybeFinalizeWorkflow(entry.workflow, entry.run);
+      await this.#changed(entry);
+      return;
     }
     let slotHeld = !isTeam;
     let callQueue = Promise.resolve();

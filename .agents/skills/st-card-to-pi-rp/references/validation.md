@@ -80,7 +80,7 @@ Simulate the default and one alternate opening, ordinary narration, on-demand lo
 - denied view/capability and a conservative-budget boundary;
 - create/update/revise/archive/restore as declared;
 - explicit submit and node-end fallback without duplicate commit;
-- atomic/grouped behavior, idempotent replay of an outcome (`committed`/`partial`), revision conflict, and failure receipt — remember a `failed` receipt re-executes rather than replaying itself;
+- atomic/grouped behavior, idempotent replay of an outcome (`committed`/`partial`), revision conflict, and failure receipt — a failed receipt re-executes only after pre-commit failure or confirmed rollback, while an unresolved transaction journal blocks replay;
 - frontend rendering based on customized code, background invisibility, and display ordering;
 - message-suffix pruning for bound data, including a hybrid collection whose seeded initial record was deleted;
 - derived-index damage: an unreadable index rebuilds with a warning while a damaged authoritative file still fails;

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { capabilityAllows, isSafeDataId, recordTypeDefinition } from "./rp-data-contracts.mjs";
 import { createDataRecord, reviseDataRecord } from "./rp-data-records.mjs";
 import { extractRecordIndexes } from "./rp-data-index.mjs";
-import { readDataReceipt, writeDataReceipt } from "./rp-data-transactions.mjs";
+import { readDataReceipt, readDataTransaction, writeDataReceipt } from "./rp-data-transactions.mjs";
 import { mergeSourceReferences } from "./rp-narrative-source.mjs";
 
 const POLICIES = new Set(["atomic", "grouped", "best-effort"]);
@@ -247,12 +247,19 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
   }
   const batchHash = createHash("sha256").update(JSON.stringify(batch)).digest("hex");
   const existing = await readDataReceipt(store.sessionDirectory, batch.batchId);
-  // Only a receipt that recorded an outcome is replayable. A `failed` receipt means no operation
-  // was accepted, so the very same batch must be allowed to run again — otherwise a deterministic
-  // failure returns its own stale receipt forever and neither a node retry nor a model change can
-  // escape it. Re-running is safe because `failed` implies nothing landed; the one boundary, a
-  // failure raised while committing, is guarded by per-operation idempotency and expectedRevision
-  // and surfaces as a conflict instead of a silent double write.
+  // A transaction whose rollback is incomplete has an unknown durable result. Do not execute its
+  // batch again: create/append may have no target ID or revision guard and could duplicate data.
+  const transaction = await readDataTransaction(store.sessionDirectory, batch.batchId);
+  if (transaction && ["staged", "interrupted", "rollback-failed"].includes(transaction.status)) {
+    return {
+      schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null,
+      results: [{ operationId: null, status: "failed", code: "commit_outcome_unknown", error: "The prior transaction has not been confirmed committed or rolled back. Recover the session transaction before retrying this batch." }],
+      ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false,
+    };
+  }
+  // Failed validation/application receipts are retryable because no commit was attempted. Outcomes
+  // that reached the transaction service are either represented by a committed/partial receipt or
+  // protected by the unresolved journal check above.
   if (existing && existing.status !== "failed") {
     if (existing.batchHash === batchHash) return { ...existing, idempotentReplay: true };
     return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
@@ -298,6 +305,20 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
     try {
       await store.commit(batch.batchId, states, receipt);
     } catch (error) {
+      // The receipt is the transaction's commit marker. A host wrapper may throw after commit, and
+      // cleanup can be retried later; neither case may overwrite the committed result with failure.
+      const persisted = await readDataReceipt(store.sessionDirectory, batch.batchId).catch(() => null);
+      if (persisted && persisted.batchHash === batchHash && ["committed", "partial"].includes(persisted.status)) {
+        return { ...persisted, idempotentReplay: false, recoveredAfterCommitError: true };
+      }
+      if (error?.transactionOutcome === "unknown") {
+        return {
+          ...receipt,
+          status: "failed",
+          committedAt: null,
+          results: [...results, { operationId: null, status: "failed", code: "commit_outcome_unknown", error: String(error?.message || error) }],
+        };
+      }
       return writeDataReceipt(store.sessionDirectory, {
         ...receipt,
         status: "failed",

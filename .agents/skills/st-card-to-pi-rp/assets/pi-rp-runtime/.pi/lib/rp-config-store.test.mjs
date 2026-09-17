@@ -4,12 +4,27 @@ import os from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { createRpConfigStore } from "./rp-config-store.mjs";
+import { createRpConfigStore, resolveActiveForegroundWorkflow } from "./rp-config-store.mjs";
 import { createConfigProfileStore } from "./rp-config-profiles.mjs";
 
 function testStore(root) {
   return createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache") });
 }
+
+test("resolves a default only from card-local foreground workflows", () => {
+  const workflows = [
+    { id: "standard-rp", kind: "foreground", source: "global" },
+    { id: "advanced-memory-rp", kind: "foreground", source: "global" },
+    { id: "card-story", kind: "foreground", source: "card" },
+    { id: "card-background", kind: "turn-background", source: "card" },
+  ];
+  assert.equal(resolveActiveForegroundWorkflow(workflows), "card-story");
+  assert.equal(resolveActiveForegroundWorkflow(workflows, "card-story"), "card-story");
+  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "standard-rp"), /card-local foreground/);
+  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "card-background"), /card-local foreground/);
+  assert.throws(() => resolveActiveForegroundWorkflow(workflows.filter(item => item.source === "global")), /no foreground workflow/);
+  assert.throws(() => resolveActiveForegroundWorkflow([...workflows, { id: "second-card-story", kind: "foreground", source: "card" }]), /multiple foreground workflows/);
+});
 
 test("layers card agent overrides without changing the global profile", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));

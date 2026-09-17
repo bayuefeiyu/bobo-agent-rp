@@ -24,9 +24,10 @@ import {
 } from "../lib/rp-context-processors.mjs";
 import { removeSavedUserProfile } from "../lib/rp-user-profiles.mjs";
 import { defaultCommonSettings, mergeCommonSettings, normalizeCommonSettings } from "../lib/rp-common-settings.mjs";
-import { createRpConfigStore } from "../lib/rp-config-store.mjs";
+import { createRpConfigStore, resolveActiveForegroundWorkflow } from "../lib/rp-config-store.mjs";
 import { createConfigProfileStore } from "../lib/rp-config-profiles.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
+import { withTerminalForegroundRelease } from "../lib/rp-workflow-host.mjs";
 import { composeNodePrompt, composeWorkflowNodeDynamicContext, moveModelTailToEnd, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
 import { assertDocumentWorkspaceAgentTools, canonicalWorkflowRef, normalizeWorkflowDefinition, resolveCodeNodeRoute, resolveNodeQueryBudget, workflowTriggerMatches } from "../lib/rp-workflows.mjs";
 import { normalizeFeatureModuleManifest } from "../lib/rp-feature-modules.mjs";
@@ -512,15 +513,8 @@ function unresolvedWorkflowCalls(workflow: any, featureModules: any[]): string[]
  * ambiguity and absence are reported instead of silently rewritten into the card's settings.json.
  */
 async function resolveActiveWorkflowId(configStore: any, cardSettings: { settings: Record<string, any> }): Promise<string> {
-  const configured = cardSettings.settings.activeWorkflowId;
-  if (typeof configured === "string" && configured.trim()) return configured;
   const topLevel = await configStore.listWorkflows();
-  const foreground = (topLevel as any[]).filter(workflow => workflow.kind === "foreground" && workflow.invalid !== true);
-  if (foreground.length === 1) return foreground[0].id;
-  if (foreground.length === 0) {
-    throw new Error("The card declares no foreground workflow. Add one below workflows/ before opening Web mode.");
-  }
-  throw new Error(`The card declares multiple foreground workflows (${foreground.map(workflow => workflow.id).join(", ")}); set settings.activeWorkflowId to choose one.`);
+  return resolveActiveForegroundWorkflow(topLevel, cardSettings.settings.activeWorkflowId);
 }
 
 async function readOrCreateJson<T>(path: string, fallback: T): Promise<T> {
@@ -782,7 +776,10 @@ export default function (pi: ExtensionAPI) {
   function releaseRpTurn(reason: "completed" | "failed", detail: string | null) {
     if (!active || !rpRun) return;
     if (reason === "failed") {
-      if (!active.context.isIdle()) active.context.abort();
+      if (!active.context.isIdle()) {
+        try { active.context.abort(); }
+        catch (error) { console.warn(`Failed to abort the terminal foreground context: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       active.lastTurnFailure = { turn: active.turn, detail, at: new Date().toISOString(), recordId: active.recordId };
     }
     active.pending = false;
@@ -2087,41 +2084,45 @@ export default function (pi: ExtensionAPI) {
       },
       onChange: async (run: any, workflow: any) => {
         if (!active?.sessionDirectory || active.recordId !== run.chatId) return;
-        const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
-        await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, run));
-        if (["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
-          await cleanupArtifacts(active.sessionDirectory, { type: "run", workflowRunId: run.id });
-          await cleanupFrozenTriggerInputs(active.sessionDirectory, workflow.id, run.id);
-        }
-        for (const state of Object.values(run.nodes) as any[]) {
-          const eventKey = `${run.id}:node:${state.id}:completed`;
-          if (state.status === "completed" && !deliveredWorkflowEvents.has(eventKey)) {
-            await serializeWorkflowWrite(async () => {
-              const artifactDirectory = resolve(paths.workflowArtifacts, run.id);
-              await mkdir(artifactDirectory, { recursive: true });
-              await writeFile(resolve(artifactDirectory, `${state.id}.json`), `${JSON.stringify({ schemaVersion: 1, workflowId: workflow.id, runId: run.id, nodeId: state.id, turn: run.turn, output: state.output, usage: state.usage }, null, 2)}\n`, "utf8");
-            });
-            if (Number.isSafeInteger(run.turn)) nodeCompletionTurns.set(`${workflow.id}:${state.id}`, run.turn);
-            deliveredWorkflowEvents.add(eventKey);
-            if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "node", workflowId: workflow.id, nodeId: state.id, runId: run.id }, run);
+        const terminal = ["completed", "skipped", "failed", "cancelled"].includes(run.status);
+        return withTerminalForegroundRelease(run, workflow, async () => {
+          const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, workflow.id, run.id, workflow.kind));
+          await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, run));
+          if (terminal) {
+            await cleanupArtifacts(active.sessionDirectory, { type: "run", workflowRunId: run.id });
+            await cleanupFrozenTriggerInputs(active.sessionDirectory, workflow.id, run.id);
           }
-        }
-        const completeKey = `${run.id}:workflow:completed`;
-        if (run.status === "completed" && !deliveredWorkflowEvents.has(completeKey)) {
-          deliveredWorkflowEvents.add(completeKey);
-          if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
-        }
-        if (workflow.kind === "foreground" && rpRun?.workflowRunId === run.id) {
-          if (run.status === "completed" && rpRun.agentSettled) {
-            rpRun.workflowCompleted = true;
-            releaseCompletedRpTurn(run.id);
-          } else if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) {
-            // Either the turn ended terminally, or it reported success without ever publishing a
-            // narrative. Both leave the occupation behind if nothing releases it, and neither
-            // should pass silently.
-            releaseRpTurn("failed", describeTurnFailure(run, rpRun.agentSettled));
+          for (const state of Object.values(run.nodes) as any[]) {
+            const eventKey = `${run.id}:node:${state.id}:completed`;
+            if (state.status === "completed" && !deliveredWorkflowEvents.has(eventKey)) {
+              await serializeWorkflowWrite(async () => {
+                const artifactDirectory = resolve(paths.workflowArtifacts, run.id);
+                await mkdir(artifactDirectory, { recursive: true });
+                await writeFile(resolve(artifactDirectory, `${state.id}.json`), `${JSON.stringify({ schemaVersion: 1, workflowId: workflow.id, runId: run.id, nodeId: state.id, turn: run.turn, output: state.output, usage: state.usage }, null, 2)}\n`, "utf8");
+              });
+              if (Number.isSafeInteger(run.turn)) nodeCompletionTurns.set(`${workflow.id}:${state.id}`, run.turn);
+              deliveredWorkflowEvents.add(eventKey);
+              if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "node", workflowId: workflow.id, nodeId: state.id, runId: run.id }, run);
+            }
           }
-        }
+          const completeKey = `${run.id}:workflow:completed`;
+          if (run.status === "completed" && !deliveredWorkflowEvents.has(completeKey)) {
+            deliveredWorkflowEvents.add(completeKey);
+            if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
+          }
+        }, () => {
+          // Host persistence, cleanup and event delivery may fail. A terminal foreground run must
+          // still release the exact turn it owns, otherwise the engine records the host failure but
+          // the Web session remains busy forever with no cancellable live instance.
+          if (rpRun?.workflowRunId === run.id) {
+            if (run.status === "completed" && rpRun.agentSettled) {
+              rpRun.workflowCompleted = true;
+              releaseCompletedRpTurn(run.id);
+            } else {
+              releaseRpTurn("failed", describeTurnFailure(run, rpRun.agentSettled));
+            }
+          }
+        });
       },
     });
 
@@ -2429,21 +2430,27 @@ export default function (pi: ExtensionAPI) {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
             const run = active.workflowEngine.snapshot().find((item: any) => item.id === runId);
             if (!run) throw httpError(404, "Workflow run was not found.");
-            const workflow = await configStore.copyWorkflowToCard(run.workflowId);
+            const workflow = await configStore.getWorkflow(run.workflowId);
+            if (workflow.kind === "foreground" && ["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
+              throw httpError(409, "A terminal foreground turn cannot be retried in place. Fix the card or configuration, then submit a new player turn.");
+            }
             const node = workflow.nodes.find((item: any) => item.id === nodeId);
             if (!node) throw httpError(404, "Workflow node was not found.");
             if (value.saveAsCardDefault === true) {
-              if (node.type === "team" && typeof value.memberId === "string") {
-                const members = [node.team?.leader, node.team?.secretary, ...(node.team?.experts || [])];
+              const editableWorkflow = await configStore.copyWorkflowToCard(run.workflowId);
+              const editableNode = editableWorkflow.nodes.find((item: any) => item.id === nodeId);
+              if (!editableNode) throw httpError(404, "Workflow node was not found.");
+              if (editableNode.type === "team" && typeof value.memberId === "string") {
+                const members = [editableNode.team?.leader, editableNode.team?.secretary, ...(editableNode.team?.experts || [])];
                 const member = value.memberId.startsWith("member:")
                   ? members.find((item: any) => item?.id === value.memberId.slice("member:".length))
                   : value.memberId.startsWith("assistant:")
-                    ? (node.team?.assistants || []).find((item: any) => item?.id === value.memberId.slice("assistant:".length))
+                    ? (editableNode.team?.assistants || []).find((item: any) => item?.id === value.memberId.slice("assistant:".length))
                     : null;
                 if (!member) throw httpError(400, "The failed team member could not be resolved in the card workflow.");
                 member.modelId = value.modelId;
-              } else node.modelId = value.modelId;
-              await configStore.saveCardWorkflow(workflow);
+              } else editableNode.modelId = value.modelId;
+              await configStore.saveCardWorkflow(editableWorkflow);
             }
             const retried = await active.workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true, memberId: value.memberId || null });
             return retried;

@@ -428,6 +428,17 @@ class ValidateCardPackTests(unittest.TestCase):
                     f"{declared} produced {errors}",
                 )
 
+    def test_required_narrative_call_is_checked_for_every_narrative_agent(self) -> None:
+        target = "demo/lookup"
+        by_id = {
+            "writer-a": {"id": "writer-a", "type": "agent", "outputs": {"story": {"format": "narrative"}}, "workflowCalls": [target]},
+            "writer-b": {"id": "writer-b", "type": "agent", "outputs": {"story": {"format": "narrative"}}, "workflowCalls": []},
+        }
+        problems = VALIDATOR.foreground_design_problems(
+            "workflows/main/workflow.json", by_id, lambda _node_id: set(), {"agentCallable": [target]}
+        )
+        self.assertEqual(problems, [f"workflows/main/workflow.json narrative Agent must expose {target}; node writer-b does not"])
+
 
 if __name__ == "__main__":
     unittest.main()

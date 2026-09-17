@@ -8,6 +8,19 @@ import { normalizeWorkflowDefinition } from "./rp-workflows.mjs";
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
+export function resolveActiveForegroundWorkflow(workflows, configured = null) {
+  const cardForeground = (Array.isArray(workflows) ? workflows : [])
+    .filter(workflow => workflow?.source === "card" && workflow.kind === "foreground" && workflow.invalid !== true);
+  if (typeof configured === "string" && configured.trim()) {
+    const selected = cardForeground.find(workflow => workflow.id === configured);
+    if (!selected) throw new Error(`Configured active workflow ${configured} must reference a valid card-local foreground workflow.`);
+    return selected.id;
+  }
+  if (cardForeground.length === 1) return cardForeground[0].id;
+  if (cardForeground.length === 0) throw new Error("The card declares no foreground workflow. Add one below workflows/ before opening Web mode.");
+  throw new Error(`The card declares multiple foreground workflows (${cardForeground.map(workflow => workflow.id).join(", ")}); set settings.activeWorkflowId to choose one.`);
+}
+
 function assertId(value, label) {
   if (typeof value !== "string" || !SAFE_ID.test(value)) throw new Error(`${label} is invalid.`);
   return value;

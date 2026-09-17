@@ -16,6 +16,14 @@ export async function readDataReceipt(sessionDirectory, batchId) {
   });
 }
 
+export async function readDataTransaction(sessionDirectory, batchId) {
+  const path = safeResolve(sessionDirectory, "workspace", "transactions", `${batchId}.json`);
+  return readFile(path, "utf8").then(JSON.parse).catch(error => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+}
+
 export async function listDataReceipts(sessionDirectory) {
   const receiptRoot = safeResolve(sessionDirectory, "workspace", "receipts");
   const names = await readdir(receiptRoot).catch(error => error?.code === "ENOENT" ? [] : Promise.reject(error));
@@ -163,20 +171,50 @@ export async function commitDataFiles(sessionDirectory, batchId, files, receipt)
     staged.push({ target, temp, backup, existed });
   }
   await writeFile(transactionPath, `${JSON.stringify({ schemaVersion: 1, batchId, status: "staged", entries: staged }, null, 2)}\n`, "utf8");
+  const applied = [];
   try {
-    for (const file of staged) await rename(file.temp, file.target);
-    await rm(transactionPath, { force: true });
-    await rm(stagingRoot, { recursive: true, force: true });
-    return receipt;
-  } catch (error) {
+    // The receipt is staged last and therefore becomes the commit marker only after every
+    // authoritative and derived target has been replaced. Cleanup after this loop is housekeeping:
+    // it must never turn an already committed transaction back into a reported failure.
     for (const file of staged) {
-      if (file.existed) await copyFile(file.backup, file.target).catch(() => {});
-      else await rm(file.target, { force: true }).catch(() => {});
+      await rename(file.temp, file.target);
+      applied.push(file);
     }
-    await writeFile(transactionPath, `${JSON.stringify({ schemaVersion: 1, batchId, status: "rolled-back", error: String(error?.message || error), entries: staged.map(({ target, existed }) => ({ target, existed })) }, null, 2)}\n`, "utf8");
-    await rm(stagingRoot, { recursive: true, force: true });
-    throw error;
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const file of [...applied].reverse()) {
+      try {
+        if (file.existed) await copyFile(file.backup, file.target);
+        else await rm(file.target, { force: true });
+      } catch (rollbackError) {
+        rollbackErrors.push({ target: file.target, error: String(rollbackError?.message || rollbackError) });
+      }
+    }
+    const rolledBack = rollbackErrors.length === 0;
+    const journal = {
+      schemaVersion: 1,
+      batchId,
+      status: rolledBack ? "rolled-back" : "rollback-failed",
+      error: String(error?.message || error),
+      rollbackErrors,
+      entries: applied.map(({ target, backup, existed }) => ({ target, backup, existed })),
+    };
+    try {
+      await writeFile(transactionPath, `${JSON.stringify(journal, null, 2)}\n`, "utf8");
+    } catch (journalError) {
+      rollbackErrors.push({ target: transactionPath, error: `Could not persist rollback state: ${String(journalError?.message || journalError)}` });
+    }
+    if (rolledBack) await rm(stagingRoot, { recursive: true, force: true });
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      transactionOutcome: journal.status === "rolled-back" ? "rolled-back" : "unknown",
+      rollbackErrors,
+    });
   }
+  // A committed receipt is authoritative even if stale transaction files cannot be cleaned now.
+  // Startup recovery sees the receipt and removes those leftovers later.
+  await rm(transactionPath, { force: true }).catch(() => {});
+  await rm(stagingRoot, { recursive: true, force: true }).catch(() => {});
+  return receipt;
 }
 
 export async function recoverDataTransactions(sessionDirectory) {
@@ -187,7 +225,7 @@ export async function recoverDataTransactions(sessionDirectory) {
     if (!name.endsWith(".json")) continue;
     const journalPath = safeResolve(transactionRoot, name);
     const journal = await readFile(journalPath, "utf8").then(JSON.parse);
-    if (!['staged', 'interrupted'].includes(journal.status) || !Array.isArray(journal.entries)) continue;
+    if (!["staged", "interrupted", "rollback-failed"].includes(journal.status) || !Array.isArray(journal.entries)) continue;
     const receipt = await readDataReceipt(sessionDirectory, journal.batchId);
     if (receipt && ["committed", "partial"].includes(receipt.status)) {
       await rm(journalPath, { force: true });
@@ -195,16 +233,28 @@ export async function recoverDataTransactions(sessionDirectory) {
       recovered.push(journal.batchId);
       continue;
     }
+    const rollbackErrors = [];
     for (const entry of journal.entries) {
       const target = resolve(entry.target);
       const sessionRoot = resolve(sessionDirectory);
       if (target !== sessionRoot && !target.startsWith(`${sessionRoot}${sep}`)) throw new Error(`Transaction ${journal.batchId} contains an unsafe recovery target.`);
-      if (entry.existed) await copyFile(entry.backup, target);
-      else await rm(target, { force: true });
+      try {
+        if (entry.existed) await copyFile(entry.backup, target);
+        else await rm(target, { force: true });
+      } catch (error) {
+        rollbackErrors.push({ target, error: String(error?.message || error) });
+      }
     }
-    journal.status = "recovered-rolled-back";
+    journal.status = rollbackErrors.length ? "rollback-failed" : "recovered-rolled-back";
     journal.recoveredAt = new Date().toISOString();
+    journal.rollbackErrors = rollbackErrors;
     await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`, "utf8");
+    if (rollbackErrors.length) {
+      throw Object.assign(new Error(`Transaction ${journal.batchId} could not be rolled back completely.`), {
+        code: "data_transaction_recovery_failed",
+        rollbackErrors,
+      });
+    }
     await rm(safeResolve(transactionRoot, journal.batchId), { recursive: true, force: true });
     recovered.push(journal.batchId);
   }

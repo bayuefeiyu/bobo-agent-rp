@@ -29,7 +29,7 @@ Test representative cases for:
 - denied collection, capability, view, and excessive budget;
 - create and every declared existing-record action;
 - missing/stale `expectedRevision`;
-- idempotent replay and conflicting ID reuse, including that a `failed` receipt re-executes rather than replaying its own failure;
+- idempotent replay and conflicting ID reuse, including that a pre-commit or confirmed-rollback `failed` receipt re-executes, a persisted commit marker wins over a later host error, and an unresolved transaction journal blocks replay with `commit_outcome_unknown`;
 - explicit submission and node-end fallback without duplicate commit;
 - atomic/grouped rollback and intentionally authorized best-effort behavior;
 - invalid processor parameters and processor failure;

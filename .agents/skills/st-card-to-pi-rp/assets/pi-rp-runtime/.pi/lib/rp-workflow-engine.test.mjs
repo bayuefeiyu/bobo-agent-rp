@@ -1232,6 +1232,38 @@ test("classifies an Agent failure before any model call as deterministic", async
   assert.equal(settled.nodes.task.failureKind, "deterministic");
 });
 
+test("an Agent profile resolution failure becomes a terminal node failure", async () => {
+  const workflow = { schemaVersion: 3, id: "agent-profile-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", agentId: "missing", retry: { maxAttempts: 1 } }] };
+  const engine = new RpWorkflowEngine({
+    resolveAgent: async () => { throw new Error("Agent profile is missing"); },
+    executor: async () => { throw new Error("executor must not run"); },
+  });
+  const started = await engine.start(workflow, { id: "agent-profile-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "failed");
+  assert.equal(settled.nodes.task.status, "failed");
+  assert.equal(settled.nodes.task.failureKind, "deterministic");
+  assert.match(settled.nodes.task.error, /profile is missing/);
+  assert.equal(settled.nodes.task.attempts.length, 1);
+});
+
+test("a terminal foreground failure cannot be retried as a detached old turn", async () => {
+  const workflow = { schemaVersion: 3, id: "terminal-foreground", kind: "foreground", nodes: [
+    { id: "task", type: "agent", retry: { maxAttempts: 1 }, outputs: { narrative: { path: "story.md", format: "narrative" } } },
+    { id: "done", type: "turn-finalize", dependsOn: ["task"], narrative: { fromNode: "task", output: "narrative" } },
+  ] };
+  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("card script is invalid"); } });
+  const started = await engine.start(workflow, { id: "terminal-foreground-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "failed");
+  await assert.rejects(() => engine.retry(started.id, "task", null), error => {
+    assert.equal(error.code, "foreground_turn_terminal");
+    assert.match(error.message, /cannot be retried in place/);
+    return true;
+  });
+  assert.equal(engine.snapshot().find(run => run.id === started.id).status, "failed");
+});
+
 test("keeps a genuine model failure replaceable by another model", async () => {
   // The executor reports the dispatch, so the failure is the model's and another model may help.
   const workflow = { schemaVersion: 3, id: "model-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
