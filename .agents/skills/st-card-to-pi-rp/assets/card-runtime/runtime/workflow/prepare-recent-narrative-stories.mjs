@@ -21,7 +21,7 @@ export async function execute({ run, workflow, featureModules, workspace, calls 
   await writeFile(resolve(root, "DOCUMENTS.md"), [
     "# Recent published non-main stories",
     "",
-    "These windows use the foreground workflow's recentCompleteTurns setting. Read each nested DOCUMENTS.md; use its summary directory first and open full stories only when relevant.",
+    "These windows use the foreground workflow's recentCompleteTurns setting. Read each nested DOCUMENTS.md; the summary directory is for selection, and full stories are available as source material.",
     "",
     ...entries.flatMap(entry => [`## ${entry.title}`, "", `- path: \`${entry.path}\``, "- readPolicy: `conditional`", "- authority: `canonical`", "- appliesAt: `analysis-planning-writing`", ""]),
     ...(entries.length ? [] : ["No compatible narrative module is loaded.", ""]),

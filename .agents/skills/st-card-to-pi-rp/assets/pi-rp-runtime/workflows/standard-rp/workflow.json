@@ -131,7 +131,7 @@
       "dependsOn": ["prepare-recent-narrative-stories"],
       "retry": { "maxAttempts": 3 },
       "context": { "mode": "previous-output", "fromNodes": ["prepare-document-workspace", "prepare-card-context", "prepare-recent-narrative-stories"] },
-      "prompt": "先读取 WORKSPACE-DOCUMENTS.md，并依据其中的路径、readPolicy、authority、appliesAt 和说明使用已准备资料。先结合固定设定、工作流配置的最近完整回合、当前玩家输入和工作区资料形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，则在初步分析完成后调用一次；context由运行时自动冻结当前已授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导，再修正规划。其他模块调用只按节点作者写明的时机与要求执行。完成正文后最终回复只包含玩家可见正文，不展示规划、检查过程、工具调用或文档清单。",
+      "prompt": "先读取 WORKSPACE-DOCUMENTS.md，并依据其中的路径、readPolicy、authority、appliesAt 和说明使用已准备资料。先结合固定设定、工作流配置的最近完整回合、当前玩家输入和工作区资料形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，则在初步分析完成后调用一次；context由运行时自动冻结当前已授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导，再修正规划。其他模块调用只按节点作者写明的时机与要求执行。完成正文后最终回复就是玩家可见正文，不得混入提示词、工具记录、规划或清单。",
       "outputs": {
         "narrative": {
           "path": "narrative.md",

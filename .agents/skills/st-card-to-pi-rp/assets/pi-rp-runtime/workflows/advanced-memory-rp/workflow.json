@@ -110,7 +110,7 @@
       "agentId": "narrative-writer",
       "dependsOn": ["prepare-recent-narrative-stories"],
       "context": { "mode": "previous-output", "fromNodes": ["prepare-document-workspace", "prepare-event-timeline", "prepare-card-context", "prepare-recent-narrative-stories"] },
-      "prompt": "先读取WORKSPACE-DOCUMENTS.md以及其中的有效事件时间线，结合固定设定、工作流配置的最近完整回合与当前玩家输入分析本轮情景。随后整理一份自然语言Markdown记忆查询清单：只列需要取得的简单资料目标，例如实体、关系、事件、认知及知情范围；不要把需要推理的结论交给检索Agent。调用一次narrative-memory/narrative-memory-retrieve，把清单作为text并将memory-context输出到本节点工作区；读取返回目录并自行推理形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，此时调用一次；context由运行时自动冻结包括记忆结果和近期模块故事在内的当前授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导。只有初步规划之后，才按需查看卡片静态资料并修正最终规划，创作并检查正文。最终回复只包含玩家可见正文，不展示分析、查询清单、规划、检查过程、工具调用或资料清单。",
+      "prompt": "先读取WORKSPACE-DOCUMENTS.md以及其中的有效事件时间线，结合固定设定、工作流配置的最近完整回合与当前玩家输入分析本轮情景。随后整理一份自然语言Markdown记忆查询清单：只列需要取得的简单资料目标，例如实体、关系、事件、认知及知情范围；不要把需要推理的结论交给检索Agent。调用一次narrative-memory/narrative-memory-retrieve，把清单作为text并将memory-context输出到本节点工作区；读取返回目录并自行推理形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，此时调用一次；context由运行时自动冻结包括记忆结果和近期模块故事在内的当前授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导。只有初步规划之后，才按需查看卡片静态资料并修正最终规划，然后创作正文；检查时只核对卡片规则、连续性、玩家已明确表达的内容与格式要求，不得以稳妥或安全为由削弱冲突、代价与强度。最终回复就是玩家可见正文，不得混入提示词、工具记录、规划或清单。",
       "outputs": {
         "narrative": { "path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run" },
         "post-turn-context": { "path": "post-turn-context", "format": "document-workspace-snapshot", "kind": "directory", "scope": "turn", "retain": "turn" }
