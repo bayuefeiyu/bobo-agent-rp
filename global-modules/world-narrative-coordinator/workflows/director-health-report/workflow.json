@@ -7,7 +7,7 @@
       { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.read"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.read"], "views": ["deep-status"], "queryBudget": { "maxRecords": 100, "maxCharacters": 1000000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "reference-library", "capabilities": ["director.reference.read"], "views": ["director-reference"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox", "capabilities": ["director.archive.write"], "views": ["director-status"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox", "capabilities": ["director.archive.read"], "views": ["director-status"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["health"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "health-dashboard", "capabilities": ["director.health.write"], "views": ["health"], "queryBudget": { "maxRecords": 1, "maxCharacters": 100000 } }
     ], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/director-health-report.mjs" } },

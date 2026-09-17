@@ -2512,7 +2512,7 @@
         "archive-source"
       ]
     },
-    "director.archive.source-read": {
+    "director.archive.read": {
       "collections": [
         "archive-outbox"
       ],
@@ -2520,7 +2520,8 @@
         "query"
       ],
       "views": [
-        "archive-source"
+        "archive-source",
+        "director-status"
       ]
     },
     "director.archive.confirm": {
