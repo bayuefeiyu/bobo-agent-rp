@@ -90,7 +90,7 @@
       "moduleAccess": [],
       "workflowCalls": ["local-scene-narrative/export-recent-stories", "world-scope-narrative/export-recent-stories"],
       "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "entryFile": ".pi/workflow/prepare-recent-narrative-stories.mjs", "documentIndex": { "stories": { "readPolicy": "conditional", "authority": "canonical", "appliesAt": "analysis-planning-writing", "priority": 85, "description": "最近若干正文轮次所对应的已发布近场、广域故事摘要目录及按需全文。" } } }
+      "metadata": { "entryFile": "runtime/workflow/prepare-recent-narrative-stories.mjs", "documentIndex": { "stories": { "readPolicy": "conditional", "authority": "canonical", "appliesAt": "analysis-planning-writing", "priority": 85, "description": "最近若干正文轮次所对应的已发布近场、广域故事摘要目录及按需全文。" } } }
     },
     {
       "id": "prepare-card-context",
