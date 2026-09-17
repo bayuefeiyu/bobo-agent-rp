@@ -318,7 +318,8 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       assertId(workflowId, "workflowId");
       const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
       const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
-      const raw = await readJson(cardPath, null) || await readJson(globalPath);
+      const raw = await readJson(cardPath, null) || await readJson(globalPath, null);
+      if (!raw) throw new Error(`Workflow ${workflowId} was not found in the card or the shared runtime.`);
       const profile = await activeProfile();
       const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
       if (workflow.kind.startsWith("module-")) throw new Error("Module workflows must be registered through module.json.workflowFiles, not the top-level workflow store.");

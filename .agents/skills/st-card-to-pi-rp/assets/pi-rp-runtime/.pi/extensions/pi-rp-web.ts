@@ -467,13 +467,30 @@ async function readMessageRetrievalPolicy(cardDirectory: string, path: unknown):
 }
 
 async function readMessageRetrievalSkill(cardDirectory: string, path: unknown, policy: RetrievalPolicy) {
-  const enabled = policy.agent.mode !== "disabled" || policy.catalog.agentMode !== "disabled";
+  const enabled = policy.agent.mode !== "disabled";
   if (!enabled && path === undefined) return { path: null, description: "" };
-  if (typeof path !== "string") throw new Error("manifest context_skill is required when message Agent retrieval or catalog enrichment is enabled.");
+  if (typeof path !== "string") throw new Error("manifest context_skill is required when message Agent retrieval is enabled.");
   const skillPath = resolveCardChild(cardDirectory, path);
   if (!skillPath) throw new Error("manifest context_skill escapes the card directory.");
   const text = await readFile(skillPath, "utf8");
   return { path: skillPath, description: parseSkillDescription(text, "context_skill") };
+}
+
+/**
+ * Resolve the card's active foreground workflow without fabricating or persisting a choice.
+ * A missing field is only defaulted when the card declares exactly one foreground workflow;
+ * ambiguity and absence are reported instead of silently rewritten into the card's settings.json.
+ */
+async function resolveActiveWorkflowId(configStore: any, cardSettings: { settings: Record<string, any> }): Promise<string> {
+  const configured = cardSettings.settings.activeWorkflowId;
+  if (typeof configured === "string" && configured.trim()) return configured;
+  const topLevel = await configStore.listWorkflows();
+  const foreground = (topLevel as any[]).filter(workflow => workflow.kind === "foreground" && workflow.invalid !== true);
+  if (foreground.length === 1) return foreground[0].id;
+  if (foreground.length === 0) {
+    throw new Error("The card declares no foreground workflow. Add one below workflows/ before opening Web mode.");
+  }
+  throw new Error(`The card declares multiple foreground workflows (${foreground.map(workflow => workflow.id).join(", ")}); set settings.activeWorkflowId to choose one.`);
 }
 
 async function readOrCreateJson<T>(path: string, fallback: T): Promise<T> {
@@ -897,10 +914,10 @@ export default function (pi: ExtensionAPI) {
         run.automaticSelections[source] = [];
       }
       if (policy.agent.mode !== "disabled") {
-        if (policy.agent.mode !== "disabled") run.agentSources.push(source);
+        run.agentSources.push(source);
         sections.push([
           `# Record catalog: ${source}`,
-          policy.agent.mode === "disabled" ? "Agent message selection is disabled; use only the automatically selected history." : `Agent selection mode: ${policy.agent.mode}. You must resolve message history once with rp_message_query before completing this node response. Use decision=select, success_empty, or not_triggered as authored.`,
+          `Agent selection mode: ${policy.agent.mode}. You must resolve message history once with rp_message_query before completing this node response. Use decision=select, success_empty, or not_triggered as authored.`,
           formatCatalog(catalog),
         ].join("\n"));
       }
@@ -1794,7 +1811,7 @@ export default function (pi: ExtensionAPI) {
     const messagePolicy = await readMessageRetrievalPolicy(cardDirectory, manifest.context_policy);
     const messageSkill = await readMessageRetrievalSkill(cardDirectory, manifest.context_skill, messagePolicy);
     cardSettings.settings.featureModules = normalizeModuleDisplaySettings(cardSettings.settings.featureModules, featureModules);
-    if (typeof cardSettings.settings.activeWorkflowId !== "string") cardSettings.settings.activeWorkflowId = "standard-rp";
+    const activeWorkflowId = await resolveActiveWorkflowId(configStore, cardSettings);
     await writeFile(cardSettingsPath, `${JSON.stringify(cardSettings, null, 2)}\n`, "utf8");
     const candidateRecordId = context.sessionManager.getSessionId();
     const candidateSessionDirectory = resolveSessionDirectory(cardSessionsDirectory, candidateRecordId);
@@ -1843,7 +1860,7 @@ export default function (pi: ExtensionAPI) {
       configToken,
       comfyUi,
       workflowEngine: null as any,
-      activeWorkflowId: cardSettings.settings.activeWorkflowId as string,
+      activeWorkflowId,
       close: async () => {},
       url: "",
     };
