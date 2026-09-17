@@ -105,6 +105,8 @@ The engine reports every unfinished node of a blocking run. Completion, explicit
 
 A failure counts as a model failure only when that attempt actually dispatched a model call. Everything the runtime decides before that point — a node type that never calls a model, an unresolvable call target, a rejected team configuration, a card script that will not load — stays deterministic: it fails the node immediately and the panel reports the cause instead of offering a model swap.
 
+The same verdict applies after the model has answered, when a node-end data commit is refused by the card's or module's own declarations: missing capability for the action, an action the record type does not declare, a node that does not allow best-effort, a processor the package does not ship or that returns the wrong shape. Retrying cannot change any of them, so they fail deterministically too. A commit refused by state or by the model's own rendering is a different matter and stays on the model path, where the node's automatic attempts re-run it: a stale `expectedRevision`, a duplicate or missing record, a schema violation in the rendered data, or a failure while committing. Regenerating the batch is a legitimate remedy for those, which is exactly what a retry does for an Agent node.
+
 `after-opening` is also a valid top-level trigger. It fires only after the selected opening has been persisted and displayed. Use a blocking `turn-background` binding when opening-derived authority must settle before the first player input.
 
 ## Data access, outputs, and records

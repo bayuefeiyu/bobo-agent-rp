@@ -1281,6 +1281,42 @@ test("treats a coded configuration failure on an agent node as deterministic", a
   assert.match(settled.nodes.task.error, /Unknown module workflow/);
 });
 
+test("a node-end commit refused by the card's own declarations is deterministic", { timeout: 5000 }, async () => {
+  // Each of these names something the card or module must change — declared access, declared
+  // actions, the node's commit policy, or a missing processor. Nothing about them is the model's,
+  // and no retry can alter them, so the panel must not offer a model swap or silently retry.
+  for (const code of ["permission_denied", "action_not_allowed", "best_effort_not_allowed", "missing_handler", "invalid_processor_result"]) {
+    const workflow = { schemaVersion: 3, id: `commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+    const engine = new RpWorkflowEngine({
+      executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
+      beforeNodeComplete: async () => { throw Object.assign(new Error(`commit refused: ${code}`), { code }); },
+    });
+    const started = await engine.start(workflow, { id: `commit-${code}-run` });
+    const settled = await engine.wait(started.id);
+    assert.equal(settled.nodes.task.status, "failed", code);
+    assert.equal(settled.nodes.task.failureKind, "deterministic", code);
+    assert.equal(settled.nodes.task.attempts.length, 1, code);
+  }
+});
+
+test("a node-end commit refused by state or by the model's own data stays on the model path", { timeout: 5000 }, async () => {
+  // Regeneration is the cheapest remedy for these: an agent retry re-reads state and re-renders the
+  // batch, so the automatic attempts must survive. `data_schema_invalid` belongs here on purpose —
+  // the offending data is the model's output.
+  for (const code of ["revision_conflict", "expected_revision_required", "duplicate_record", "data_schema_invalid", "commit_failed"]) {
+    const workflow = { schemaVersion: 3, id: `commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
+    const engine = new RpWorkflowEngine({
+      executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
+      beforeNodeComplete: async () => { throw Object.assign(new Error(`commit refused: ${code}`), { code }); },
+    });
+    const started = await engine.start(workflow, { id: `commit-${code}-run` });
+    const settled = await engine.wait(started.id);
+    assert.equal(settled.nodes.task.status, "awaiting-model-choice", code);
+    assert.equal(settled.nodes.task.failureKind, "model", code);
+    assert.equal(settled.nodes.task.attempts.length, 2, code);
+  }
+});
+
 test("a throwing onChange neither hangs waiters nor escapes the scheduler", { timeout: 5000 }, async () => {
   // The host hook fails after start(), so the failure lands inside the scheduler's own
   // propagation path. Previously the waiter's wake was never resolved (wait() hung forever)

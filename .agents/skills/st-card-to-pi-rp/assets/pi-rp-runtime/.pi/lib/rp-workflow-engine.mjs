@@ -33,9 +33,19 @@ const TERMINAL_NODE_STATUSES = new Set(["completed", "skipped", "failed", "cance
 // any model ran, so offering another model as the remedy would be a dead end.
 const MODEL_INVOKING_NODE_TYPES = new Set(["agent", "team"]);
 
-// Failures the runtime decides even on a node that is already talking to a model: a wrong call
-// target, an illegal call graph, or a team configuration the runtime rejects. Codes are attached
-// at the throw sites rather than inferred from message text.
+// Failures the runtime decides even on a node that is already talking to a model. Codes are
+// attached at the throw sites rather than inferred from message text. Two families:
+//
+//   1. The workflow or team configuration the runtime itself rejects — a wrong call target, an
+//      illegal call graph, a team binding it refuses.
+//   2. A node-end data commit refused because of how the card or module is declared: the node's
+//      `moduleAccess` lacks the capability, the record type does not declare the action, the node
+//      does not allow best-effort, or the processor the card ships is absent or broken.
+//
+// Retrying changes nothing about either family, and neither can be described as a model problem.
+// The model's *rendered* data is a different matter and stays on the model path: `data_schema_invalid`
+// is deliberately absent, because the offending data is the model's own output and regenerating it
+// can legitimately succeed.
 const DETERMINISTIC_FAILURE_CODES = new Set([
   "workflow_child_failed",
   "team_configuration_invalid",
@@ -45,6 +55,11 @@ const DETERMINISTIC_FAILURE_CODES = new Set([
   "workflow_call_depth_exceeded",
   "workflow_call_limit_exceeded",
   "workflow_entry_invalid",
+  "permission_denied",
+  "action_not_allowed",
+  "best_effort_not_allowed",
+  "missing_handler",
+  "invalid_processor_result",
 ]);
 
 function deferred() {
