@@ -301,6 +301,13 @@ h2 {
 
 .topbar-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
 .topbar-actions .connection-status { margin-top: 0; }
+.connection-status.turn-failure {
+  max-width: 340px;
+  color: #8d3f34;
+  font-weight: 600;
+  text-align: right;
+  white-space: normal;
+}
 .topbar-actions button {
   padding: 8px 13px;
   border: 1px solid rgba(143, 87, 66, 0.22);

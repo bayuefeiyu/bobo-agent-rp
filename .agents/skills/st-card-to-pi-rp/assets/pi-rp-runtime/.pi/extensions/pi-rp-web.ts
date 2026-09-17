@@ -143,6 +143,14 @@ type RpRun = {
   phaseStartedAt?: number;
   agentSettled?: boolean;
   workflowCompleted?: boolean;
+  /**
+   * Set when a foreground turn ended without publishing player-visible prose. The UI states it
+   * explicitly, because "no prose" and "this turn needed no prose" must not look the same.
+   *
+   * `recordId` ties the note to the chat it happened in, so a failure is not reported while the
+   * player is looking at a different chat.
+   */
+  lastTurnFailure?: { turn: number; detail: string | null; at: string; recordId: string | null } | null;
 };
 
 type FeatureModule = {
@@ -477,6 +485,28 @@ async function readMessageRetrievalSkill(cardDirectory: string, path: unknown, p
 }
 
 /**
+ * Call targets a workflow declares but this card cannot resolve.
+ *
+ * A `call` node would fail when it runs and an agent node would simply not see the entry, so
+ * reporting the whole set once at load time is clearer than discovering it node by node.
+ */
+function unresolvedWorkflowCalls(workflow: any, featureModules: any[]): string[] {
+  const resolved = new Set<string>();
+  for (const module of featureModules || []) {
+    for (const candidate of module.workflows || []) resolved.add(`${module.id}/${candidate.id}`);
+  }
+  const missing = new Set<string>();
+  for (const node of workflow.nodes || []) {
+    for (const binding of node.workflowCalls || []) {
+      const target = typeof binding === "string" ? binding : binding?.target;
+      if (typeof target === "string" && !resolved.has(target)) missing.add(target);
+    }
+    if (node.type === "call" && typeof node.target === "string" && !resolved.has(node.target)) missing.add(node.target);
+  }
+  return [...missing].sort();
+}
+
+/**
  * Resolve the card's active foreground workflow without fabricating or persisting a choice.
  * A missing field is only defaulted when the card declares exactly one foreground workflow;
  * ambiguity and absence are reported instead of silently rewritten into the card's settings.json.
@@ -724,10 +754,50 @@ export default function (pi: ExtensionAPI) {
   function bridgeBusy(target: ActiveBridge) {
     return target.pending || !target.context.isIdle() || target.workflowEngine?.hasBlockingTurnRun?.() === true;
   }
-  function releaseCompletedRpTurn(runId: string) {
-    if (!active || !rpRun || rpRun.workflowRunId !== runId || !rpRun.agentSettled || !rpRun.workflowCompleted) return;
+  /**
+   * The Web state every response carries. Keeping one definition means a response can never quietly
+   * drop a field the page relies on, such as the note that the last turn produced no prose.
+   */
+  function webSnapshot(extra: Record<string, unknown> = {}) {
+    const failure = active?.lastTurnFailure || null;
+    return {
+      sessionId: active?.recordId || null,
+      openingId: active?.openingId || null,
+      playerName: active?.playerName || "玩家",
+      messages: active ? recordsToWebMessages(active.messages) : [],
+      busy: active ? bridgeBusy(active) : false,
+      blockingWorkflows: blockingTurnWorkflows(active),
+      lastTurnFailure: failure && failure.recordId === (active?.recordId || null) ? failure : null,
+      ...extra,
+    };
+  }
+  /**
+   * Release the current turn's foreground occupation.
+   *
+   * A terminal failure leaves the same situation a cancel does — the player's message stays in
+   * the transcript with no reply — so it must release the same way, including aborting a context
+   * that never went idle. It additionally records why, because a silently released turn reads as
+   * "this turn simply needed no prose".
+   */
+  function releaseRpTurn(reason: "completed" | "failed", detail: string | null) {
+    if (!active || !rpRun) return;
+    if (reason === "failed") {
+      if (!active.context.isIdle()) active.context.abort();
+      active.lastTurnFailure = { turn: active.turn, detail, at: new Date().toISOString(), recordId: active.recordId };
+    }
     active.pending = false;
     rpRun = null;
+  }
+  function releaseCompletedRpTurn(runId: string) {
+    if (!active || !rpRun || rpRun.workflowRunId !== runId || !rpRun.agentSettled || !rpRun.workflowCompleted) return;
+    releaseRpTurn("completed", null);
+  }
+  /** Short, player-readable reason for a foreground turn that produced no narrative. */
+  function describeTurnFailure(run: any, narrativePublished: boolean): string {
+    if (run.status === "completed" && !narrativePublished) return "回合收尾节点未发布正文";
+    const failed = Object.values(run.nodes || {}).find((state: any) => ["failed", "cancelled"].includes(state?.status));
+    const error = typeof failed?.error === "string" && failed.error ? failed.error : null;
+    return error ? `${failed.id}：${error}` : `工作流以 ${run.status} 结束`;
   }
   async function ensureFeatureModuleRecords(target: ActiveBridge) {
     if (!target.recordId || !target.sessionDirectory) return;
@@ -1210,10 +1280,20 @@ export default function (pi: ExtensionAPI) {
       }
       if (!node.metadata?.entryFile) return { output: { acknowledged: true } };
       const entryPath = resolve(active.cardDirectory, node.metadata.entryFile);
-      if (relative(active.cardDirectory, entryPath).startsWith("..")) throw new Error(`Code node ${node.id} entryFile escapes the card directory.`);
-      const loaded: any = await import(`${pathToFileURL(entryPath).href}?run=${Date.now()}-${randomUUID()}`);
+      if (relative(active.cardDirectory, entryPath).startsWith("..")) {
+        throw Object.assign(new Error(`Code node ${node.id} entryFile escapes the card directory.`), { code: "workflow_entry_invalid" });
+      }
+      let loaded: any;
+      try {
+        loaded = await import(`${pathToFileURL(entryPath).href}?run=${Date.now()}-${randomUUID()}`);
+      } catch (error) {
+        // A card whose script is missing or unloadable is a packaging fault, not a model fault.
+        throw Object.assign(new Error(`Code node ${node.id} could not load ${node.metadata.entryFile}: ${error instanceof Error ? error.message : String(error)}`, { cause: error }), { code: "workflow_entry_invalid" });
+      }
       const execute = loaded.execute || loaded.default;
-      if (typeof execute !== "function") throw new Error(`${entryPath} must export execute().`);
+      if (typeof execute !== "function") {
+        throw Object.assign(new Error(`${entryPath} must export execute().`), { code: "workflow_entry_invalid" });
+      }
       const nodeWorkspace = workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, node.id);
       await mkdir(nodeWorkspace, { recursive: true });
       const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
@@ -2029,9 +2109,16 @@ export default function (pi: ExtensionAPI) {
           deliveredWorkflowEvents.add(completeKey);
           if (!workflow.kind.startsWith("module-")) await dispatchWorkflowEvent({ type: "after-workflow", workflowId: workflow.id, runId: run.id }, run);
         }
-        if (workflow.kind === "foreground" && run.status === "completed" && rpRun?.workflowRunId === run.id) {
-          rpRun.workflowCompleted = true;
-          releaseCompletedRpTurn(run.id);
+        if (workflow.kind === "foreground" && rpRun?.workflowRunId === run.id) {
+          if (run.status === "completed" && rpRun.agentSettled) {
+            rpRun.workflowCompleted = true;
+            releaseCompletedRpTurn(run.id);
+          } else if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) {
+            // Either the turn ended terminally, or it reported success without ever publishing a
+            // narrative. Both leave the occupation behind if nothing releases it, and neither
+            // should pass silently.
+            releaseRpTurn("failed", describeTurnFailure(run, rpRun.agentSettled));
+          }
         }
       },
     });
@@ -2111,14 +2198,7 @@ export default function (pi: ExtensionAPI) {
       bridge = await webModule.startWebBridge({
         cardDirectory,
         bridge: {
-          getState: async () => ({
-            sessionId: active?.recordId || null,
-            openingId: active?.openingId || null,
-            playerName: active?.playerName || "玩家",
-            messages: active ? recordsToWebMessages(active.messages) : [],
-            busy: active ? bridgeBusy(active) : false,
-            blockingWorkflows: blockingTurnWorkflows(active),
-          }),
+          getState: async () => webSnapshot(),
           getSettings: async () => ({
             common: active?.commonSettings || defaultCommonSettings,
             card: active?.cardSettings || { schemaVersion: 1, cardId: manifest.id, settings: {} },
@@ -2910,14 +2990,7 @@ export default function (pi: ExtensionAPI) {
             active.messages[index] = updated;
             await rewriteMessages();
             await updateMetadata();
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-            };
+            return webSnapshot();
           },
           deleteMessage: async (sequence: number) => {
             if (!active?.recordId || !active.sessionDirectory) throw httpError(409, "There is no active saved chat to edit.");
@@ -2957,14 +3030,7 @@ export default function (pi: ExtensionAPI) {
               active.sessionDirectory = null;
               active.openingId = null;
             }
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-            };
+            return webSnapshot();
           },
           resumeSession: async (sessionId: string) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -3000,26 +3066,12 @@ export default function (pi: ExtensionAPI) {
             await ensureFeatureModuleRecords(active);
             await updateMetadata();
 
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-            };
+            return webSnapshot();
           },
           selectOpening: async (opening: any) => {
           if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
           if (active.openingId) {
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-            };
+            return webSnapshot();
           }
           const createdAt = new Date().toISOString();
           active.openingId = opening.id;
@@ -3035,14 +3087,7 @@ export default function (pi: ExtensionAPI) {
           });
           await updateMetadata();
           await dispatchWorkflowEvent({ type: "after-opening", openingId: opening.id, messageId: openingRecord?.id || null }, { id: `opening-${opening.id}`, turn: 0 });
-          return {
-            sessionId: active.recordId,
-            openingId: active.openingId,
-            playerName: active.playerName,
-            messages: recordsToWebMessages(active.messages),
-            busy: bridgeBusy(active),
-            blockingWorkflows: blockingTurnWorkflows(active),
-          };
+          return webSnapshot();
           },
           submitInput: async (content: string) => {
           if (!active?.openingId) throw httpError(409, "Select an opening first.");
@@ -3054,6 +3099,7 @@ export default function (pi: ExtensionAPI) {
             throw httpError(409, `Background workflow ${first.workflowTitle}${additional} must finish or be cancelled before the next player turn.`);
           }
           await ensureActiveRecord();
+          active.lastTurnFailure = null;
           await cleanupArtifacts(active.sessionDirectory!, { type: "turn", turn: active.turn + 1 });
           active.turn += 1;
           active.pending = true;
@@ -3089,6 +3135,13 @@ export default function (pi: ExtensionAPI) {
           try {
             const workflow = await active.configStore.getWorkflow(active.activeWorkflowId);
             if (workflow.kind !== "foreground") throw new Error(`Active workflow ${workflow.id} is not a foreground workflow.`);
+            const unresolved = unresolvedWorkflowCalls(workflow, active.featureModules);
+            if (unresolved.length) {
+              throw Object.assign(
+                new Error(`Active workflow ${workflow.id} calls modules this card does not install: ${unresolved.join(", ")}. Install them or reconcile the workflow's call declarations.`),
+                { code: "workflow_configuration_invalid" },
+              );
+            }
             const finalizer = workflow.nodes.find((node: any) => node.type === "turn-finalize");
             rpRun.workflowNarrativeNodeId = finalizer?.narrative?.fromNode || null;
             const workflowRunId = `workflow-${randomUUID()}`;
@@ -3123,15 +3176,7 @@ export default function (pi: ExtensionAPI) {
             };
             await writeFile(cardSettingsPath, `${JSON.stringify(active.cardSettings, null, 2)}\n`, "utf8");
             await updateMetadata();
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-              settings: active.commonSettings,
-            };
+            return webSnapshot({ settings: active.commonSettings });
           },
           deleteUserProfile: async (playerName: string) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -3152,16 +3197,7 @@ export default function (pi: ExtensionAPI) {
               });
             }
             await updateMetadata();
-            return {
-              sessionId: active.recordId,
-              openingId: active.openingId,
-              playerName: active.playerName,
-              messages: recordsToWebMessages(active.messages),
-              busy: bridgeBusy(active),
-              blockingWorkflows: blockingTurnWorkflows(active),
-              settings: active.commonSettings,
-              deletedPlayerName: removed.name,
-            };
+            return webSnapshot({ settings: active.commonSettings, deletedPlayerName: removed.name });
           },
           updateSystemSettings: async ({ fontSize }: { fontSize: number }) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");

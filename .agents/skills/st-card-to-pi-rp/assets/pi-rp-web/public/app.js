@@ -196,6 +196,12 @@ function showError(error) {
   window.setTimeout(() => { elements.errorBanner.hidden = true; }, 5000);
 }
 
+/** Keep the topbar status readable; the untruncated reason stays in the element's title attribute. */
+function shortenDetail(detail, limit = 60) {
+  const text = String(detail).replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
 function showPanel(panelName) {
   state.activePanel = panelName;
   for (const button of elements.tabButtons) {
@@ -1281,11 +1287,16 @@ function applySnapshot(snapshot) {
   elements.chooseChatButton.hidden = previewMode || !started;
   elements.chooseChatButton.disabled = previewMode || snapshot.busy || state.switching;
   const blockingWorkflows = snapshot.blockingWorkflows || [];
+  const turnFailure = previewMode ? null : snapshot.lastTurnFailure || null;
   elements.connectionStatus.textContent = previewMode
     ? "开发预览 · 未载入角色卡和聊天"
+    : turnFailure
+    ? `该回合未成功产出正文${turnFailure.detail ? `：${shortenDetail(turnFailure.detail)}` : ""}`
     : blockingWorkflows.length
     ? `等待后台工作流：${blockingWorkflows.map(item => item.workflowTitle || item.workflowId).join("、")}`
     : snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
+  elements.connectionStatus.classList.toggle("turn-failure", Boolean(turnFailure));
+  elements.connectionStatus.title = turnFailure?.detail || "";
   elements.input.disabled = previewMode || snapshot.busy;
   elements.input.placeholder = previewMode ? "根目录预览模式不发送消息" : "输入你的行动或对话……";
   elements.sendButton.disabled = previewMode || snapshot.busy || state.sending;
@@ -1985,12 +1996,21 @@ function renderWorkflowRuns() {
         row.append(openProcessRecord);
       }
       if (run.live && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status) && (node.type !== "team" || node.team?.failedMember?.freezeKey)) {
-        const model = modelOptions(node.attempts?.at(-1)?.modelId || "pi:current"); model.className = "setting-select";
-        const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
-        const retryWith = async saveAsCardDefault => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId: model.value, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
-        retry.addEventListener("click", () => retryWith(false));
-        const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true));
-        row.append(model, retry, saveAndRetry);
+        const retryModel = node.attempts?.at(-1)?.modelId || "pi:current";
+        const retryWith = async (saveAsCardDefault, modelId) => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
+        if (node.failureKind === "deterministic") {
+          // The runtime decided this before any model call, so swapping the model cannot help.
+          const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "重试";
+          retry.addEventListener("click", () => retryWith(false, retryModel));
+          const hint = document.createElement("span"); hint.className = "workflow-node-hint"; hint.textContent = "非模型故障：修正卡片或配置后再试";
+          row.append(retry, hint);
+        } else {
+          const model = modelOptions(retryModel); model.className = "setting-select";
+          const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
+          retry.addEventListener("click", () => retryWith(false, model.value));
+          const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true, model.value));
+          row.append(model, retry, saveAndRetry);
+        }
       }
       if (run.live && node.status === "awaiting-recovery") {
         const recover = document.createElement("button"); recover.type = "button"; recover.textContent = "恢复原任务";

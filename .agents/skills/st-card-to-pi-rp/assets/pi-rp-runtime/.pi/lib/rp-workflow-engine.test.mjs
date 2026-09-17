@@ -1184,6 +1184,42 @@ test("an Agent call requires both exact node exposure and agentCallable", async 
   assert.match(completed.nodes.writer.error, /not callable by Agents/);
 });
 
+test("classifies a non-model node failure as deterministic instead of a model failure", async () => {
+  // A code node never calls a model, so offering "retry with another model" would be useless.
+  const workflow = { schemaVersion: 3, id: "code-failure", kind: "turn-background", nodes: [{ id: "task", type: "code", retry: { maxAttempts: 1 } }] };
+  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("script exploded"); } });
+  const started = await engine.start(workflow, { id: "code-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "failed");
+  assert.equal(settled.nodes.task.status, "failed");
+  assert.equal(settled.nodes.task.failureKind, "deterministic");
+});
+
+test("keeps a genuine model failure replaceable by another model", async () => {
+  const workflow = { schemaVersion: 3, id: "model-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("provider is offline"); } });
+  const started = await engine.start(workflow, { id: "model-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "awaiting-model-choice");
+  assert.equal(settled.nodes.task.failureKind, "model");
+});
+
+test("treats a coded configuration failure on an agent node as deterministic", async () => {
+  // The agent node would call a workflow this engine cannot resolve, which is decided by the
+  // runtime before any model call: a model swap cannot fix it.
+  const child = { schemaVersion: 3, id: "missing", ownerModuleId: "demo", kind: "module-external", agentCallable: true, interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const workflow = { schemaVersion: 3, id: "agent-config-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 }, workflowCalls: ["demo/missing"] }] };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: reference => (reference === "demo/missing" ? undefined : child),
+    executor: task => task.invokeWorkflow({ workflow: "demo/missing" }, { agent: true }),
+  });
+  const started = await engine.start(workflow, { id: "agent-config-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.nodes.task.status, "failed");
+  assert.equal(settled.nodes.task.failureKind, "deterministic");
+  assert.match(settled.nodes.task.error, /Unknown module workflow/);
+});
+
 test("a throwing onChange neither hangs waiters nor escapes the scheduler", { timeout: 5000 }, async () => {
   // The host hook fails after start(), so the failure lands inside the scheduler's own
   // propagation path. Previously the waiter's wake was never resolved (wait() hung forever)

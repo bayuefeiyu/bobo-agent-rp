@@ -829,6 +829,9 @@ export function failWorkflowNode(definition, run, nodeId, error, options = {}, n
   attempt.usageComplete = attempt.usage ? options.usageComplete !== false : false;
   state.error = message;
   state.waitingOn = null;
+  // Carries the runtime's own classification to the host: a deterministic failure cannot be
+  // fixed by choosing another model, so the UI must not offer that as the remedy.
+  state.failureKind = options.deterministic === true ? "deterministic" : "model";
   if (Object.hasOwn(options, "output")) state.output = structuredClone(options.output);
   if (options.retryable !== false && state.attempts.length < node.retry.maxAttempts) state.status = "awaiting-retry";
   else if (options.awaitModelChoice !== false) state.status = "awaiting-model-choice";

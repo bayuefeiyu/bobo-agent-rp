@@ -26,6 +26,24 @@ import { adaptAssistanceTaskInput } from "./rp-assistance-tasks.mjs";
 const TERMINAL_RUN_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 const TERMINAL_NODE_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 
+// Only these node types involve a model call at all. A failure on any other node type is
+// decided by code, so treating it as a model failure would offer the user a pointless model swap.
+const MODEL_INVOKING_NODE_TYPES = new Set(["agent", "team"]);
+
+// Failures the runtime decides before any model call, for node types that *do* invoke a model:
+// a wrong call target, an illegal call graph, or a team configuration the runtime rejects.
+// Codes are attached at the throw sites rather than inferred from message text.
+const DETERMINISTIC_FAILURE_CODES = new Set([
+  "workflow_child_failed",
+  "team_configuration_invalid",
+  "workflow_configuration_invalid",
+  "workflow_reference_invalid",
+  "workflow_call_cycle",
+  "workflow_call_depth_exceeded",
+  "workflow_call_limit_exceeded",
+  "workflow_entry_invalid",
+]);
+
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -358,7 +376,7 @@ export class RpWorkflowEngine {
       const reference = typeof request?.workflow === "string" ? request.workflow : node.target;
       const callBinding = node.workflowCalls?.find(item => item.target === reference);
       const callCount = workflowCallCounts.get(reference) || 0;
-      if (callBinding?.maxCalls && callCount >= callBinding.maxCalls) throw new Error(`Workflow call limit exceeded for ${reference}.`);
+      if (callBinding?.maxCalls && callCount >= callBinding.maxCalls) throw Object.assign(new Error(`Workflow call limit exceeded for ${reference}.`), { code: "workflow_call_limit_exceeded" });
       workflowCallCounts.set(reference, callCount + 1);
       const perform = async () => {
         if (entry.stopped || entry.run.status === "cancelled") throw Object.assign(new Error("The workflow was cancelled before this child call could be dispatched."), { code: "workflow_cancelled" });
@@ -449,8 +467,8 @@ export class RpWorkflowEngine {
           await this.#reconcileWaitingChildren(entry, node.id);
           return;
         }
-        const deterministic = ["workflow_child_failed", "team_configuration_invalid"].includes(error?.code);
-        const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic ? { retryable: false, awaitModelChoice: false, output: error.output || null } : {});
+        const deterministic = !MODEL_INVOKING_NODE_TYPES.has(node.type) || DETERMINISTIC_FAILURE_CODES.has(error?.code);
+        const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic ? { retryable: false, awaitModelChoice: false, deterministic: true, output: error.output || null } : {});
         if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
         if (state.status === "awaiting-retry") prepareWorkflowNodeRetry(entry.run, node.id);
         else if (state.status === "awaiting-model-choice" && this.policy.modelFailure.silentFallback) {
@@ -469,9 +487,9 @@ export class RpWorkflowEngine {
   }
 
   async #invokeTeamMember(entry, parentNode, request) {
-    if (parentNode.type !== "team") throw new Error("Team member execution is available only inside team nodes.");
+    if (parentNode.type !== "team") throw Object.assign(new Error("Team member execution is available only inside team nodes."), { code: "workflow_configuration_invalid" });
     if (entry.stopped || entry.run.status === "cancelled") throw Object.assign(new Error("The team workflow was cancelled before this member call started."), { code: "workflow_cancelled" });
-    if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Team member request must be an object.");
+    if (!request || typeof request !== "object" || Array.isArray(request)) throw Object.assign(new Error("Team member request must be an object."), { code: "workflow_configuration_invalid" });
     const memberId = request.memberId || request.member?.id || request.executionId || "member";
     const freezeKey = request.freezeKey || `member:${memberId}`;
     const frozen = entry.run.teamPreflights?.[parentNode.id]?.bindings?.[freezeKey] || null;
@@ -486,9 +504,9 @@ export class RpWorkflowEngine {
       || request.member?.modelId
       || null;
     const cached = entry.teamMembers.get(freezeKey);
-    if (cached && (cached.agentId !== agentId || cached.requestedModelId !== requestedModelId)) throw new Error(`Team member ${memberId} was invoked with configuration different from its frozen binding.`);
+    if (cached && (cached.agentId !== agentId || cached.requestedModelId !== requestedModelId)) throw Object.assign(new Error(`Team member ${memberId} was invoked with configuration different from its frozen binding.`), { code: "team_configuration_invalid" });
     const agent = cached?.agent || persistedBinding?.agentSnapshot || await this.resolveAgent(agentId);
-    if (!agent) throw new Error(`Unknown team Agent profile: ${agentId}`);
+    if (!agent) throw Object.assign(new Error(`Unknown team Agent profile: ${agentId}`), { code: "team_configuration_invalid" });
     const pseudoNode = {
       id: `${parentNode.id}-${String(request.executionId || "member").replace(/[^a-zA-Z0-9._-]/g, "-")}`,
       title: request.executionId || agentId,
@@ -606,11 +624,11 @@ export class RpWorkflowEngine {
 
   async #invokeAndWait(parentEntry, parentNode, request, options = {}) {
     if (parentEntry.stopped || parentEntry.run.status === "cancelled") throw Object.assign(new Error("The parent workflow was cancelled before this child call could be dispatched."), { code: "workflow_cancelled" });
-    if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Workflow call request must be an object.");
+    if (!request || typeof request !== "object" || Array.isArray(request)) throw Object.assign(new Error("Workflow call request must be an object."), { code: "workflow_configuration_invalid" });
     const reference = typeof request.workflow === "string" ? request.workflow : parentNode.target;
-    if (!reference) throw new Error("Workflow call request must name a target workflow.");
+    if (!reference) throw Object.assign(new Error("Workflow call request must name a target workflow."), { code: "workflow_configuration_invalid" });
     const target = await this.resolveWorkflow(reference);
-    if (!target) throw new Error(`Unknown module workflow: ${reference}`);
+    if (!target) throw Object.assign(new Error(`Unknown module workflow: ${reference}`), { code: "workflow_reference_invalid" });
     const normalizedTarget = normalizeWorkflowDefinition(target);
     assertWorkflowCallAllowed(parentEntry.workflow, parentNode, normalizedTarget, { agent: options.agent === true, lifecycle: options.lifecycle === true });
     const normalizedRequest = normalizeWorkflowCallRequest(normalizedTarget, request, workflowCallAuthorization(parentNode, reference));
@@ -620,8 +638,8 @@ export class RpWorkflowEngine {
       : `top-level/${parentEntry.workflow.id}`;
     const stack = parentStack.length ? [...parentStack] : [callerIdentity];
     const targetReference = canonicalWorkflowRef(normalizedTarget);
-    if (stack.includes(targetReference)) throw new Error(`Workflow call cycle detected at ${targetReference}.`);
-    if (stack.length >= 8) throw new Error("Workflow call depth exceeds the runtime limit of 8.");
+    if (stack.includes(targetReference)) throw Object.assign(new Error(`Workflow call cycle detected at ${targetReference}.`), { code: "workflow_call_cycle" });
+    if (stack.length >= 8) throw Object.assign(new Error("Workflow call depth exceeds the runtime limit of 8."), { code: "workflow_call_depth_exceeded" });
     const invocationIdentity = {
       arguments: normalizedRequest.arguments,
       text: normalizedRequest.text,
