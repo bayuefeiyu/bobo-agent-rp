@@ -14,6 +14,8 @@
 
 当前根目录提供五个可选全局模块源：`narrative-memory`、`world-narrative-coordinator`、`local-scene-narrative`、`world-scope-narrative` 与 `comfy-image-generation`。它们都只影响未来明确选择并导入它们的卡，不会同步更新 `play/` 中已有副本。
 
+其中**两个叙事模块不是一个可独立挑选的平级选项**：`local-scene-narrative` 与 `world-scope-narrative` 只负责写候选，由 `world-narrative-coordinator` 决定何时写、给什么指导、审核并发布，并接 `narrative-memory` 归档；两者都在自己的 `dependencies.json` 里记录这一点。转换时如只选叙事模块而不选导演，转换流程必须给出两条路并说明各自的工作量与风险：**补选导演**，或**在该卡内自行编写解耦的编排**（现成模板是六节点的 `director-post-with-narratives`，解耦后失去世界逻辑把关、深度推演题材与跨模块硬冲突检查）。`comfy-image-generation`、`narrative-memory` 与导演模块本身可按需单独选择。
+
 ## 仓库内容
 
 ```text
@@ -83,7 +85,7 @@ pi --approve
 
 仓库内置 `global-modules/world-narrative-coordinator/` 世界叙事统筹模块源。它以私有孵化、频道指导、深度推演、持久参考资料和已确认归档交接等职责，在世界逻辑基础上寻找有张力的发展；采用前置轻量调整、后置阻塞复盘和按需异步深度推演。深度推演可在原单 Agent 工作流与动态 Leader/秘书/专家/助理会议之间切换，团队版使用独立阶段额度、并行助理、一次定稿审查和短锁原子提交。模块依赖 `card-context-library` 的 `director-future` 类别与 `narrative-memory`，前端提供状态、参考资料、设置、统计提醒和手动维护入口，不会自动维护或修改既有卡与会话。
 
-仓库内置 `global-modules/local-scene-narrative/` 近场叙事模块与 `global-modules/world-scope-narrative/` 广域叙事模块。前者以“一隅众生”为前端标题，创作主线当前地点及周边的视野外故事；后者以“万象潮生”为前端标题，创作遍及世界且通常值得传播的较长事件。两者每次只生成一篇只读候选，经后置导演统一检查硬冲突后再确定性发布；已发布故事进入普通来源捕获。正文按自身最近回合窗口取得摘要目录和按需全文，玩家则可在默认收起的模块前端阅读故事，并可自行承担风险直接打开权威 JSONL 分区进行高级 DIY。
+仓库内置 `global-modules/local-scene-narrative/` 近场叙事模块与 `global-modules/world-scope-narrative/` 广域叙事模块。前者以“一隅众生”为前端标题，创作主线当前地点及周边的视野外故事；后者以“万象潮生”为前端标题，创作遍及世界且通常值得传播的较长事件。两者每次只生成一篇只读候选，经后置导演统一检查硬冲突后再确定性发布；已发布故事进入普通来源捕获。正文按自身最近回合窗口取得摘要目录和按需全文，玩家则可在默认收起的模块前端阅读故事，并可自行承担风险直接打开权威 JSONL 分区进行高级 DIY。**这两个模块由导演驱动，不是一个可单独使用的完整功能**：模块本身不含“何时写、写什么指导、谁审核、如何发布归档”的判断，`dependencies.json` 记录了导演提供的这些职责以及解耦所需的工作量与风险；只选它们而不选导演时，转换流程必须让用户在“补选导演”和“在卡内自行解耦编排”之间明确选择。
 
 仓库内置 `global-modules/comfy-image-generation/` 剧情生图模块源。它必须在转卡或显式导入时复制进卡片，不会自动修改已有卡。要接入自己的模型，在仓库根目录向 Pi 提出“使用 `adapt-comfyui-workflow` 适配这个 ComfyUI API 工作流”，确认分析结果后才会写入 profile 和对应模型指导。不要在 `play/` 游玩会话中做结构适配。
 

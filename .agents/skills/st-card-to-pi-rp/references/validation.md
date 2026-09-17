@@ -12,6 +12,32 @@ python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/
 
 The validator checks card manifest v2, the single fixed foundation path, required card-context-library registration, safe paths, openings, provenance, context processors, module v6 kinds and owned workflow files, resource catalog/document coverage, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, top-level workflow v3 nodes/outputs/access/commits, frontend declarations, and referenced files.
 
+It reports errors and warnings separately, and `validation passed with N warning(s)` is a complete result. Two kinds of warning are worth distinguishing:
+
+- **`design:` warnings** name a convention of the shipped templates that this card does not follow: a foreground workflow that never prepares card-context-library resources, an `advanced-memory-rp`-style workflow that exports card resources before preparing the effective memory timeline, a narrative Agent that does not expose `narrative-memory/narrative-memory-retrieve`, or a `card-context-library` whose shape differs from the shipped one. **A deliberately customized card is allowed to differ** — cards may rename, replace, or decouple their foreground workflow, which is why these are no longer hard errors. Record every one in `conversion-report.md` with the reason it is intentional.
+- **any other warning** is a fidelity or metadata observation (a missing source artifact pointer, an unbased provenance unit, and so on).
+
+### Declared design invariants
+
+A card that wants a convention enforced writes it into `manifest.design_invariants`, and the validator then checks the card against its **own** declaration instead of a template's:
+
+```json
+"design_invariants": {
+  "foregroundWorkflow": "standard-rp",
+  "requiresCardContextResources": true,
+  "requiresEffectiveMemoryTimeline": true,
+  "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"]
+}
+```
+
+- `foregroundWorkflow` is the card-local foreground workflow the other invariants apply to, and it is required whenever anything else is declared.
+- every key is optional, and a card that declares none is never judged against a template it left behind;
+- a declared invariant is an **error** when violated, and the matching `design:` warning is then suppressed.
+
+**Write the declaration for a card built on the shipped templates.** A card whose foreground workflow is the shipped `standard-rp` declares `foregroundWorkflow` plus `requiresCardContextResources`; one built on `advanced-memory-rp` adds `requiresEffectiveMemoryTimeline` and `requiresNarrativeAgentCallable` for every retrieval entry its narrative Agent is supposed to expose. A card that deliberately renames, replaces, or decouples its foreground workflow declares only what it keeps, or nothing at all.
+
+**Never declare an invariant the card does not satisfy in order to silence a warning.** The declaration is exactly what makes the check binding; a false one converts an honest warning into a failing card.
+
 ## Coverage and fidelity
 
 Every non-empty source unit has one explicit disposition: mapped, metadata-only, unsupported, unresolved, or an identified duplicate. Review every non-verbatim transform:

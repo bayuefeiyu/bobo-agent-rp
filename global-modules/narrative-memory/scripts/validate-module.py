@@ -25,12 +25,16 @@ def load_validator():
 def main() -> int:
     validator = load_validator()
     errors: list[str] = []
+    warnings: list[str] = []
     validator.validate_feature_modules(
         REPOSITORY_ROOT,
         ["global-modules/narrative-memory/module.json"],
         errors,
+        warnings,
     )
 
+    for warning in warnings:
+        print(f"warning: {warning}")
     if errors:
         print("Narrative-memory validation failed:")
         for error in errors:

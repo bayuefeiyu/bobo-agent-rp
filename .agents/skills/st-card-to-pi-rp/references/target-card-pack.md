@@ -115,6 +115,19 @@ When the message policy enables Agent retrieval, add `"context_skill": "context/
 
 `feature_modules` is required and always includes `card-context-library`. Module v6 distinguishes `data`, `resource`, and `hybrid` packages. Resource-only modules own static authored files and workflows without inventing session collections; data and hybrid modules use data-contract v1. Every source-required output outside the main narrative remains a frontend data-module record type produced by an ordinary workflow node. Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one.
 
+`design_invariants` is optional and declares what *this* card promises about its own design, so validation can check the card against its declaration rather than against a shipped template:
+
+```json
+"design_invariants": {
+  "foregroundWorkflow": "standard-rp",
+  "requiresCardContextResources": true,
+  "requiresEffectiveMemoryTimeline": true,
+  "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"]
+}
+```
+
+`foregroundWorkflow` names a card-local foreground workflow and is required whenever another key is present; `requiresCardContextResources` requires a call to `card-context-library/export-context`; `requiresEffectiveMemoryTimeline` requires the effective memory timeline to be prepared before that export; `requiresNarrativeAgentCallable` lists module-workflow references every narrative Agent in that workflow must expose. Declared invariants are validated as errors, and a card that declares none is left alone — a renamed, replaced, or decoupled foreground workflow is legitimate. Write the declaration for a card built on the shipped templates, as described in [validation.md](validation.md).
+
 `context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved message history and upstream workflow output. Module data enters only through the processor's declared `dataQueries` or the active node's authorized data tools. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 2 contract.
 
 ## Fixed foundation

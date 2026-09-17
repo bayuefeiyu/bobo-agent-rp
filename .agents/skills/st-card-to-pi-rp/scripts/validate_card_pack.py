@@ -25,6 +25,22 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
 RUNTIME_SERVICES = {"random"}
 
+# The shipped foreground templates. Their design conventions are reported as warnings, because a
+# card is free to rename, replace, or decouple its foreground workflow: an assertion keyed on a
+# literal workflow ID stops applying the moment the card renames it. A card that wants the
+# convention enforced declares the equivalent `manifest.design_invariants`, and the same checks
+# become errors.
+SHIPPED_FOREGROUND_TEMPLATES = {"standard-rp", "advanced-memory-rp"}
+SHIPPED_MEMORY_FOREGROUND_TEMPLATES = {"advanced-memory-rp"}
+NARRATIVE_AGENT_REQUIRED_CALLS = ["narrative-memory/narrative-memory-retrieve"]
+DESIGN_WARNING_PREFIX = "design: "
+DESIGN_INVARIANT_FIELDS = {
+    "foregroundWorkflow",
+    "requiresCardContextResources",
+    "requiresEffectiveMemoryTimeline",
+    "requiresNarrativeAgentCallable",
+}
+
 
 def validate_runtime_services(node: dict[str, Any], label: str, errors: list[str]) -> None:
     services = node.get("runtimeServices", [])
@@ -520,7 +536,8 @@ def validate_resource_catalog(module_root: Path, catalog: Any, module_id: str, l
             errors.append(f"{label} contains an unlisted resource document: {path}")
 
 
-def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None:
+def validate_feature_modules(root: Path, values: Any, errors: list[str], warnings: list[str] | None = None) -> None:
+    warnings = warnings if warnings is not None else []
     if not isinstance(values, list):
         errors.append("feature_modules must be an array")
         return
@@ -750,8 +767,11 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                 if "trigger" in owned:
                     errors.append(f"{workflow_label} module workflows cannot declare triggers")
             if module_id == "card-context-library":
+                # The shipped shape of the always-present resource module. A card may replace its
+                # export workflow with a smarter one, so this is reported without blocking; the
+                # shipped package itself is covered by the real-asset regression.
                 if module_kind != "resource" or workflow_files != ["workflows/export-context/workflow.json"]:
-                    errors.append(f"{label} card-context-library must be a resource module with only export-context")
+                    warnings.append(f"{DESIGN_WARNING_PREFIX}{label} card-context-library must be a resource module with only export-context")
                 else:
                     export_workflow = load_json(module_root / workflow_files[0], errors)
                     interface = export_workflow.get("interface", {}) if isinstance(export_workflow, dict) else {}
@@ -760,7 +780,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                     categories_input = inputs.get("categories", {}) if isinstance(inputs, dict) else {}
                     context_export = exports.get("context", {}) if isinstance(exports, dict) else {}
                     if export_workflow.get("kind") != "module-external" or categories_input.get("type") != "parameter" or categories_input.get("required") is not True or categories_input.get("valueType") != "string-array" or context_export.get("format") != "document-set":
-                        errors.append(f"{label} export-context must accept required category strings and export one document-set")
+                        warnings.append(f"{DESIGN_WARNING_PREFIX}{label} export-context must accept required category strings and export one document-set")
         if has_resources and safe_relative_path(module.get("resourceCatalogFile")) and (module_root / module["resourceCatalogFile"]).is_file():
             validate_resource_catalog(module_root, load_json(module_root / module["resourceCatalogFile"], errors), module_id, f"{label}.resourceCatalogFile", errors)
         if not has_data:
@@ -1116,7 +1136,37 @@ def validate_module_call_surface(
                     errors.append(f"{call_label}.allowedArguments.categories contains an undeclared resource category")
 
 
-def validate_workflows(root: Path, errors: list[str]) -> set[str]:
+def foreground_design_problems(label: str, by_id: dict[str, Any], ancestors_for, checks: dict[str, Any]) -> list[str]:
+    """Design-convention findings for one foreground workflow.
+
+    `checks` selects the conventions to apply: `cardContext` requires prepared card resources before
+    narration, `memoryTimeline` requires the effective memory timeline to be prepared before those
+    resources are exported, and `agentCallable` lists calls every narrative Agent must expose.
+
+    The same code reports the shipped templates' conventions as warnings and a card's own declared
+    `design_invariants` as errors, so the two can never drift apart.
+    """
+    problems: list[str] = []
+    context_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "card-context-library/export-context"]
+    if checks.get("cardContext") and not context_call_ids:
+        problems.append(f"{label} must prepare card-context-library resources before narration")
+    if checks.get("memoryTimeline") and context_call_ids:
+        timeline_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "narrative-memory/narrative-memory-reference-snapshot" and isinstance(node.get("arguments", {}).get("timeline"), dict)]
+        if not timeline_call_ids or not any(timeline_id in ancestors_for(context_id) for context_id in context_call_ids for timeline_id in timeline_call_ids):
+            problems.append(f"{label} must prepare an effective memory timeline before exporting card-context-library resources")
+    required_calls = checks.get("agentCallable") or []
+    if required_calls:
+        narrative_agents = [node for node in by_id.values() if node.get("type") == "agent" and any(isinstance(output, dict) and output.get("format") == "narrative" for output in node.get("outputs", {}).values())]
+        for target in required_calls:
+            exposed = [binding if isinstance(binding, str) else binding.get("target") for node in narrative_agents for binding in node.get("workflowCalls", [])]
+            if not narrative_agents or target not in exposed:
+                problems.append(f"{label} narrative Agent must expose {target}")
+    return problems
+
+
+def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None = None,
+                       invariants: dict[str, Any] | None = None) -> set[str]:
+    warnings = warnings if warnings is not None else []
     workflow_root = root / "workflows"
     if not workflow_root.exists():
         return set()
@@ -1459,17 +1509,19 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                 pending.extend(by_id[dependency].get("dependsOn", []))
             return result
 
-        if workflow_id in {"standard-rp", "advanced-memory-rp"}:
-            context_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "card-context-library/export-context"]
-            if not context_call_ids:
-                errors.append(f"{label} must prepare card-context-library resources before narration")
-            if workflow_id == "advanced-memory-rp" and context_call_ids:
-                timeline_call_ids = [node_id for node_id, node in by_id.items() if node.get("type") == "call" and node.get("target") == "narrative-memory/narrative-memory-reference-snapshot" and isinstance(node.get("arguments", {}).get("timeline"), dict)]
-                if not timeline_call_ids or not any(timeline_id in ancestors_for(context_id) for context_id in context_call_ids for timeline_id in timeline_call_ids):
-                    errors.append(f"{label} must prepare an effective memory timeline before exporting card-context-library resources")
-                narrative_agents = [node for node in by_id.values() if node.get("type") == "agent" and any(isinstance(output, dict) and output.get("format") == "narrative" for output in node.get("outputs", {}).values())]
-                if not narrative_agents or any("narrative-memory/narrative-memory-retrieve" not in [binding if isinstance(binding, str) else binding.get("target") for binding in node.get("workflowCalls", [])] for node in narrative_agents):
-                    errors.append(f"{label} narrative Agent must expose narrative-memory/narrative-memory-retrieve")
+        declared_foreground = (invariants or {}).get("foregroundWorkflow")
+        if declared_foreground == workflow_id:
+            errors.extend(foreground_design_problems(label, by_id, ancestors_for, {
+                "cardContext": (invariants or {}).get("requiresCardContextResources") is True,
+                "memoryTimeline": (invariants or {}).get("requiresEffectiveMemoryTimeline") is True,
+                "agentCallable": (invariants or {}).get("requiresNarrativeAgentCallable") or [],
+            }))
+        elif workflow_id in SHIPPED_FOREGROUND_TEMPLATES:
+            warnings.extend(f"{DESIGN_WARNING_PREFIX}{problem}" for problem in foreground_design_problems(label, by_id, ancestors_for, {
+                "cardContext": True,
+                "memoryTimeline": workflow_id in SHIPPED_MEMORY_FOREGROUND_TEMPLATES,
+                "agentCallable": NARRATIVE_AGENT_REQUIRED_CALLS if workflow_id in SHIPPED_MEMORY_FOREGROUND_TEMPLATES else [],
+            }))
 
         writers: dict[tuple[str, str], list[str]] = {}
         read_actions = {"query", "get"}
@@ -1528,6 +1580,42 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     return ids
 
 
+def validate_design_invariants(root: Path, manifest: Any, errors: list[str]) -> dict[str, Any]:
+    """Read the invariants a card declares about its own design.
+
+    These replace the validator's hardcoded guesses about the shipped templates: a card that
+    declares an invariant is held to it, and a card that declares none — renamed, replaced, or
+    decoupled — is never judged against a template it deliberately left behind.
+    """
+    declared = manifest.get("design_invariants") if isinstance(manifest, dict) else None
+    if declared is None:
+        return {}
+    if not isinstance(declared, dict):
+        errors.append("manifest design_invariants must be an object")
+        return {}
+    unknown = sorted(set(declared) - DESIGN_INVARIANT_FIELDS)
+    if unknown:
+        errors.append(f"manifest design_invariants has unknown fields: {unknown}")
+    subject = declared.get("foregroundWorkflow")
+    if subject is not None and (not isinstance(subject, str) or not subject):
+        errors.append("manifest design_invariants.foregroundWorkflow must be a non-empty string")
+        subject = None
+    elif subject is None and len(declared) > 0:
+        errors.append("manifest design_invariants.foregroundWorkflow is required by every other declared invariant")
+    if subject is not None and subject not in workflow_kinds(root):
+        errors.append(f"manifest design_invariants.foregroundWorkflow must reference a card-local workflow: {subject}")
+    elif subject is not None and workflow_kinds(root).get(subject) != "foreground":
+        errors.append(f"manifest design_invariants.foregroundWorkflow must reference a foreground workflow: {subject}")
+    for field in ("requiresCardContextResources", "requiresEffectiveMemoryTimeline"):
+        if field in declared and not isinstance(declared[field], bool):
+            errors.append(f"manifest design_invariants.{field} must be a boolean")
+    required_calls = declared.get("requiresNarrativeAgentCallable")
+    if required_calls is not None:
+        if not isinstance(required_calls, list) or any(not isinstance(value, str) or not value for value in required_calls):
+            errors.append("manifest design_invariants.requiresNarrativeAgentCallable must be an array of module/workflow references")
+    return declared
+
+
 def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: list[str]) -> None:
     if not isinstance(manifest, dict):
         errors.append("manifest.json must contain an object")
@@ -1574,13 +1662,17 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
             if not re.match(r"^---\r?\n[\s\S]*?^name:\s*\S+[\s\S]*?^description:\s*\S+[\s\S]*?^---", skill_text, re.MULTILINE):
                 errors.append("context_skill must be a skill with name and one-line description frontmatter")
 
-    validate_feature_modules(root, manifest.get("feature_modules"), errors)
+    validate_feature_modules(root, manifest.get("feature_modules"), errors, warnings)
     module_ids = declared_module_ids(root, manifest)
     if "card-context-library" not in module_ids:
         errors.append("manifest feature_modules must include the card-context-library resource module")
     if "world-narrative-coordinator" in module_ids:
+        # Both statements below are design conventions, and both are stated structurally by the
+        # coordinator's own workflow calls: an uninstalled `narrative-memory` or a missing
+        # `director-future` category is already a hard error from the module call checks. They stay
+        # here as a readable second line of defence, not as a second gate.
         if "narrative-memory" not in module_ids:
-            errors.append("world-narrative-coordinator requires the narrative-memory module")
+            warnings.append(f"{DESIGN_WARNING_PREFIX}world-narrative-coordinator requires the narrative-memory module")
         context_catalog = None
         for module_path in manifest.get("feature_modules", []):
             if not safe_relative_path(module_path):
@@ -1590,7 +1682,7 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
                 context_catalog = load_json((root / module_path).parent / module["resourceCatalogFile"], [])
                 break
         if not isinstance(context_catalog, dict) or "director-future" not in context_catalog.get("categories", {}):
-            errors.append("world-narrative-coordinator requires card-context-library category director-future")
+            warnings.append(f"{DESIGN_WARNING_PREFIX}world-narrative-coordinator requires card-context-library category director-future")
     elif isinstance(fixed_context, str) and safe_relative_path(fixed_context) and (root / fixed_context).is_file():
         foundation_text = (root / fixed_context).read_text(encoding="utf-8-sig").strip()
         for module_path in manifest.get("feature_modules", []):
@@ -1716,9 +1808,10 @@ def main() -> int:
     manifest = load_json(root / "manifest.json", errors)
     card_settings = load_json(root / "settings.json", errors)
     provenance = load_json(root / "provenance.json", errors)
+    invariants = validate_design_invariants(root, manifest, errors)
     validate_manifest(root, manifest, errors, warnings)
     validate_provenance(root, provenance, errors, warnings)
-    workflow_ids = validate_workflows(root, errors)
+    workflow_ids = validate_workflows(root, errors, warnings, invariants)
     if isinstance(card_settings, dict):
         if card_settings.get("schemaVersion") != 1:
             errors.append("settings schemaVersion must be 1")
@@ -1778,6 +1871,12 @@ def main() -> int:
         print(f"warning: {warning}")
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
+    if any(warning.startswith(DESIGN_WARNING_PREFIX) for warning in warnings):
+        print(
+            "note: design warnings are the shipped templates' conventions, not requirements. A card that "
+            "deliberately differs keeps validating; to make a convention binding, declare it in "
+            "manifest.design_invariants and it becomes an error."
+        )
     if errors:
         print(f"validation failed with {len(errors)} error(s) and {len(warnings)} warning(s)", file=sys.stderr)
         return 1

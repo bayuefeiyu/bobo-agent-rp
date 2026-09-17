@@ -364,7 +364,7 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_workflows(root, errors)
             self.assertEqual(errors, [])
 
-    def test_director_module_requires_memory_and_future_author_category(self) -> None:
+    def test_director_module_design_conventions_warn_instead_of_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "core").mkdir()
@@ -400,9 +400,33 @@ class ValidateCardPackTests(unittest.TestCase):
                 "default_opening": "opening-00",
             }
             errors: list[str] = []
-            VALIDATOR.validate_manifest(root, manifest, errors, [])
-            self.assertIn("world-narrative-coordinator requires the narrative-memory module", errors)
-            self.assertIn("world-narrative-coordinator requires card-context-library category director-future", errors)
+            warnings: list[str] = []
+            VALIDATOR.validate_manifest(root, manifest, errors, warnings)
+            # Both statements are conventions the coordinator's own calls already enforce
+            # structurally, so they inform the author without blocking a deliberate card.
+            self.assertEqual([error for error in errors if "world-narrative-coordinator" in error], [])
+            self.assertIn("design: world-narrative-coordinator requires the narrative-memory module", warnings)
+            self.assertIn("design: world-narrative-coordinator requires card-context-library category director-future", warnings)
+
+    def test_design_invariants_are_optional_but_checked_when_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for declared, expected in (
+                ({"foregroundWorkflow": "main", "requiresCardContextResources": True}, []),
+                ({"foregroundWorkflow": "main", "requiresNarrativeAgentCallable": ["demo/lookup"]}, []),
+                ({"requiresCardContextResources": True}, ["foregroundWorkflow is required"]),
+                ({"foregroundWorkflow": "main", "unknown": True}, ["unknown fields"]),
+                ({"foregroundWorkflow": "main", "requiresEffectiveMemoryTimeline": "yes"}, ["must be a boolean"]),
+                ({"foregroundWorkflow": "main", "requiresNarrativeAgentCallable": "demo/lookup"}, ["must be an array"]),
+                ({"foregroundWorkflow": "absent"}, ["must reference a card-local workflow"]),
+            ):
+                errors: list[str] = []
+                VALIDATOR.validate_design_invariants(root, {"design_invariants": declared}, errors)
+                self.assertEqual(
+                    [any(fragment in error for error in errors) for fragment in expected],
+                    [True] * len(expected),
+                    f"{declared} produced {errors}",
+                )
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ python .agents/skills/audit-and-upgrade-pi-rp-card/scripts/inventory_card.py pla
 
 Also run the current structural validator. Use inventory and validation as evidence, not as substitutes for semantic review. Do not dump their full output unless the user asks.
 
+Read the validation result in three parts rather than one pass/fail: **errors** are real defects; **`design:` warnings** say the card does not follow a shipped-template convention, which is legitimate for a customized card but must be a deliberate answer the audit can state; an existing `manifest.design_invariants` is the card's own promise, so a violated invariant is an error and a card whose design changed may need the declaration updated. Never propose declaring an invariant the card does not satisfy — that turns an honest warning into a failing card.
+
 Maintain an internal discussion ledger with exactly these states: `pending`, `accepted`, `skipped`, `not-applicable`, and `revisit`. Store the user's decision, confirmed scope, and residual risk for each stage. Do not ask the user to remember earlier decisions.
 
 ## Discussion order

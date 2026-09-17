@@ -88,6 +88,25 @@ def run_cli(card: Path) -> list[str]:
     return [line for line in buffer.getvalue().splitlines() if line.startswith("error:")]
 
 
+def run_cli_warnings(card: Path) -> list[str]:
+    """Run the validator CLI in-process and return the captured warning lines."""
+    buffer = io.StringIO()
+    argv = sys.argv
+    sys.argv = ["validate_card_pack.py", str(card)]
+    try:
+        with contextlib.redirect_stdout(buffer):
+            V.main()
+    except SystemExit:
+        pass
+    finally:
+        sys.argv = argv
+    return [line[len("warning: "):] for line in buffer.getvalue().splitlines() if line.startswith("warning: ")]
+
+
+def design_warnings(card: Path) -> list[str]:
+    return [warning for warning in run_cli_warnings(card) if warning.startswith("design: ")]
+
+
 def build_fixture() -> None:
     if FIXTURE.exists():
         shutil.rmtree(FIXTURE)
@@ -302,6 +321,151 @@ report("negative: a module entry file missing from its own package must fail",
 source_entry.write_text(source_entry_original, encoding="utf-8")
 report("positive: restored package sources report no entryFile error",
        [e for e in source_errors(source_paths) if "metadata.entryFile" in e])
+
+print()
+print("== shipped design conventions warn; a card's own invariants bind ==")
+
+KNOWN_FIXTURE_WARNING = "manifest source metadata is missing"
+report("the shipped card emits only the known fixture warning",
+       [w for w in run_cli_warnings(FIXTURE) if w != KNOWN_FIXTURE_WARNING])
+
+
+def set_node_field(workflow_name: str, node_id: str, field: str, value) -> str:
+    """Return the original text of one fixture workflow with a node field replaced."""
+    path = FIXTURE / "workflows" / workflow_name / "workflow.json"
+    original = path.read_text(encoding="utf-8")
+    document = json.loads(original)
+    for node in document["nodes"]:
+        if node["id"] == node_id:
+            node[field] = value
+            break
+    else:
+        raise SystemExit(f"fixture workflow {workflow_name} has no node {node_id}")
+    write_json(path, document)
+    return original
+
+
+def restore(workflow_name: str, original: str) -> None:
+    (FIXTURE / "workflows" / workflow_name / "workflow.json").write_text(original, encoding="utf-8")
+
+
+standard_original = set_node_field("standard-rp", "prepare-card-context", "type", "code")
+report("negative: dropping the shipped convention warns without blocking",
+       [w for w in design_warnings(FIXTURE) if "must prepare card-context-library resources before narration" in w],
+       expect_empty=False)
+report("the same card still reports no error", run_cli(FIXTURE))
+restore("standard-rp", standard_original)
+report("positive: the shipped workflow reports no design warning", design_warnings(FIXTURE))
+
+manifest_path = FIXTURE / "manifest.json"
+manifest_original = load(manifest_path)
+declared = json.loads(json.dumps(manifest_original))
+declared["design_invariants"] = {"foregroundWorkflow": "standard-rp", "requiresCardContextResources": True}
+write_json(manifest_path, declared)
+report("positive: a declared invariant the card satisfies reports no error", run_cli(FIXTURE))
+
+standard_original = set_node_field("standard-rp", "prepare-card-context", "type", "code")
+report("negative: a declared invariant the card violates fails validation",
+       [e for e in run_cli(FIXTURE) if "must prepare card-context-library resources before narration" in e],
+       expect_empty=False)
+report("positive: a declared invariant suppresses the matching design warning",
+       [w for w in design_warnings(FIXTURE) if "before narration" in w])
+restore("standard-rp", standard_original)
+
+advanced_original = set_node_field("advanced-memory-rp", "prepare-card-context", "dependsOn", ["prepare-document-workspace"])
+report("negative: a violation of an undeclared convention only warns",
+       [w for w in design_warnings(FIXTURE) if "effective memory timeline" in w], expect_empty=False)
+report("positive: the violated convention is not an error while undeclared", run_cli(FIXTURE))
+
+declared = json.loads(json.dumps(manifest_original))
+declared["design_invariants"] = {
+    "foregroundWorkflow": "advanced-memory-rp",
+    "requiresEffectiveMemoryTimeline": True,
+    "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"],
+}
+write_json(manifest_path, declared)
+report("negative: the same violation fails once declared",
+       [e for e in run_cli(FIXTURE) if "effective memory timeline" in e], expect_empty=False)
+restore("advanced-memory-rp", advanced_original)
+report("positive: restoring the shipped ordering satisfies the declared invariant", run_cli(FIXTURE))
+
+advanced_original = set_node_field("advanced-memory-rp", "write-narrative", "workflowCalls",
+                                   ["world-narrative-coordinator/pre-director-update", "world-narrative-coordinator/materialize-guidance"])
+report("negative: a declared Agent callable requirement fails when the narrative Agent drops it",
+       [e for e in run_cli(FIXTURE) if "narrative Agent must expose narrative-memory/narrative-memory-retrieve" in e],
+       expect_empty=False)
+restore("advanced-memory-rp", advanced_original)
+
+declared = json.loads(json.dumps(manifest_original))
+declared["design_invariants"] = {"foregroundWorkflow": "standard-rp", "requiresNarativeAgentCallable": []}
+write_json(manifest_path, declared)
+report("negative: an unknown invariant field must fail",
+       [e for e in run_cli(FIXTURE) if "design_invariants" in e], expect_empty=False)
+
+declared = json.loads(json.dumps(manifest_original))
+declared["design_invariants"] = {"foregroundWorkflow": "no-such-workflow"}
+write_json(manifest_path, declared)
+report("negative: an invariant naming an unknown workflow must fail",
+       [e for e in run_cli(FIXTURE) if "design_invariants.foregroundWorkflow" in e], expect_empty=False)
+
+declared = json.loads(json.dumps(manifest_original))
+declared["design_invariants"] = {"requiresCardContextResources": True}
+write_json(manifest_path, declared)
+report("negative: an invariant without its subject workflow must fail",
+       [e for e in run_cli(FIXTURE) if "foregroundWorkflow is required" in e], expect_empty=False)
+write_json(manifest_path, manifest_original)
+report("positive: removing the declaration restores a clean validation", run_cli(FIXTURE))
+
+print()
+print("== module dependency sidecars must match the shipped modules ==")
+
+
+def workflow_calls(module_root: Path, module: dict) -> set[str]:
+    """Every module-workflow reference this module's own workflows declare."""
+    targets: set[str] = set()
+    for relative in module.get("workflowFiles", []):
+        document = load(module_root / relative)
+        for node in document.get("nodes", []):
+            if node.get("type") == "call" and isinstance(node.get("target"), str):
+                targets.add(node["target"])
+            for binding in node.get("workflowCalls", []) or []:
+                target = binding if isinstance(binding, str) else binding.get("target")
+                if isinstance(target, str):
+                    targets.add(target)
+    return targets
+
+
+shipped_modules = {module_id: module_source(module_id) for module_id in MODULE_IDS}
+sidecar_findings: list[str] = []
+sidecars = 0
+for module_id, module_root in shipped_modules.items():
+    sidecar = module_root / "dependencies.json"
+    if not sidecar.is_file():
+        continue
+    sidecars += 1
+    document = load(sidecar)
+    if document.get("schemaVersion") != 1 or document.get("moduleId") != module_id:
+        sidecar_findings.append(f"{module_id}: dependencies.json must be schemaVersion 1 for {module_id}")
+        continue
+    declared = document.get("structuralRequires", [])
+    actual = {target.split("/")[0] for target in workflow_calls(module_root, load(module_root / "module.json"))}
+    for dependency in declared:
+        if dependency not in shipped_modules:
+            sidecar_findings.append(f"{module_id}: structuralRequires names an unknown module: {dependency}")
+        elif dependency not in actual:
+            sidecar_findings.append(f"{module_id}: structuralRequires claims {dependency}, but no owned workflow calls it")
+    for dependency in document.get("orchestratedBy", []):
+        if dependency not in shipped_modules:
+            sidecar_findings.append(f"{module_id}: orchestratedBy names an unknown module: {dependency}")
+        elif dependency in actual:
+            sidecar_findings.append(f"{module_id}: {dependency} is declared as an orchestrator but is called structurally")
+    decoupling = document.get("decoupling")
+    if not isinstance(decoupling, dict) or not decoupling.get("workload") or not decoupling.get("riskIfDecoupled"):
+        sidecar_findings.append(f"{module_id}: dependencies.json must disclose the decoupling workload and risk")
+print(f"        （带依赖侧车的模块：{sidecars} 个）")
+report("every dependency sidecar matches the shipped modules", sidecar_findings)
+report("the coupling the README claims is recorded in the shipped sidecars",
+       [] if sidecars >= 2 else ["fewer than two narrative modules declare a sidecar"])
 
 print()
 print("== frontend region types and call bindings ==")

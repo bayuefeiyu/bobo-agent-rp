@@ -17,6 +17,8 @@ features/<module-id>/
     └── references/
 ```
 
+A project-global package may additionally carry `dependencies.json` next to `module.json` when something outside the module drives it; see [global-modules.md](global-modules.md) for that record and the conversion-time choice it exists to disclose. It is a project-global source record, not part of the module v6 contract, and validation never reads it.
+
 Use the exact module v6 shape from the unified protocol. `moduleKind` distinguishes data, resource, and hybrid ownership. `workflowFiles` lists the module's complete internal/external workflows. Data/hybrid modules use `data-contract.json` for collections, record types, storage, indexes, searchable fields, Agent return views, actions, and capabilities. Resource/hybrid modules use resource catalog v1 for static authored document delivery without fake session data. A substantial card customization receives a distinct module ID and may identify its origin through `basedOn`.
 
 ## Data freedom and indexes

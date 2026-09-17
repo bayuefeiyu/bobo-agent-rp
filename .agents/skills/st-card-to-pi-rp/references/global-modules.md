@@ -17,7 +17,8 @@ After enough source inspection to judge relevance, but before building the forma
 - ID, title, and one-line purpose;
 - whether it directly matches a detected source feature, is merely optional, or conflicts with the proposed native conversion;
 - visible/background surface and the main data/workflow ownership consequence;
-- any material conflict or required card-specific adaptation that affects whether the user should select it.
+- any material conflict or required card-specific adaptation that affects whether the user should select it;
+- for a module whose directory carries `dependencies.json`, who drives it and what it needs: an `orchestratedBy` entry is a selection consequence, not a footnote — the user is choosing against a module that is not standalone, and the message must say so before they choose.
 
 Then explicitly ask which modules the user wants imported. Do not silently import even a strongly recommended module. If the user delegates the choice, state the chosen set and rationale before continuing. If no valid global modules exist, state that discovery found none and do not ask an empty selection question.
 
@@ -48,6 +49,41 @@ A copied top-level workflow must match the modules **this** card installs. Valid
 - reword the node prompt so it no longer instructs a call the runtime will not expose. An Agent node's `rp_call` only offers targets whose module is installed, so a prompt that names an absent target asks for something impossible.
 
 **Trimming optional integrations must never remove a required dependency.** A workflow whose flow depends on a module keeps that module's calls; the correct outcome is then that the module must be installed, not that the calls disappear. `advanced-memory-rp` is the reference case: its memory timeline preparation and its narrative Agent's retrieval exposure are enforced by validation, so trimming them produces an invalid card rather than a simpler one. The same rule applies to module dependencies: an integration that is structural (expressed as a declared call) is caught by validation; an orchestration dependency (another workflow drives this module) is a conversion-time decision — record it in the proposal and offer the user the choice between installing the dependency and decoupling inside the card, with workload and risk stated for each.
+
+## Module dependency sidecars
+
+A module directory may carry `dependencies.json`, which records what the module needs and who drives it:
+
+```json
+{
+  "schemaVersion": 1,
+  "moduleId": "local-scene-narrative",
+  "structuralRequires": ["narrative-memory"],
+  "orchestratedBy": ["world-narrative-coordinator"],
+  "decoupling": {
+    "whatTheOrchestratorProvides": ["..."],
+    "workload": "...",
+    "riskIfDecoupled": ["..."]
+  }
+}
+```
+
+- `structuralRequires` lists modules this module's own workflows call. That claim is already enforced structurally by card validation, so the sidecar is a summary the proposal can quote, not a second gate.
+- `orchestratedBy` lists modules that drive this one from outside. **No structural check can see this**: nothing inside this module points at the orchestrator, so it is exactly the dependency that used to be guessed at by hardcoding module IDs.
+- `decoupling` is the disclosure the conversion gate must present when the orchestrator is not selected: what the orchestrator does for this module, the size of the orchestration a decoupled card has to write, and what is lost by not having it.
+
+**Validation deliberately does not read this file.** A card copies the module and may adapt or remove the sidecar; making it authoritative would turn a conversion-time choice back into a hardcoded module-ID dependency, which is what this record exists to avoid. The shipped sidecars are checked for internal consistency by `scripts/test_real_asset_validation.py` instead.
+
+### Presenting the orchestration choice
+
+When `local-scene-narrative` or `world-scope-narrative` is selected **without** `world-narrative-coordinator`, do not silently drop the integration and do not refuse the selection. Present both paths with the disclosure from that module's `dependencies.json`:
+
+| Path | What it means for this card |
+| --- | --- |
+| **Install the orchestrator** | Add `world-narrative-coordinator` (which requires `narrative-memory` and the `director-future` category) and copy its integration template. Delegation timing, guidance, review, publication, archive capture and the cross-module conflict check all come from the director. |
+| **Decouple inside this card** | Keep the module without the orchestrator and write the orchestration yourself: decide when a story is written, author the guidance, choose whether and how candidates are reviewed, and write the publish and archive path (or accept that stories are never archived). The reference size is the shipped six-node `director-post-with-narratives` template. |
+
+State the risk for the second path explicitly — no world-logic review, no deep-director subjects, no cross-module hard-conflict check — and record the user's choice in the proposal and `conversion-report.md`. Decoupling is a legitimate outcome; an unresolved silence is not.
 
 ## World narrative coordinator integration
 

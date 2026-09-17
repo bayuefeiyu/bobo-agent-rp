@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "local-scene-narrative",
+  "structuralRequires": ["narrative-memory"],
+  "orchestratedBy": ["world-narrative-coordinator"],
+  "decoupling": {
+    "whatTheOrchestratorProvides": [
+      "deciding when a near-field story is worth writing and delegating that assignment",
+      "supplying the creative guidance the assignment carries",
+      "reviewing every candidate before it becomes visible and deciding what enters the archive",
+      "running the publish workflow and the source capture that follows it"
+    ],
+    "workload": "The shipped integration template world-narrative-coordinator/integration/workflows/director-post-with-narratives is a six-node top-level workflow: post-turn director update, two dispatches, one review, two publishes. A decoupled card writes an equivalent orchestration of its own and wires it to a trigger.",
+    "riskIfDecoupled": [
+      "no world-logic review of a candidate before players can read it",
+      "no deep-director material to draw subjects from, so the card supplies its own prompts",
+      "no cross-module hard-conflict check, so two modules can publish contradictory events"
+    ]
+  }
+}
