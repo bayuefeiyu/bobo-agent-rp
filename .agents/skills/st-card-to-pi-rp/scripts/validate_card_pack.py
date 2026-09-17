@@ -318,7 +318,7 @@ def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, e
         return
     if view["schemaVersion"] == 1:
         return
-    interactive = {"record-browser", "settings-form", "workflow-controls", "integrity-alerts"}
+    interactive = {"record-browser", "story-browser", "settings-form", "workflow-controls", "integrity-alerts"}
     legacy = {"text", "markdown", "json", "key-value", "list", "table", "image-generation"}
     seen: set[str] = set()
     collections = contract.get("collections", {})
@@ -365,6 +365,37 @@ def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, e
                 read_capability = capabilities.get(coverage.get("readCapability"), {})
                 if collection_id not in read_capability.get("collections", []) or "query" not in read_capability.get("actions", []) or view_id not in read_capability.get("views", []):
                     errors.append(f"{region_label}.coverage capability does not grant the declared view")
+            continue
+        if region.get("type") == "story-browser":
+            # Mirrors rp-module-frontend.mjs: story-browser declares indexView/fullView rather than view.
+            collection_id = region.get("collectionId")
+            collection = collections.get(collection_id)
+            if not isinstance(collection, dict):
+                errors.append(f"{region_label}.collectionId is unknown")
+                continue
+            record_types = region.get("recordTypes")
+            if not isinstance(record_types, list) or not record_types or any(item not in collection.get("recordTypes", {}) for item in record_types):
+                errors.append(f"{region_label} references unknown record types")
+                continue
+            for view_field in ("indexView", "fullView"):
+                view_id = region.get(view_field)
+                if any(view_id not in collection["recordTypes"][item].get("views", {}) for item in record_types):
+                    errors.append(f"{region_label}.{view_field} is not declared by every record type")
+            read_capability = capabilities.get(region.get("readCapability"), {})
+            declared_views = [region.get("indexView"), region.get("fullView")]
+            if (
+                collection_id not in read_capability.get("collections", [])
+                or "query" not in read_capability.get("actions", [])
+                or any(view_id not in read_capability.get("views", []) for view_id in declared_views)
+            ):
+                errors.append(f"{region_label}.readCapability does not grant the declared views")
+            page_size = region.get("pageSize")
+            if page_size is not None and (not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 100):
+                errors.append(f"{region_label}.pageSize must be an integer between 1 and 100")
+            for budget_field, budget_maximum in (("indexMaxCharacters", 200000), ("fullMaxCharacters", 1000000)):
+                budget = region.get(budget_field)
+                if budget is not None and (not isinstance(budget, int) or isinstance(budget, bool) or not 1000 <= budget <= budget_maximum):
+                    errors.append(f"{region_label}.{budget_field} must be an integer between 1000 and {budget_maximum}")
             continue
         collection_id = region.get("collectionId")
         collection = collections.get(collection_id)
@@ -499,6 +530,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
     index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
     index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
     all_module_workflows = module_workflow_map(root)
+    all_resource_catalogs = module_resource_catalog_map(root)
     allowed_node_types = {"agent", "team", "code", "call", "gate", "join", "workflow-return", "turn-finalize"}
     for index, path_value in enumerate(values):
         label = f"feature_modules[{index}]"
@@ -631,6 +663,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                             node_type = node.get("type", "agent")
                             if node_type not in allowed_node_types:
                                 errors.append(f"{owned_node_label}.type is invalid")
+                            validate_code_node_entry(root, node, owned_node_label, node_type, errors)
+                            required_calls: set[str] = set()
                             if node_type == "team":
                                 team = node.get("team")
                                 if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
@@ -664,7 +698,6 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                                     if base_retrieval is not None:
                                         abilities = [*abilities, base_retrieval]
                                     ability_ids: list[str] = []
-                                    required_calls: set[str] = set()
                                     for ability_index, ability in enumerate(abilities):
                                         ability_label = f"{owned_node_label}.team.abilities[{ability_index}]"
                                         if not isinstance(ability, dict):
@@ -689,10 +722,15 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                                             errors.append(f"{ability_label}.adapter is unsupported")
                                     if len(ability_ids) != len(set(ability_ids)):
                                         errors.append(f"{owned_node_label}.team ability IDs must be unique")
-                                    declared_calls = {binding if isinstance(binding, str) else binding.get("target") for binding in node.get("workflowCalls", []) if isinstance(binding, (str, dict))}
-                                    missing_calls = sorted(required_calls - declared_calls)
-                                    if missing_calls:
-                                        errors.append(f"{owned_node_label}.team workflow abilities require matching workflowCalls: {missing_calls}")
+                            validate_module_call_surface(
+                                node,
+                                owned_node_label,
+                                node_type,
+                                all_module_workflows,
+                                all_resource_catalogs,
+                                sorted(required_calls),
+                                errors,
+                            )
                             if owned.get("kind") == "module-internal":
                                 effective_locks = owned_locks if isinstance(owned_locks, list) else [{"moduleId": module_id, "collectionId": None}]
                                 for access in node.get("moduleAccess", []) if isinstance(node.get("moduleAccess", []), list) else []:
@@ -898,6 +936,151 @@ def module_resource_catalog_map(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def workflow_kinds(root: Path) -> dict[str, str]:
+    """Map card-local top-level workflow IDs to their declared kind."""
+    workflow_root = root / "workflows"
+    if not workflow_root.exists():
+        return {}
+    result: dict[str, str] = {}
+    for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
+        workflow = load_json(directory / "workflow.json", {})
+        if isinstance(workflow, dict) and isinstance(workflow.get("id"), str) and isinstance(workflow.get("kind"), str):
+            result[workflow["id"]] = workflow["kind"]
+    return result
+
+
+def validate_code_node_entry(root: Path, node: dict[str, Any], node_label: str, node_type: str, errors: list[str]) -> None:
+    """Validate a code node's `metadata.entryFile`.
+
+    The runtime resolves this path below the card directory, so it must be a safe card-relative
+    path pointing at a file the converter actually installs. A runtime-relative path (for example
+    `.pi/workflow/...`) is syntactically fine but never resolvable from inside a card.
+    """
+    if node_type != "code":
+        return
+    metadata = node.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    entry_file = metadata.get("entryFile")
+    if entry_file is None:
+        return
+    require_file(root, entry_file, f"{node_label}.metadata.entryFile", errors)
+
+
+def validate_module_call_surface(
+    node: dict[str, Any],
+    node_label: str,
+    node_type: str,
+    module_workflows: dict[str, dict[str, Any]],
+    resource_catalogs: dict[str, dict[str, Any]],
+    team_workflow_abilities: list[str],
+    errors: list[str],
+) -> None:
+    """Validate one node's module-call surface.
+
+    Covers the fixed `call` target with its interface matching, and the dynamic
+    `workflowCalls` bindings with their exposure, argument policy, and budget fields.
+
+    Shared by top-level and module workflow nodes so the two scopes cannot drift apart.
+    """
+    if node_type == "call":
+        target = node.get("target")
+        target_workflow = module_workflows.get(target)
+        if not isinstance(target, str) or target_workflow is None:
+            errors.append(f"{node_label}.target must reference a declared module workflow")
+        else:
+            arguments = node.get("arguments", {})
+            documents = node.get("documents", {})
+            output_paths = node.get("outputPaths", {})
+            if not isinstance(arguments, dict) or not isinstance(documents, dict) or not isinstance(output_paths, dict):
+                errors.append(f"{node_label} call arguments, documents, and outputPaths must be objects")
+            else:
+                interface = target_workflow.get("interface", {}) if isinstance(target_workflow.get("interface"), dict) else {}
+                inputs = interface.get("inputs", {}) if isinstance(interface.get("inputs"), dict) else {}
+                exports = interface.get("exports", {}) if isinstance(interface.get("exports"), dict) else {}
+                for input_id, definition in inputs.items():
+                    if not isinstance(definition, dict) or not definition.get("required"):
+                        continue
+                    input_type = definition.get("type", "parameter")
+                    if input_type == "parameter" and input_id not in arguments:
+                        errors.append(f"{node_label} is missing required parameter {input_id}")
+                    if input_type == "document" and input_id not in documents:
+                        errors.append(f"{node_label} is missing required document {input_id}")
+                if target == "card-context-library/export-context" and isinstance(arguments.get("categories"), list):
+                    declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
+                    if not arguments["categories"] or any(category not in declared_categories for category in arguments["categories"]):
+                        errors.append(f"{node_label}.arguments.categories must select declared card-context-library categories")
+                if set(output_paths) != set(exports):
+                    errors.append(f"{node_label}.outputPaths must exactly match target exports")
+                declared_node_outputs = node.get("outputs", {}) if isinstance(node.get("outputs", {}), dict) else {}
+                for export_id, export_definition in exports.items():
+                    output = declared_node_outputs.get(export_id)
+                    export_format = export_definition.get("format", "markdown") if isinstance(export_definition, dict) else "markdown"
+                    export_kind = export_definition.get("kind", "directory" if export_format == "document-set" else "file") if isinstance(export_definition, dict) else "file"
+                    output_kind = output.get("kind", "directory" if output.get("format") == "document-set" else "file") if isinstance(output, dict) else None
+                    if not isinstance(output, dict) or output.get("path") != output_paths.get(export_id) or output.get("format") != export_format or output_kind != export_kind:
+                        errors.append(f"{node_label}.outputs.{export_id} must match the target export path, format, and kind")
+    workflow_calls = node.get("workflowCalls", [])
+    if not isinstance(workflow_calls, list):
+        errors.append(f"{node_label}.workflowCalls must be an array")
+    elif node_type not in {"agent", "code", "team"} and workflow_calls:
+        errors.append(f"{node_label}.workflowCalls is supported only for agent, code, and team nodes")
+    else:
+        declared_workflow_calls = {binding if isinstance(binding, str) else binding.get("target") for binding in workflow_calls if isinstance(binding, (str, dict))}
+        missing_team_calls = sorted(set(team_workflow_abilities) - declared_workflow_calls)
+        if missing_team_calls:
+            errors.append(f"{node_label}.team workflow abilities require matching workflowCalls: {missing_team_calls}")
+        seen_targets: set[str] = set()
+        for call_index, raw_call in enumerate(workflow_calls):
+            call_label = f"{node_label}.workflowCalls[{call_index}]"
+            if isinstance(raw_call, str):
+                target, fixed_arguments, allowed_arguments = raw_call, {}, None
+                max_calls, document_snapshot_input = None, None
+            elif isinstance(raw_call, dict) and not set(raw_call) - {"target", "fixedArguments", "allowedArguments", "maxCalls", "documentSnapshotInput"}:
+                target = raw_call.get("target")
+                fixed_arguments = raw_call.get("fixedArguments", {})
+                allowed_arguments = raw_call.get("allowedArguments")
+                max_calls = raw_call.get("maxCalls")
+                document_snapshot_input = raw_call.get("documentSnapshotInput")
+            else:
+                errors.append(f"{call_label} is invalid")
+                continue
+            target_workflow = module_workflows.get(target)
+            if not isinstance(target, str) or target_workflow is None:
+                errors.append(f"{call_label}.target must reference a declared module workflow")
+                continue
+            if target in seen_targets:
+                errors.append(f"{node_label}.workflowCalls contains duplicate target {target}")
+            seen_targets.add(target)
+            if node_type == "agent" and target_workflow.get("agentCallable") is not True:
+                errors.append(f"{call_label}.target is not agentCallable")
+            if not isinstance(fixed_arguments, dict) or (allowed_arguments is not None and not isinstance(allowed_arguments, dict)):
+                errors.append(f"{call_label} fixedArguments and allowedArguments are invalid")
+                continue
+            overlap = set(fixed_arguments) & set(allowed_arguments or {})
+            if overlap:
+                errors.append(f"{call_label} cannot both fix and allow arguments {sorted(overlap)}")
+            if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool) or max_calls < 1):
+                errors.append(f"{call_label}.maxCalls must be a positive integer")
+            if document_snapshot_input is not None and (
+                not isinstance(document_snapshot_input, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", document_snapshot_input)
+            ):
+                errors.append(f"{call_label}.documentSnapshotInput must be a safe ID")
+            parameter_inputs = {
+                input_id for input_id, definition in target_workflow.get("interface", {}).get("inputs", {}).items()
+                if isinstance(definition, dict) and definition.get("type", "parameter") == "parameter"
+            }
+            if (set(fixed_arguments) | set(allowed_arguments or {})) - parameter_inputs:
+                errors.append(f"{call_label} restricts arguments absent from the target interface")
+            for argument_id, allowed in (allowed_arguments or {}).items():
+                if not isinstance(allowed, list) or not allowed or any(not isinstance(value, (str, int, float, bool)) and value is not None for value in allowed):
+                    errors.append(f"{call_label}.allowedArguments.{argument_id} must be a non-empty scalar array")
+            if target == "card-context-library/export-context" and isinstance((allowed_arguments or {}).get("categories"), list):
+                declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
+                if any(category not in declared_categories for category in allowed_arguments["categories"]):
+                    errors.append(f"{call_label}.allowedArguments.categories contains an undeclared resource category")
+
+
 def validate_workflows(root: Path, errors: list[str]) -> set[str]:
     workflow_root = root / "workflows"
     if not workflow_root.exists():
@@ -972,6 +1155,7 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             node_type = node.get("type", "agent")
             team_workflow_abilities: list[str] = []
             validate_runtime_services(node, node_label, errors)
+            validate_code_node_entry(root, node, node_label, node_type, errors)
             if node_type == "team":
                 team = node.get("team")
                 if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
@@ -1042,93 +1226,15 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
                             errors.append(f"{ability_label}.adapter is unsupported")
                     if len(ability_ids) != len(set(ability_ids)):
                         errors.append(f"{node_label}.team ability IDs must be unique")
-            if node_type == "call":
-                target = node.get("target")
-                target_workflow = module_workflows.get(target)
-                if not isinstance(target, str) or target_workflow is None:
-                    errors.append(f"{node_label}.target must reference a declared module workflow")
-                else:
-                    arguments = node.get("arguments", {})
-                    documents = node.get("documents", {})
-                    output_paths = node.get("outputPaths", {})
-                    if not isinstance(arguments, dict) or not isinstance(documents, dict) or not isinstance(output_paths, dict):
-                        errors.append(f"{node_label} call arguments, documents, and outputPaths must be objects")
-                    else:
-                        interface = target_workflow.get("interface", {}) if isinstance(target_workflow.get("interface"), dict) else {}
-                        inputs = interface.get("inputs", {}) if isinstance(interface.get("inputs"), dict) else {}
-                        exports = interface.get("exports", {}) if isinstance(interface.get("exports"), dict) else {}
-                        for input_id, definition in inputs.items():
-                            if not isinstance(definition, dict) or not definition.get("required"):
-                                continue
-                            input_type = definition.get("type", "parameter")
-                            if input_type == "parameter" and input_id not in arguments:
-                                errors.append(f"{node_label} is missing required parameter {input_id}")
-                            if input_type == "document" and input_id not in documents:
-                                errors.append(f"{node_label} is missing required document {input_id}")
-                        if target == "card-context-library/export-context" and isinstance(arguments.get("categories"), list):
-                            declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
-                            if not arguments["categories"] or any(category not in declared_categories for category in arguments["categories"]):
-                                errors.append(f"{node_label}.arguments.categories must select declared card-context-library categories")
-                        if set(output_paths) != set(exports):
-                            errors.append(f"{node_label}.outputPaths must exactly match target exports")
-                        declared_node_outputs = node.get("outputs", {}) if isinstance(node.get("outputs", {}), dict) else {}
-                        for export_id, export_definition in exports.items():
-                            output = declared_node_outputs.get(export_id)
-                            export_format = export_definition.get("format", "markdown") if isinstance(export_definition, dict) else "markdown"
-                            export_kind = export_definition.get("kind", "directory" if export_format == "document-set" else "file") if isinstance(export_definition, dict) else "file"
-                            output_kind = output.get("kind", "directory" if output.get("format") == "document-set" else "file") if isinstance(output, dict) else None
-                            if not isinstance(output, dict) or output.get("path") != output_paths.get(export_id) or output.get("format") != export_format or output_kind != export_kind:
-                                errors.append(f"{node_label}.outputs.{export_id} must match the target export path, format, and kind")
-            workflow_calls = node.get("workflowCalls", [])
-            if not isinstance(workflow_calls, list):
-                errors.append(f"{node_label}.workflowCalls must be an array")
-            elif node_type not in {"agent", "code", "team"} and workflow_calls:
-                errors.append(f"{node_label}.workflowCalls is supported only for agent, code, and team nodes")
-            else:
-                declared_workflow_calls = {binding if isinstance(binding, str) else binding.get("target") for binding in workflow_calls if isinstance(binding, (str, dict))}
-                missing_team_calls = sorted(set(team_workflow_abilities) - declared_workflow_calls)
-                if missing_team_calls:
-                    errors.append(f"{node_label}.team workflow abilities require matching workflowCalls: {missing_team_calls}")
-                seen_targets: set[str] = set()
-                for call_index, raw_call in enumerate(workflow_calls):
-                    call_label = f"{node_label}.workflowCalls[{call_index}]"
-                    if isinstance(raw_call, str):
-                        target, fixed_arguments, allowed_arguments = raw_call, {}, None
-                    elif isinstance(raw_call, dict) and not set(raw_call) - {"target", "fixedArguments", "allowedArguments"}:
-                        target = raw_call.get("target")
-                        fixed_arguments = raw_call.get("fixedArguments", {})
-                        allowed_arguments = raw_call.get("allowedArguments")
-                    else:
-                        errors.append(f"{call_label} is invalid")
-                        continue
-                    target_workflow = module_workflows.get(target)
-                    if not isinstance(target, str) or target_workflow is None:
-                        errors.append(f"{call_label}.target must reference a declared module workflow")
-                        continue
-                    if target in seen_targets:
-                        errors.append(f"{node_label}.workflowCalls contains duplicate target {target}")
-                    seen_targets.add(target)
-                    if node_type == "agent" and target_workflow.get("agentCallable") is not True:
-                        errors.append(f"{call_label}.target is not agentCallable")
-                    if not isinstance(fixed_arguments, dict) or (allowed_arguments is not None and not isinstance(allowed_arguments, dict)):
-                        errors.append(f"{call_label} fixedArguments and allowedArguments are invalid")
-                        continue
-                    overlap = set(fixed_arguments) & set(allowed_arguments or {})
-                    if overlap:
-                        errors.append(f"{call_label} cannot both fix and allow arguments {sorted(overlap)}")
-                    parameter_inputs = {
-                        input_id for input_id, definition in target_workflow.get("interface", {}).get("inputs", {}).items()
-                        if isinstance(definition, dict) and definition.get("type", "parameter") == "parameter"
-                    }
-                    if (set(fixed_arguments) | set(allowed_arguments or {})) - parameter_inputs:
-                        errors.append(f"{call_label} restricts arguments absent from the target interface")
-                    for argument_id, allowed in (allowed_arguments or {}).items():
-                        if not isinstance(allowed, list) or not allowed or any(not isinstance(value, (str, int, float, bool)) and value is not None for value in allowed):
-                            errors.append(f"{call_label}.allowedArguments.{argument_id} must be a non-empty scalar array")
-                    if target == "card-context-library/export-context" and isinstance((allowed_arguments or {}).get("categories"), list):
-                        declared_categories = set(resource_catalogs.get("card-context-library", {}).get("categories", {}))
-                        if any(category not in declared_categories for category in allowed_arguments["categories"]):
-                            errors.append(f"{call_label}.allowedArguments.categories contains an undeclared resource category")
+            validate_module_call_surface(
+                node,
+                node_label,
+                node_type,
+                module_workflows,
+                resource_catalogs,
+                team_workflow_abilities,
+                errors,
+            )
             if "blockNextTurn" in node:
                 errors.append(f"{node_label}.blockNextTurn was replaced by trigger.blockNextTurnUntilReady")
             narrative_source = node.get("narrativeSource")
@@ -1370,6 +1476,20 @@ def validate_workflows(root: Path, errors: list[str]) -> set[str]:
             errors.append(f"{label}.trigger.type is invalid")
         elif trigger.get("blockNextTurnUntilReady", False) is True and kind != "turn-background":
             errors.append(f"{label}.trigger.blockNextTurnUntilReady is only valid for turn-background workflows")
+    # Second pass: every `after-workflow` trigger must name a card-local top-level workflow.
+    # This also catches unresolved template placeholders (for example DIRECTOR_ENABLED_FOREGROUND_ID),
+    # which pass the runtime's ID-pattern check but never match a real workflow, so the triggered
+    # workflow would silently never run.
+    for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
+        workflow = load_json(directory / "workflow.json", {})
+        trigger = workflow.get("trigger") if isinstance(workflow, dict) else None
+        if not isinstance(trigger, dict) or trigger.get("type") != "after-workflow":
+            continue
+        target = trigger.get("workflowId")
+        if not isinstance(target, str) or target not in ids:
+            errors.append(
+                f"workflows/{directory.name}/workflow.json.trigger.workflowId must reference a card-local top-level workflow: {target!r}"
+            )
     return ids
 
 
@@ -1573,8 +1693,17 @@ def main() -> int:
             errors.append("settings settings must be an object")
         else:
             active_workflow = card_settings["settings"].get("activeWorkflowId")
-            if active_workflow is not None and active_workflow not in workflow_ids:
-                errors.append("settings activeWorkflowId must reference a card-local workflow")
+            kinds = workflow_kinds(root)
+            foreground_ids = sorted(workflow_id for workflow_id, kind in kinds.items() if kind == "foreground")
+            if active_workflow is not None:
+                if active_workflow not in workflow_ids:
+                    errors.append("settings activeWorkflowId must reference a card-local workflow")
+                elif kinds.get(active_workflow) != "foreground":
+                    errors.append("settings activeWorkflowId must reference a foreground workflow")
+            elif len(foreground_ids) > 1:
+                errors.append(
+                    f"settings activeWorkflowId is required when the card declares multiple foreground workflows: {foreground_ids}"
+                )
             module_display = card_settings["settings"].get("featureModules")
             if module_display is not None:
                 if not isinstance(module_display, dict) or set(module_display) != {"order", "hidden"}:
