@@ -154,7 +154,7 @@ export class RpWorkflowEngine {
     this.runs.set(entry.run.id, entry);
     this.instances.set(key, entry);
     await this.onChange(entry.run, workflow);
-    queueMicrotask(() => { void this.#pump(entry); });
+    this.#dispatch(entry, "pump", () => this.#pump(entry));
     return structuredClone(entry.run);
   }
 
@@ -205,10 +205,10 @@ export class RpWorkflowEngine {
     this.instances.set(entry.key, entry);
     if (!TERMINAL_RUN_STATUSES.has(entry.run.status)) await this.#acquireWriteLocks(entry);
     await this.onChange(entry.run, workflow);
-    if (entry.run.status === "running") queueMicrotask(() => { void this.#pump(entry); });
-    else if (TERMINAL_RUN_STATUSES.has(entry.run.status) && !entry.terminalFinalized) queueMicrotask(() => { void this.#changed(entry); });
-    else if (entry.run.status === "awaiting-child") queueMicrotask(() => { void this.#reconcileWaitingChildren(entry); });
-    if (TERMINAL_RUN_STATUSES.has(entry.run.status) && entry.terminalFinalized) queueMicrotask(() => { void this.#resumeWaitingParents(entry); });
+    if (entry.run.status === "running") this.#dispatch(entry, "pump", () => this.#pump(entry));
+    else if (TERMINAL_RUN_STATUSES.has(entry.run.status) && !entry.terminalFinalized) this.#dispatch(entry, "changed", () => this.#changed(entry));
+    else if (entry.run.status === "awaiting-child") this.#dispatch(entry, "reconcileWaitingChildren", () => this.#reconcileWaitingChildren(entry));
+    if (TERMINAL_RUN_STATUSES.has(entry.run.status) && entry.terminalFinalized) this.#dispatch(entry, "resumeWaitingParents", () => this.#resumeWaitingParents(entry));
     return structuredClone(entry.run);
   }
 
@@ -240,7 +240,7 @@ export class RpWorkflowEngine {
       if (node.type !== "team") node.modelId = modelId;
     }
     await this.onChange(entry.run, entry.workflow);
-    queueMicrotask(() => { void this.#pump(entry); });
+    this.#dispatch(entry, "pump", () => this.#pump(entry));
     return structuredClone(entry.run);
   }
 
@@ -256,7 +256,7 @@ export class RpWorkflowEngine {
       prepareWorkflowNodeRetry(entry.run, state.id);
     }
     await this.onChange(entry.run, entry.workflow);
-    queueMicrotask(() => { void this.#pump(entry); });
+    this.#dispatch(entry, "pump", () => this.#pump(entry));
     return structuredClone(entry.run);
   }
 
@@ -740,7 +740,7 @@ export class RpWorkflowEngine {
       parentEntry.exhaustionOverrides.add(state.id);
       resumeWorkflowNodeAfterChild(parentEntry.run, state.id);
       await this.#changed(parentEntry);
-      if (parentEntry.run.status === "running") queueMicrotask(() => { void this.#pump(parentEntry); });
+      if (parentEntry.run.status === "running") this.#dispatch(parentEntry, "pump", () => this.#pump(parentEntry));
     }
   }
 
@@ -834,6 +834,32 @@ export class RpWorkflowEngine {
     for (const wake of this.writeLockWaiters.splice(0)) wake();
   }
 
+  /**
+   * Run a scheduler step off the current tick, recording any failure on the run.
+   *
+   * These steps are dispatched without an awaiter, so an escaping rejection would become an
+   * unhandled rejection (which terminates the host by default) and would silently stop the
+   * scheduler for that run.
+   */
+  #dispatch(entry, hook, task) {
+    queueMicrotask(() => {
+      Promise.resolve().then(task).catch(error => this.#noteChangeFailure(entry, hook, error));
+    });
+  }
+
+  /**
+   * Record a failure of a state-propagation hook on the run itself.
+   *
+   * These hooks are host callbacks (persistence, event dispatch). A failure there is an
+   * infrastructure fault, not a workflow fault: it must not reject the run, and it must not
+   * be swallowed silently either. The record travels with the run, so the next successful
+   * change persists it and the UI can surface it.
+   */
+  #noteChangeFailure(entry, hook, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    entry.run.changeFailures = [...(entry.run.changeFailures || []), { at: new Date().toISOString(), hook, message }].slice(-5);
+  }
+
   async #changed(entry) {
     if (TERMINAL_RUN_STATUSES.has(entry.run.status) && !entry.terminalFinalized) {
       entry.terminalFinalized = true;
@@ -859,9 +885,19 @@ export class RpWorkflowEngine {
         entry.run.terminalFinalization.error = error instanceof Error ? error.message : String(error);
       }
     }
-    await this.onChange(entry.run, entry.workflow);
-    entry.wake.resolve();
-    entry.wake = deferred();
-    await this.#resumeWaitingParents(entry);
+    try {
+      await this.onChange(entry.run, entry.workflow);
+    } catch (error) {
+      this.#noteChangeFailure(entry, "onChange", error);
+    } finally {
+      // Waking must happen whatever the host hook did: a waiter that never wakes hangs forever.
+      entry.wake.resolve();
+      entry.wake = deferred();
+    }
+    try {
+      await this.#resumeWaitingParents(entry);
+    } catch (error) {
+      this.#noteChangeFailure(entry, "resumeWaitingParents", error);
+    }
   }
 }

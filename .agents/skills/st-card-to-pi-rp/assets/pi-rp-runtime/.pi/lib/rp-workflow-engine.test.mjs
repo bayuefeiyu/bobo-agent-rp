@@ -1183,3 +1183,30 @@ test("an Agent call requires both exact node exposure and agentCallable", async 
   assert.equal(completed.status, "awaiting-model-choice");
   assert.match(completed.nodes.writer.error, /not callable by Agents/);
 });
+
+test("a throwing onChange neither hangs waiters nor escapes the scheduler", { timeout: 5000 }, async () => {
+  // The host hook fails after start(), so the failure lands inside the scheduler's own
+  // propagation path. Previously the waiter's wake was never resolved (wait() hung forever)
+  // and the rejection escaped an un-awaited tick, which terminates the host by default.
+  let calls = 0;
+  const engine = new RpWorkflowEngine({
+    executor: async ({ node }) => ({ output: node.id }),
+    onChange: async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("persistence unavailable");
+    },
+  });
+  const workflow = {
+    schemaVersion: 3,
+    id: "change-failure",
+    kind: "turn-background",
+    nodes: [{ id: "task", type: "code" }],
+  };
+  const started = await engine.start(workflow, { id: "change-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "completed");
+  const failures = settled.changeFailures || [];
+  assert.ok(failures.length > 0, "the hook failure must be recorded on the run");
+  assert.equal(failures.at(-1).hook, "onChange");
+  assert.match(failures.at(-1).message, /persistence unavailable/);
+});
