@@ -1,27 +1,28 @@
 # PROJECT STATUS
 
-更新时间：2026-09-16（第三轮：批次 2 修复后）
+更新时间：2026-09-16（第四轮：批次 3 修复后）
 
 当前分支：`main`
 
-当前 `HEAD`：`ceb9a57`（`fix: classify a failure by whether the attempt dispatched a model`）。工作树干净。
+当前 `HEAD`：`c0ba68e`（`fix: judge a card by its own design and disclose orchestration`）。工作树干净。
 
 ## 交接结论
 
-### 本轮（全面审查 + 批次 1 + 批次 2）
+### 本轮（全面审查 + 批次 1—3）
 
 对项目做过一次全面审查（恶性问题 + 游玩期提示词两条线），共立案 15 条缺陷与 21 条提示词条目，产物是被忽略的 `local-development-records/` 下两份清单：
 
-- `PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`：缺陷清单，15 条（其中 10 条已实施）
+- `PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`：缺陷清单，15 条（其中 12 条已实施）
 - `PROJECT-REVIEW-PROMPT-CHECKLIST-2026-09-16.md`：提示词清单，21 条全部定稿，**尚未实施**
 
-**已实施的 10 条**：
+**已实施的 12 条**：
 
 | 批次 | 条目 | 提交 |
 | --- | --- | --- |
 | 1 | FIX-001 / 002 / 005 / 006a / 012 / 013 / 014 | `d6b03b8` `a28da96` `ae33c4c` `7a655ed` `ec71465` `8382e74` `485082a` |
 | 2 | FIX-011（调度器韧性） | `ef6c058` |
 | 2 | FIX-003（终态失败释放回合）+ FIX-004（失败分类） | `316c2dc` `ceb9a57` |
+| 3 | FIX-006b（编排依赖进闸门）+ FIX-007（设计约定降级 + 卡自声明不变量） | `c0ba68e` |
 | — | FIX-015（批次 1 引入的校验器回归） | `a1a7cbc` |
 
 其中四条是本轮之前完全未知的：
@@ -33,7 +34,9 @@
 
 **FIX-015 是批次 1 自己引入的回归**：卡内新增的入口/调用校验没有区分"卡"与"项目全局包源码树"，使 `validate-module.py` 报出 12 条假错误。批次 2 的验证扫描抓到，已修并补了源码树夹具回归。教训已记入缺陷清单。
 
-**尚未实施**：缺陷清单的批次 3（FIX-006b/007）、批次 4（FIX-008/009/010）；提示词清单的 A 组 7 条 + C 组 1 条；以及两份清单各自登记的待定稿/待取证条目。
+**批次 3 的性质与前两批不同**：它不是修 bug，而是把校验器的职责重新划分——协议/格式一致性与跨引用完整性保留为硬校验；对**卡的设计**的断言降级为 `design:` 警告（卡可以自由改名、替换、解耦前台工作流），需要强制时由卡在 `manifest.design_invariants` 里自己声明，声明即校验。同时把"编排性依赖"（导演驱动叙事模块）从任何硬编码检查中移出，改为模块目录下的 `dependencies.json` 侧车记录 + 转卡闸门的两条路披露。
+
+**尚未实施**：缺陷清单的批次 4（FIX-008/009/010）；提示词清单的 A 组 7 条 + C 组 1 条；以及两份清单各自登记的待定稿/待取证条目。
 
 ### 前序轮次
 
@@ -131,6 +134,7 @@
 - 后置工作流的第二次导演Agent调用等待全部候选，只审核硬冲突和明显逻辑硬伤；默认保留原稿，修改时必须提供完整替换稿。随后各模块无Agent发布工作流并行提交，发布成功即成为世界事实并进入通用来源捕获。
 - 深度导演报告维护一个广域活跃题材和至少一个备用题材；题材耗尽不会单独唤醒深度导演。近场与广域创作均不得走到正文当前世界时间之后。
 - 前端“一隅众生”和“万象潮生”默认随模块区域收起，玩家可自由阅读；正文按 `recentCompleteTurns` 获取摘要式目录和按需全文，更早故事走叙事记忆。
+- **两者都不是可独立使用的完整功能**：由后置导演决定何时委托、给什么指导、审核并发布，再由通用来源捕获归档。这一编排依赖无法被任何结构检查看见（模块内部没有调用指向导演），因此记录在各自的 `dependencies.json` 侧车里，转卡预选阶段必须据此披露"补选导演"与"卡内解耦"两条路及各自的工作量与风险；校验器**不读**该文件。
 
 导入要求见各自的 `IMPORT.md`，统一后置编排模板见 `global-modules/world-narrative-coordinator/integration/workflows/director-post-with-narratives/workflow.json`。
 
@@ -148,7 +152,8 @@
 
 ### 转换、模块开发与卡片维护
 
-- `st-card-to-pi-rp` 在正式转换方案前先列出全局模块并等待选择；选择会改变内容承载方式的模块时，方案必须明确迁移、保留、来源适配和权限影响。
+- `st-card-to-pi-rp` 在正式转换方案前先列出全局模块并等待选择；选择会改变内容承载方式的模块时，方案必须明确迁移、保留、来源适配和权限影响。选择带 `dependencies.json` 的模块时还须披露其编排依赖与解耦代价。
+- 卡包校验器把检查分为三类：协议/格式一致性与跨引用完整性是**错误**（阻断）；对**卡的设计**的断言（前台工作流是否准备卡内资料、是否先备记忆时间线、正文 Agent 是否暴露指定调用、`card-context-library` 是否保持随发布形态）是 `design:` **警告**（不阻断，逐条记入 `conversion-report.md`）；卡可以在 `manifest.design_invariants` 里声明自己要保留哪些设计不变量，**声明即校验、违反即错误**，未声明则一律不查。因此卡改名、替换或解耦前台工作流不再被模板断言误伤，而沿用随发布模板的卡仍能恢复原有的防护力。
 - `design-pi-rp-data` 负责统一数据所有权、结构、检索、变更、事务和工作流访问设计。
 - `create-pi-rp-feature-module` 只在明确目标和方案确认后创建 card-local 或明确要求的 project-global 模块。
 - `audit-and-upgrade-pi-rp-card` 仅在用户明确调用时检查既有卡，并在所有讨论结束、整体方案再次确认后实施。
@@ -172,6 +177,16 @@
 详细取舍、兼容边界和验证记录保留在 [PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md](PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md)。该文件没有未经用户确认的候选项。
 
 ## 验证快照
+
+2026-09-16 完成**批次 3** 修复（FIX-006b / FIX-007）：
+
+- 真实资产自校验扩到 **35 项断言**：新增 13 项设计约定/不变量用例（未声明只警告、声明后成错误、随发布资产零额外警告、四类声明自洽负例）与 2 项依赖侧车一致性用例。
+- 校验器单元测试 `14/14` 通过（本轮新增 1 个不变量形状用例，并把导演模块断言改为 warning）。**该套件在本沙箱默认跑不动**——沙箱拒绝在被接管的临时目录内部建目录——因此新增了 `local-development-records/run-validator-unit-tests.py`，把 `TemporaryDirectory` 换成工作区实现后执行原用例，见「已知边界」第 5 条。
+- 运行时库测试 `193/194`（唯一失败为自带管道子进程的用例，属沙箱限制）；模块与组合测试 `50/50`（含导演定向 `18/18`）；Web 测试 `6/6`；`node --check public/app.js`、`sync_story_mechanics.mjs --check`、`git diff --check` 通过。
+- 校验器的三分读法（error / `design:` warning / 声明的不变量）在回归里各有正负例；`validate-module.py` 现在也会打印模块自身的警告。
+- **未执行**：`check_release_manifest.mjs`（沙箱禁止其内部 `git check-ignore`），以及真实卡转换中的端到端验证——即"改名后的前台工作流不再被模板断言误伤"只经实现与用例覆盖，未在真实转换里跑过。
+
+逐项实施记录见被忽略的 `local-development-records/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
 
 2026-09-16 完成**批次 2** 修复（FIX-003 / 004 / 011）并随后修掉批次 1 引入的 FIX-015：
 
@@ -241,7 +256,7 @@
 2. **没有旧卡自动迁移。** 项目尚未发布，本轮直接升级根协议和模板。既有卡、安装运行时与 session 不会自动兼容或同步。
 3. **没有真实 ComfyUI 生成验证。** 连接、队列、history、图片代理与 profile 逻辑使用测试替身验证；真实工作流仍需按用户设备适配。
 4. **本机 PATH 中的 `python` 是 Windows Store 占位程序。** 应使用 `.cache/codex-runtimes/...` 下的解释器并加 `-X utf8`；其他机器应改用可用的 Python 3 路径。
-5. **受限 sandbox 下部分验证命令无法运行。** `node --test` 会因子进程管道被拒（`spawn EPERM`）而失败——须改为逐个直接运行测试文件；但**测试体自身**开子进程的用例即使直接运行也会失败：`adapt-comfyui-workflow/scripts/workflow-tools.test.mjs` 全部 2 条、`rp-team-runtime.test.mjs` 的 `Secretary side failures…` 1 条（`actual: null` 而非预期退出码）。`test_validate_card_pack.py` 的 13 个用例建在 `TemporaryDirectory` 上，沙箱禁止其收尾阶段的 `chmod`，因此整份报告为 `FAILED (errors=13)`；但**断言部分实际全部通过**（输出中 `AssertionError` 计数为 0，13 个错误的调用栈全部落在 `tempfile.py`/`shutil.py`），可在受限环境下用它作粗筛。`test_inventory_card.py` 与其他依赖 `tempfile` 的脚本则会在**建目录阶段**就失败，完全不可用。`check_release_manifest.mjs` 因内部调用 `git check-ignore` 同样受限；`pi` 离线扩展加载会因在 `~/.pi/` 建锁文件失败（`EPERM`）。扩展的语法检查可用 Pi 自带的 esbuild 直接转译代替（见「常用验证命令」，**必须直接调用平台二进制**，其 `bin` 包装脚本用管道子进程，会被沙箱拒绝）。以上都需在非受限 shell 中重跑才算完整验证。
+5. **受限 sandbox 下部分验证命令无法运行。** `node --test` 会因子进程管道被拒（`spawn EPERM`）而失败——须改为逐个直接运行测试文件；但**测试体自身**开子进程的用例即使直接运行也会失败：`adapt-comfyui-workflow/scripts/workflow-tools.test.mjs` 全部 2 条、`rp-team-runtime.test.mjs` 的 `Secretary side failures…` 1 条（`actual: null` 而非预期退出码）。沙箱还**拒绝在被接管的临时目录内部创建目录**：`tempfile.TemporaryDirectory()` 能建出顶层目录，但其下任何 `mkdir` 都是 `WinError 5`，因此 `test_validate_card_pack.py`（14 个用例）与 `test_inventory_card.py` 默认整份失败，**且失败原因与断言无关**——不要据此判断被测代码。校验器单元测试可用 `local-development-records/run-validator-unit-tests.py` 在本地跑通（把 `TemporaryDirectory` 替换为工作区实现，用例本身不动），批次 3 结果为 `14/14 OK`。`check_release_manifest.mjs` 因内部调用 `git check-ignore` 同样受限；`pi` 离线扩展加载会因在 `~/.pi/` 建锁文件失败（`EPERM`）。扩展的语法检查可用 Pi 自带的 esbuild 直接转译代替（见「常用验证命令」，**必须直接调用平台二进制**，其 `bin` 包装脚本用管道子进程，会被沙箱拒绝）。以上都需在非受限 shell 中重跑才算完整验证。
 6. **Skill 快速校验依赖 PyYAML。** 本轮依赖安装在仓库外的临时目录，没有写入项目。
 7. **不要用 PowerShell 文本管道处理本仓库的 UTF-8 文件。** 本机的 Windows PowerShell 会按 ANSI（CP936）读取，前导字节会吞掉后续 ASCII 字符（含换行），造成**不可逆**损毁——本轮已因此重建过一份清单文档。文件读写一律走文件工具。
 
@@ -279,7 +294,10 @@ node .agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs   # 受�
 
 & $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_skill_contract.py
 & $pythonExe -X utf8 global-modules/narrative-memory/scripts/validate-module.py
-# test_validate_card_pack.py / test_inventory_card.py 在受限环境下无法收尾或无法建目录，见已知边界 5
+# 校验器单元测试：受限环境用本地 runner（把 TemporaryDirectory 换成工作区实现），非受限环境直接跑原文件
+& $pythonExe -X utf8 local-development-records/run-validator-unit-tests.py
+& $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_validate_card_pack.py
+# test_inventory_card.py 在受限环境下无法建临时目录，见已知边界 5
 
 node --check .agents/skills/st-card-to-pi-rp/assets/pi-rp-web/public/app.js
 # 扩展语法（受限环境下 pi --offline 不可用，改用 Pi 自带 esbuild 直接转译）
@@ -290,12 +308,11 @@ git diff --check
 
 ## 当前待办
 
-**已实施**：批次 1 全部；批次 2 的 FIX-003 / 004 / 011；FIX-015（批次 1 引入的校验器回归）。
+**已实施**：批次 1 全部；批次 2 的 FIX-003 / 004 / 011；批次 3 的 FIX-006b / 007；FIX-015（批次 1 引入的校验器回归）。
 
 **待实施**（顺序见缺陷清单的「实施顺序约束」）：
 
-- **批次 3**：FIX-006b + FIX-007（校验职责重划分）。**前置条件已满足**：软化校验把"事前拦截"换成"事中可恢复"，而批次 2 已把运行期的确定性失败做成"明确报错 + 可释放 + 带出口"。
-- **批次 4**：FIX-008（失败批次被当作幂等重放）+ FIX-009 + FIX-010。FIX-004 的一条已知不精确（派发后的数据提交失败仍归入模型失败）按定稿留给 FIX-008 处理，两处不要并行改。
+- **批次 4**（最后一批代码修复）：FIX-008（失败批次被当作幂等重放）+ FIX-009 + FIX-010。FIX-004 的一条已知不精确（派发后的数据提交失败仍归入模型失败）按定稿留给 FIX-008 处理，两处不要并行改。
 - **提示词清单**：A 组 7 条措辞改动 + C 组 1 条正向授权，全部已定稿可实施；其中 P-005 与刚搬迁的 `prepare-recent-narrative-stories.mjs` 同文件。
 - 两份清单各自的「后续待定稿」与「待取证」条目；其中来自并行代理而未经逐行复核的，升级前必须先复核。
 
