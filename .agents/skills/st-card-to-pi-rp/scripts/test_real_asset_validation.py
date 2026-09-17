@@ -3,10 +3,12 @@
 Builds a complete fixture card from the assets this repository actually ships —
 every project-global module, every runtime top-level workflow, and the coordinator's
 integration templates — then runs the card validator over it and exercises the
-positive/negative cases of the protocol-drift fixes.
+positive/negative cases of the protocol-drift fixes. A second fixture lays the same
+packages out as standalone roots, covering validation of the project-global sources
+themselves, where no card manifest exists.
 
 Deliberately avoids `tempfile`: some sandboxes deny the `chmod` that Python's
-TemporaryDirectory performs. The fixture is built in a git-ignored directory at the
+TemporaryDirectory performs. Both fixtures are built in git-ignored directories at the
 repository root instead.
 
 Usage:
@@ -38,6 +40,7 @@ import validate_card_pack as V  # noqa: E402
 
 ASSETS = ROOT / ".agents" / "skills" / "st-card-to-pi-rp" / "assets"
 FIXTURE = ROOT / ".tmp-card-validation"
+SOURCE_FIXTURE = ROOT / ".tmp-module-source-validation"
 MODULE_IDS = ["card-context-library", "narrative-memory", "local-scene-narrative",
               "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation"]
 INTEGRATION = ROOT / "global-modules" / "world-narrative-coordinator" / "integration" / "workflows"
@@ -150,6 +153,23 @@ def install_integration(replace: bool) -> None:
             path.write_text(text, encoding="utf-8")
 
 
+def build_source_fixture() -> list[str]:
+    """Lay every shipped package out under its own directory, as `global-modules/` does."""
+    if SOURCE_FIXTURE.exists():
+        shutil.rmtree(SOURCE_FIXTURE)
+    paths: list[str] = []
+    for module_id in MODULE_IDS:
+        shutil.copytree(module_source(module_id), SOURCE_FIXTURE / module_id)
+        paths.append(f"{SOURCE_FIXTURE.name}/{module_id}/module.json")
+    return paths
+
+
+def source_errors(paths: list[str]) -> list[str]:
+    errors: list[str] = []
+    V.validate_feature_modules(ROOT, paths, errors)
+    return errors
+
+
 def count_advanced_bindings() -> int:
     total = 0
     for path in sorted((FIXTURE / "workflows").glob("*/workflow.json")):
@@ -247,6 +267,41 @@ else:
     shutil.move(str(stash), str(installed))
     report("positive: an installed card script reports no entryFile error",
            [e for e in run_cli(FIXTURE) if "metadata.entryFile" in e])
+
+module_entry = FIXTURE / "features" / "narrative-memory" / "runtime" / "workflow" / "prepare-archive.mjs"
+module_stash = FIXTURE / ".stash-module-entry.mjs"
+shutil.move(str(module_entry), str(module_stash))
+report("negative: a missing installed module script must fail inside the card",
+       [e for e in run_cli(FIXTURE) if "metadata.entryFile" in e], expect_empty=False)
+shutil.move(str(module_stash), str(module_entry))
+report("positive: a restored module script reports no entryFile error",
+       [e for e in run_cli(FIXTURE) if "metadata.entryFile" in e])
+
+print()
+print("== shipped packages must validate from their own source tree ==")
+source_paths = build_source_fixture()
+report("every shipped package validates without a card manifest", source_errors(source_paths))
+
+target_workflow = SOURCE_FIXTURE / "narrative-memory" / "workflows" / "narrative-memory-archive" / "workflow.json"
+target_original = target_workflow.read_text(encoding="utf-8")
+target_workflow.write_text(target_original.replace('"narrative-memory/narrative-memory-reference-snapshot"',
+                                                  '"narrative-memory/narrative-memory-reference-snapshott"'),
+                           encoding="utf-8")
+report("negative: an undeclared qualified target must fail from the source tree",
+       [e for e in source_errors(source_paths) if "must reference a declared module workflow" in e],
+       expect_empty=False)
+target_workflow.write_text(target_original, encoding="utf-8")
+
+source_entry = SOURCE_FIXTURE / "narrative-memory" / "workflows" / "narrative-memory-range-repair" / "workflow.json"
+source_entry_original = source_entry.read_text(encoding="utf-8")
+source_entry.write_text(source_entry_original.replace("features/narrative-memory/runtime/workflow/prepare-range-repair.mjs",
+                                                      "features/narrative-memory/runtime/workflow/prepare-range-repair-missing.mjs"),
+                        encoding="utf-8")
+report("negative: a module entry file missing from its own package must fail",
+       [e for e in source_errors(source_paths) if "metadata.entryFile" in e], expect_empty=False)
+source_entry.write_text(source_entry_original, encoding="utf-8")
+report("positive: restored package sources report no entryFile error",
+       [e for e in source_errors(source_paths) if "metadata.entryFile" in e])
 
 print()
 print("== frontend region types and call bindings ==")

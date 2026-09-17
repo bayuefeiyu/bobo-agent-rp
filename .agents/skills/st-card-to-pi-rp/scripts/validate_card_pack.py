@@ -529,8 +529,9 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
     module_fields = {"schemaVersion", "id", "moduleKind", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "resourceCatalogFile", "frontendViewFile", "skillFile", "workflowFiles"}
     index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
     index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
-    all_module_workflows = module_workflow_map(root)
-    all_resource_catalogs = module_resource_catalog_map(root)
+    surface_paths = module_surface_paths(root, values)
+    all_module_workflows = module_workflow_map(root, surface_paths)
+    all_resource_catalogs = module_resource_catalog_map(root, surface_paths)
     allowed_node_types = {"agent", "team", "code", "call", "gate", "join", "workflow-return", "turn-finalize"}
     for index, path_value in enumerate(values):
         label = f"feature_modules[{index}]"
@@ -663,7 +664,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
                             node_type = node.get("type", "agent")
                             if node_type not in allowed_node_types:
                                 errors.append(f"{owned_node_label}.type is invalid")
-                            validate_code_node_entry(root, node, owned_node_label, node_type, errors)
+                            validate_code_node_entry(root, node, owned_node_label, node_type, errors,
+                                                     module_source=(module_root, module_id))
                             required_calls: set[str] = set()
                             if node_type == "team":
                                 team = node.get("team")
@@ -879,14 +881,20 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str]) -> None
             validate_frontend_view_v2(view, contract, f"{label}.frontendViewFile", errors)
 
 
-def module_contract_map(root: Path) -> dict[str, dict[str, Any]]:
+def manifest_module_paths(root: Path) -> list[str]:
+    """Card-relative `feature_modules` paths, or an empty list outside a card."""
     manifest_path = root / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
-        return {}
+        return []
+    values = manifest.get("feature_modules") if isinstance(manifest, dict) else None
+    return [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
+
+
+def module_contract_map(root: Path, module_paths: list[str] | None = None) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) else []:
+    for module_path in manifest_module_paths(root) if module_paths is None else module_paths:
         if not safe_relative_path(module_path):
             continue
         module = load_json(root / module_path, [])
@@ -898,14 +906,9 @@ def module_contract_map(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def module_workflow_map(root: Path) -> dict[str, dict[str, Any]]:
-    manifest_path = root / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+def module_workflow_map(root: Path, module_paths: list[str] | None = None) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) else []:
+    for module_path in manifest_module_paths(root) if module_paths is None else module_paths:
         if not safe_relative_path(module_path):
             continue
         module = load_json(root / module_path, [])
@@ -921,10 +924,9 @@ def module_workflow_map(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def module_resource_catalog_map(root: Path) -> dict[str, dict[str, Any]]:
-    manifest = load_json(root / "manifest.json", [])
+def module_resource_catalog_map(root: Path, module_paths: list[str] | None = None) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    for module_path in manifest.get("feature_modules", []) if isinstance(manifest, dict) and isinstance(manifest.get("feature_modules"), list) else []:
+    for module_path in manifest_module_paths(root) if module_paths is None else module_paths:
         if not safe_relative_path(module_path):
             continue
         module = load_json(root / module_path, [])
@@ -934,6 +936,20 @@ def module_resource_catalog_map(root: Path) -> dict[str, dict[str, Any]]:
         if isinstance(catalog, dict):
             result[module["id"]] = catalog
     return result
+
+
+def module_surface_paths(root: Path, values: Any) -> list[str]:
+    """The module paths whose workflows and catalogs may be referenced while validating.
+
+    Inside a card this is the manifest's `feature_modules`. Validating one or more project-global
+    packages has no manifest, so the validated modules themselves form the surface; without that,
+    a package could not even reference its own qualified workflows.
+    """
+    paths = manifest_module_paths(root)
+    for value in values if isinstance(values, list) else []:
+        if isinstance(value, str) and value not in paths:
+            paths.append(value)
+    return paths
 
 
 def workflow_kinds(root: Path) -> dict[str, str]:
@@ -949,12 +965,18 @@ def workflow_kinds(root: Path) -> dict[str, str]:
     return result
 
 
-def validate_code_node_entry(root: Path, node: dict[str, Any], node_label: str, node_type: str, errors: list[str]) -> None:
+def validate_code_node_entry(root: Path, node: dict[str, Any], node_label: str, node_type: str, errors: list[str],
+                             module_source: tuple[Path, str] | None = None) -> None:
     """Validate a code node's `metadata.entryFile`.
 
     The runtime resolves this path below the card directory, so it must be a safe card-relative
     path pointing at a file the converter actually installs. A runtime-relative path (for example
     `.pi/workflow/...`) is syntactically fine but never resolvable from inside a card.
+
+    `module_source` is `(package_root, module_id)` while validating a workflow from the
+    project-global package itself. A card installs that package at `features/<module-id>/`, so the
+    identical `entryFile` lives below `package_root` once that install prefix is stripped. Without
+    it, source-tree validation would report every module code node as a missing card file.
     """
     if node_type != "code":
         return
@@ -964,7 +986,20 @@ def validate_code_node_entry(root: Path, node: dict[str, Any], node_label: str, 
     entry_file = metadata.get("entryFile")
     if entry_file is None:
         return
-    require_file(root, entry_file, f"{node_label}.metadata.entryFile", errors)
+    label = f"{node_label}.metadata.entryFile"
+    if not safe_relative_path(entry_file):
+        errors.append(f"{label} is not a safe relative POSIX path: {entry_file!r}")
+        return
+    if (root / entry_file).is_file():
+        return
+    if module_source is not None:
+        package_root, module_id = module_source
+        prefix = f"features/{module_id}/"
+        if entry_file.startswith(prefix):
+            installed = entry_file[len(prefix):]
+            if safe_relative_path(installed) and (package_root / installed).is_file():
+                return
+    errors.append(f"{label} does not exist: {entry_file}")
 
 
 def validate_module_call_surface(
