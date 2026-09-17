@@ -4,6 +4,7 @@ import {
   completeWorkflowNode,
   createWorkflowRun,
   failWorkflowNode,
+  markWorkflowNodeModelDispatched,
   maybeFinalizeWorkflow,
   normalizeWorkflowCallRequest,
   normalizeWorkflowDefinition,
@@ -26,13 +27,15 @@ import { adaptAssistanceTaskInput } from "./rp-assistance-tasks.mjs";
 const TERMINAL_RUN_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 const TERMINAL_NODE_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 
-// Only these node types involve a model call at all. A failure on any other node type is
-// decided by code, so treating it as a model failure would offer the user a pointless model swap.
+// A model failure requires both halves of this criterion: a node type that can call a model at
+// all, and an attempt that really dispatched one. Everything else — a code node, an agent whose
+// context assembly failed, a card script that would not load — was decided by the runtime before
+// any model ran, so offering another model as the remedy would be a dead end.
 const MODEL_INVOKING_NODE_TYPES = new Set(["agent", "team"]);
 
-// Failures the runtime decides before any model call, for node types that *do* invoke a model:
-// a wrong call target, an illegal call graph, or a team configuration the runtime rejects.
-// Codes are attached at the throw sites rather than inferred from message text.
+// Failures the runtime decides even on a node that is already talking to a model: a wrong call
+// target, an illegal call graph, or a team configuration the runtime rejects. Codes are attached
+// at the throw sites rather than inferred from message text.
 const DETERMINISTIC_FAILURE_CODES = new Set([
   "workflow_child_failed",
   "team_configuration_invalid",
@@ -420,7 +423,8 @@ export class RpWorkflowEngine {
       await this.#changed(entry);
       try {
         if (isTeam) await this.#preflightTeam(entry, node);
-        let result = await this.executor({ workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
+        const task = { workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, node.id), isCancelled: () => entry.stopped || entry.run.status === "cancelled" };
+        let result = await this.executor(task);
         if (entry.stopped || entry.run.status === "cancelled") return;
         result = await this.beforeNodeComplete({ workflow: entry.workflow, run: entry.run, node, agent, binding, result: result || {} }) || result || {};
         if (entry.stopped || entry.run.status === "cancelled") return;
@@ -467,7 +471,10 @@ export class RpWorkflowEngine {
           await this.#reconcileWaitingChildren(entry, node.id);
           return;
         }
-        const deterministic = !MODEL_INVOKING_NODE_TYPES.has(node.type) || DETERMINISTIC_FAILURE_CODES.has(error?.code);
+        // A member that already reached a model can fail for model reasons; one that never got
+        // there was stopped by the runtime, and that verdict is recorded on the team node.
+        const modelDispatched = MODEL_INVOKING_NODE_TYPES.has(node.type) && nodeState.attempts?.at(-1)?.modelDispatched === true;
+        const deterministic = !modelDispatched || DETERMINISTIC_FAILURE_CODES.has(error?.code);
         const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic ? { retryable: false, awaitModelChoice: false, deterministic: true, output: error.output || null } : {});
         if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
         if (state.status === "awaiting-retry") prepareWorkflowNodeRetry(entry.run, node.id);
@@ -566,7 +573,7 @@ export class RpWorkflowEngine {
     const schedulingKind = entry.run.effectiveSchedulingKind || entry.workflow.kind;
     await this.#acquire(schedulingKind, binding.modelId, model, entry);
     try {
-      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: async () => { throw new Error("Team members cannot call workflows directly; ask an advertised assistant in natural language."); }, invokeAgent: null, teamMember: request, dataReadBatchIds: entry.run.nodes[parentNode.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [], isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
+      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: async () => { throw new Error("Team members cannot call workflows directly; ask an advertised assistant in natural language."); }, invokeAgent: null, teamMember: request, dataReadBatchIds: entry.run.nodes[parentNode.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [], markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, parentNode.id), isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
       if (entry.stopped || entry.run.status === "cancelled") throw Object.assign(new Error("The team workflow was cancelled before this member result could be published."), { code: "workflow_cancelled" });
       return result;
     } finally {

@@ -1751,6 +1751,8 @@ export default function (pi: ExtensionAPI) {
     const teamSessionCheckpoint = teamSessionDirectory ? checkpointTeamSessionAttempt(sessionManager) : null;
     try {
       const userPrompt = prompt.contextMessages.join("\n\n") || "Execute this workflow node and return its result.";
+      // From here on a failure may be the model's, so the runtime must stop calling it deterministic.
+      task.markModelDispatched?.();
       await session.prompt(userPrompt, { expandPromptTemplates: false, source: "extension" });
       if (teamSessionPointer) {
         const persistedSession = session.sessionFile || session.sessionManager?.getSessionFile?.() || null;

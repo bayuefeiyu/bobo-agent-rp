@@ -103,6 +103,8 @@ The workflow author must declare which modes apply, their ordering, triggers, ex
 
 The engine reports every unfinished node of a blocking run. Completion, explicit skip, failure resolution, or cancellation releases the run. Persisted interrupted nodes recover as `awaiting-model-choice` so the creator can retry, replace the model, skip, or cancel explicitly. A parent whose child workflow needs user action remains `awaiting-child` and records the exact child run; retry the failed node in that child, after which the engine resumes the original parent chain without releasing its locks. A code node that has already caused, or may have caused, an external side effect reports `recovery-required`; the node and run then remain `awaiting-recovery`. Recovery continues the same run and external identity. A deterministic failure remains failed and propagates through a calling parent instead of being wrapped as success.
 
+A failure counts as a model failure only when that attempt actually dispatched a model call. Everything the runtime decides before that point — a node type that never calls a model, an unresolvable call target, a rejected team configuration, a card script that will not load — stays deterministic: it fails the node immediately and the panel reports the cause instead of offering a model swap.
+
 `after-opening` is also a valid top-level trigger. It fires only after the selected opening has been persisted and displayed. Use a blocking `turn-background` binding when opening-derived authority must settle before the first player input.
 
 ## Data access, outputs, and records

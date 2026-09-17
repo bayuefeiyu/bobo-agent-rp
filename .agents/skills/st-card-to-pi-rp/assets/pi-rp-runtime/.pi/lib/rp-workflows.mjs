@@ -789,9 +789,17 @@ export function startWorkflowNode(definition, run, nodeId, attempt, now = new Da
     completedAt: null,
     error: null,
     usage: null,
+    // Every attempt starts before any model call. The host flips this the moment it really
+    // dispatches one, which is what separates a model failure from a runtime decision.
+    modelDispatched: false,
   });
   run.updatedAt = now;
   return state.attempts.at(-1);
+}
+
+export function markWorkflowNodeModelDispatched(run, nodeId) {
+  const attempt = run.nodes?.[nodeId]?.attempts?.at(-1);
+  if (attempt) attempt.modelDispatched = true;
 }
 
 export function completeWorkflowNode(definition, run, nodeId, result = {}, now = new Date().toISOString()) {

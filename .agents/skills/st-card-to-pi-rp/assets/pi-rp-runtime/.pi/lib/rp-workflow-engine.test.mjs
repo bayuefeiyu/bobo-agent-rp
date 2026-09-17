@@ -15,6 +15,17 @@ const flow = {
   ],
 };
 
+/**
+ * A provider failure: the executor already dispatched the model call before it broke, which is
+ * what makes the failure the model's rather than the runtime's.
+ */
+function modelFailure(message = "offline") {
+  return async task => {
+    task.markModelDispatched?.();
+    throw new Error(message);
+  };
+}
+
 test("runs parallel roots before narrative and finalization", async () => {
   const order = [];
   const records = [];
@@ -205,6 +216,7 @@ test("team retry model override applies only to the selected failed member", asy
         return { output: {} };
       }
       seenModels.push(task.binding.modelId);
+      task.markModelDispatched?.();
       if (task.binding.modelId === "old-model") throw new Error("model failed");
       return { output: "recovered" };
     },
@@ -492,7 +504,7 @@ test("an explicitly idempotent start returns the active run for the same instanc
 });
 
 test("stops for an explicit model choice after exhausted attempts", async () => {
-  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("offline"); } });
+  const engine = new RpWorkflowEngine({ executor: modelFailure() });
   const started = await engine.start(flow, { id: "failed" });
   const failed = await engine.wait(started.id);
   assert.equal(failed.status, "awaiting-model-choice");
@@ -502,7 +514,14 @@ test("stops for an explicit model choice after exhausted attempts", async () => 
 test("allows a user-selected model retry after automatic attempts are exhausted", async () => {
   let calls = 0;
   const workflow = { schemaVersion: 3, id: "retryable", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
-  const engine = new RpWorkflowEngine({ executor: async () => { calls += 1; if (calls <= 3) throw new Error("offline"); return { output: "ok" }; } });
+  const engine = new RpWorkflowEngine({
+    executor: async task => {
+      calls += 1;
+      task.markModelDispatched?.();
+      if (calls <= 3) throw new Error("offline");
+      return { output: "ok" };
+    },
+  });
   const started = await engine.start(workflow, { id: "retry-run" });
   await engine.wait(started.id);
   await engine.retry(started.id, "task", "pi:current");
@@ -528,7 +547,8 @@ test("runs node output registration and data commits before marking the node com
 test("a failed node-end commit fails the node instead of releasing downstream work", async () => {
   const workflow = { schemaVersion: 3, id: "commit-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }, { id: "after", type: "code", dependsOn: ["task"] }] };
   const engine = new RpWorkflowEngine({
-    executor: async () => ({ output: "draft" }),
+    // The model answered; the node-end data commit is what failed afterwards.
+    executor: async task => { task.markModelDispatched?.(); return { output: "draft" }; },
     beforeNodeComplete: async () => { throw new Error("data commit failed"); },
   });
   const started = await engine.start(workflow, { id: "commit-failure-run" });
@@ -583,7 +603,7 @@ test("reports only unfinished opted-in turn-background nodes as turn blockers", 
 
 test("keeps a failed blocking workflow locked for model choice and releases it on cancellation", async () => {
   const workflow = { schemaVersion: 3, id: "blocking-failure", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "agent", retry: { maxAttempts: 1 } }] };
-  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("offline"); } });
+  const engine = new RpWorkflowEngine({ executor: modelFailure() });
   const started = await engine.start(workflow, { id: "blocking-failure-run" });
   const awaiting = await engine.wait(started.id);
   assert.equal(awaiting.status, "awaiting-model-choice");
@@ -686,6 +706,7 @@ test("a parent waits on the exact child model choice and resumes the original ca
       }
       if (task.node.id === "work") {
         models.push(task.binding.modelId);
+        task.markModelDispatched?.();
         if (task.binding.modelId === "old-model") throw new Error("provider offline");
       }
       return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
@@ -736,7 +757,10 @@ test("restored child-wait metadata reconnects the parent after a targeted child 
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
     executor: async task => {
       if (task.workflow.id === parent.id) return { output: await task.invokeWorkflow({ workflow: task.node.target, arguments: task.node.arguments, outputPaths: {} }) };
-      if (task.node.id === "work" && task.binding.modelId === "old-model") throw new Error("provider offline");
+      if (task.node.id === "work" && task.binding.modelId === "old-model") {
+        task.markModelDispatched?.();
+        throw new Error("provider offline");
+      }
       return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
     },
   });
@@ -1180,7 +1204,9 @@ test("an Agent call requires both exact node exposure and agentCallable", async 
   });
   const started = await engine.start(parent, { id: "agent-parent" });
   const completed = await engine.wait(started.id);
-  assert.equal(completed.status, "awaiting-model-choice");
+  // The call is refused before the Agent ever asks a model, so no model swap can help.
+  assert.equal(completed.status, "failed");
+  assert.equal(completed.nodes.writer.failureKind, "deterministic");
   assert.match(completed.nodes.writer.error, /not callable by Agents/);
 });
 
@@ -1195,13 +1221,48 @@ test("classifies a non-model node failure as deterministic instead of a model fa
   assert.equal(settled.nodes.task.failureKind, "deterministic");
 });
 
+test("classifies an Agent failure before any model call as deterministic", async () => {
+  // Staging inputs, resolving an Agent profile, or reading a handoff can fail before the model is
+  // asked anything. Swapping models cannot fix any of those.
+  const workflow = { schemaVersion: 3, id: "agent-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("handoff artifact is missing"); } });
+  const started = await engine.start(workflow, { id: "agent-staging-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.status, "failed");
+  assert.equal(settled.nodes.task.failureKind, "deterministic");
+});
+
 test("keeps a genuine model failure replaceable by another model", async () => {
+  // The executor reports the dispatch, so the failure is the model's and another model may help.
   const workflow = { schemaVersion: 3, id: "model-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
-  const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("provider is offline"); } });
+  const engine = new RpWorkflowEngine({ executor: async task => { task.markModelDispatched?.(); throw new Error("provider is offline"); } });
   const started = await engine.start(workflow, { id: "model-failure-run" });
   const settled = await engine.wait(started.id);
   assert.equal(settled.status, "awaiting-model-choice");
   assert.equal(settled.nodes.task.failureKind, "model");
+});
+
+test("re-arms the model dispatch flag for every retry attempt", async () => {
+  // Attempt one fails after its model call, the retry fails while staging. The retry verdict must
+  // come from its own attempt, not from the attempt that already reached a model.
+  const workflow = { schemaVersion: 3, id: "retry-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
+  let attempt = 0;
+  const engine = new RpWorkflowEngine({
+    executor: async task => {
+      attempt += 1;
+      if (attempt === 1) {
+        task.markModelDispatched?.();
+        throw new Error("provider is offline");
+      }
+      throw new Error("handoff artifact is missing");
+    },
+  });
+  const started = await engine.start(workflow, { id: "retry-staging-failure-run" });
+  const settled = await engine.wait(started.id);
+  assert.equal(settled.nodes.task.attempts.length, 2);
+  assert.equal(settled.nodes.task.status, "failed");
+  // Had the first attempt's dispatch leaked into the second, this verdict would be a model failure.
+  assert.equal(settled.nodes.task.failureKind, "deterministic");
 });
 
 test("treats a coded configuration failure on an agent node as deterministic", async () => {
