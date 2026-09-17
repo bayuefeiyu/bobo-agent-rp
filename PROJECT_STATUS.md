@@ -1,18 +1,35 @@
 # PROJECT STATUS
 
-更新时间：2026-09-16
+更新时间：2026-09-16（第二轮：全面审查与批次 1 修复后）
 
 当前分支：`main`
 
-当前 `HEAD`：`db24f38efbe4fd1e51f72efb9fd191b18b2f9cfe`（`feat: unify RP data runtime and development skills`）
-
-当前未提交的叙事记忆、ComfyUI 和公共基础设施修改均基于该提交继续开发。
+当前 `HEAD`：`4f5330c`（`fix: harden team director recovery and delivery`）。工作树另有**未提交的第二轮修改**，见下节。
 
 ## 交接结论
 
-当前已确认的正文 Agent、模块工作流调用、卡片静态资料库、叙事记忆、ComfyUI 剧情生图及其公共基础设施已有代码实现。再次验收发现的 F01—F08、团队深度导演验收发现的 F01—F14、随后修复复核发现的 R1—R9，以及第二轮复核发现的 S1—S9，均已完成修复并通过当前自动验证；过程记录统一放在被忽略的 `local-development-records/`。
+### 本轮（全面审查 + 批次 1）
 
-现阶段的单元、结构、组合及故障负例复核均通过；真实模型、真实 ComfyUI 与重新转卡的端到端验证仍未执行。不要未经用户授权修改 `play/` 或执行真实付费模型/生图测试。
+对项目做过一次全面审查（恶性问题 + 游玩期提示词两条线），共立案 14 条缺陷与 21 条提示词条目，产物是被忽略的 `local-development-records/` 下两份清单：
+
+- `PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`：缺陷清单，14 条（其中 7 条已实施）
+- `PROJECT-REVIEW-PROMPT-CHECKLIST-2026-09-16.md`：提示词清单，21 条全部定稿，**尚未实施**
+
+**已实施的 7 条（批次 1）**：FIX-001、FIX-002、FIX-005、FIX-006a、FIX-012、FIX-013、FIX-014。
+
+其中三条是本轮之前完全未知的：
+
+- **FIX-002**：两个前台工作流的代码节点入口写成运行时相对路径，而执行器只按卡片目录解析——**每张按文档转换的卡都会在第一回合失败**。
+- **FIX-014**：`director-health-report` 对 `archive-outbox` 误用写能力，导致**任何安装世界叙事统筹模块的卡都无法通过校验**。由本轮新建的「真实模板自校验」回归**首次运行**抓出。
+- **FIX-006a**：校验器只检查顶层工作流的调用目标，**模块工作流节点的错目标与悬空调用在校验期完全不可见**。
+
+**尚未实施**：缺陷清单的批次 2（FIX-003/004/011）、批次 3（FIX-006b/007）、批次 4（FIX-008/009/010）；提示词清单的 A 组 7 条 + C 组 1 条；以及两份清单各自登记的待定稿/待取证条目。
+
+### 前序轮次
+
+正文 Agent、模块工作流调用、卡片静态资料库、叙事记忆、ComfyUI 剧情生图及其公共基础设施已有代码实现。再次验收发现的 F01—F08、团队深度导演验收发现的 F01—F14、随后修复复核发现的 R1—R9，以及第二轮复核发现的 S1—S9，均已完成修复并通过自动验证。
+
+真实模型、真实 ComfyUI 与重新转卡的端到端验证**仍未执行**。不要未经用户授权修改 `play/` 或执行真实付费模型/生图测试。
 
 开始后续工作前依次阅读：
 
@@ -20,14 +37,17 @@
 2. [PI-RP-DEVELOPMENT-SCOPE.md](PI-RP-DEVELOPMENT-SCOPE.md)：根源、安装运行时、卡片与 session 的独立修改边界。
 3. [PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md](PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md)：公共能力的确认与实施台账。
 4. 对应全局模块的 `IMPORT.md` 和模块 Skill。
+5. 本轮两份清单（被忽略目录）：先读缺陷清单的「实施顺序约束」与「后续待定稿」，再读提示词清单的「判定纪律」。
 
 ## 工作区边界
 
 - 本阶段只修改仓库根目录的 Skill、规范、全局模块源、运行时/Web 模板、测试和文档。
 - `play/` 被 Git 忽略，本阶段没有读取、修改或同步其中的卡、共享运行时、设置与 session。根目录修改不会自动传播到那里。
-- 根目录 `.pi/APPEND_SYSTEM.md` 是已经被 Git 跟踪的空文件，用于提供确定的开发项目提示入口。
+- 根目录 `.pi/APPEND_SYSTEM.md` 已被 Git 跟踪，内容是用户自行添加并明确要求保留的开发会话追加提示入口。它属于用户所有，不是空占位文件；任何开发、清理、模板同步或发布整理都不得清空、覆盖或改写它。
+  - **注意区分**：`assets/pi-rp-runtime/.pi/APPEND_SYSTEM.md` 是另一份文件（游玩运行时的 RP 协议提示），与本条所指的根目录文件无关。该运行时文件的内容已被决定**全部舍弃**，见「当前待办」。
 - 全局模块复制进卡后即成为卡所有的副本；以后更新根源不会自动升级该卡。
 - 用户如要求修改既有卡、安装运行时或 session，必须把该层作为单独目标明确授权。
+- 本轮新增 `assets/card-runtime/`（内容按相对路径复制到卡根）与 `local-development-records/` 下的两份清单及回归脚本；后者位于被忽略目录，不随发布提交。
 
 ## 当前实现
 
@@ -143,6 +163,16 @@
 
 ## 验证快照
 
+2026-09-16 完成全面审查后的**批次 1** 修复（FIX-001 / 002 / 005 / 006a / 012 / 013 / 014）：
+
+- 新建「真实模板自校验」回归 `scripts/test_real_asset_validation.py`：用真实资产拼装一张完整夹具卡（6 个模块 + 7 个运行时顶层工作流 + 3 个集成模板），在进程内调用校验器 CLI，覆盖各条目的正负例。**15 项断言全部通过。**该脚本**随项目发布**，夹具建在仓库根的被忽略目录 `.tmp-card-validation/`（不使用 `tempfile`，见「已知边界」第 5 条）。
+- 该回归**首次运行即抓出 FIX-014**——此前无人发现，因为校验器从未与随项目发布的资产一起跑过。
+- 模块测试 `6/6`；运行时库测试 `25/26`（唯一失败为 `rp-team-runtime.test.mjs`，其用例自身使用带管道的子进程，属本沙箱限制，与被测代码无关）。
+- 三个改动文件（`.ts` / `.mjs` / `.py`）语法检查通过；`.pi/workflow` 旧路径零残留引用。
+- 本轮同时发现并修复了两处**只有把校验器与真实资产一起跑才会暴露**的缺陷：FIX-005（绑定字段白名单与前端区域类型落后于协议）与 FIX-014（`director-health-report` 误用写能力）。
+
+逐项实施记录见被忽略的 `local-development-records/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
+
 2026-09-16 完成团队深度导演第二轮复核 S1—S9 的逐项修复与用户确认：
 
 - 公共运行时库测试：`188/188` 通过；根目录模块与组合测试：`50/50` 通过，其中世界叙事统筹模块定向测试为 `18/18`。
@@ -186,11 +216,13 @@
 
 ## 已知边界
 
-1. **没有端到端样板卡验证。** 当前只能确认单元、结构、权限和模板链路；首次重新转卡时应把实际导入、节点上下文、模型输出、事务和 Web 操作作为集成验收。
+1. **仍没有端到端样板卡验证，但已有真实资产自校验。** 校验器现在会用随项目发布的真实模块与工作流拼装夹具卡跑通（不过**不安装运行时、不调用模型、不执行工作流**）。首次重新转卡时仍应把实际导入、节点上下文、模型输出、事务和 Web 操作作为集成验收。
 2. **没有旧卡自动迁移。** 项目尚未发布，本轮直接升级根协议和模板。既有卡、安装运行时与 session 不会自动兼容或同步。
 3. **没有真实 ComfyUI 生成验证。** 连接、队列、history、图片代理与 profile 逻辑使用测试替身验证；真实工作流仍需按用户设备适配。
-4. **本机 PATH 中的 `python` 是 Windows Store 占位程序。** 本轮 Python 测试使用 Codex 随附解释器并加 `-X utf8`；其他机器应改用可用的 Python 3 路径。
-5. **Skill 快速校验依赖 PyYAML。** 本轮依赖安装在仓库外的临时目录，没有写入项目。
+4. **本机 PATH 中的 `python` 是 Windows Store 占位程序。** 应使用 `.cache/codex-runtimes/...` 下的解释器并加 `-X utf8`；其他机器应改用可用的 Python 3 路径。
+5. **受限 sandbox 下部分验证命令无法运行。** `node --test` 会因子进程管道被拒（`spawn EPERM`）而失败——须改为逐个直接运行测试文件；`test_validate_card_pack.py` 的 13 个用例依赖 `TemporaryDirectory`，而沙箱禁止 `chmod`，在该环境下**完全无法运行**（新增的真实资产自校验不使用 `tempfile`，是当前唯一可执行的校验器端到端验证）。`check_release_manifest.mjs` 因内部调用 `git check-ignore` 同样受限。这些命令需在非受限 shell 中执行。
+6. **Skill 快速校验依赖 PyYAML。** 本轮依赖安装在仓库外的临时目录，没有写入项目。
+7. **不要用 PowerShell 文本管道处理本仓库的 UTF-8 文件。** 本机的 Windows PowerShell 会按 ANSI（CP936）读取，前导字节会吞掉后续 ASCII 字符（含换行），造成**不可逆**损毁——本轮已因此重建过一份清单文档。文件读写一律走文件工具。
 
 ## 接手规则
 
@@ -203,11 +235,16 @@
 ## 常用验证命令
 
 ```powershell
-$runtimeTests = Get-ChildItem .agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
-node --test $runtimeTests
+# 真实模板自校验（本轮新增；用真实资产拼夹具卡跑校验器，覆盖各条目的正负例）
+$pythonExe = 'C:\Users\bayue\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+& $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_real_asset_validation.py
 
-$memoryTests = Get-ChildItem global-modules/narrative-memory/runtime/test -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
-node --test $memoryTests
+# 受限 sandbox 下 node --test 会因 spawn EPERM 失败，改为逐个直接运行测试文件
+$runtimeTests = Get-ChildItem .agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
+foreach ($file in $runtimeTests) { node $file }
+
+$moduleTests = Get-ChildItem global-modules -Recurse -File -Include '*.test.mjs' | Select-Object -ExpandProperty FullName
+foreach ($file in $moduleTests) { node $file }
 
 node --test .agents/skills/adapt-comfyui-workflow/scripts/workflow-tools.test.mjs
 npm test --prefix .agents/skills/st-card-to-pi-rp/assets/pi-rp-web
@@ -215,7 +252,6 @@ npm test --prefix .agents/skills/st-card-to-pi-rp/assets/pi-rp-web
 node .agents/skills/create-pi-rp-feature-module/scripts/sync_story_mechanics.mjs --check
 node .agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs
 
-$pythonExe = 'C:\Users\bayue\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 & $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_validate_card_pack.py
 & $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_skill_contract.py
 & $pythonExe -X utf8 .agents/skills/audit-and-upgrade-pi-rp-card/scripts/test_inventory_card.py
@@ -228,4 +264,15 @@ git diff --check
 
 ## 当前待办
 
-两轮验收中的 F01—F08、团队深度导演 F01—F14、修复复核 R1—R9，以及第二轮复核 S1—S9 均已完成实施、自动复核和逐项确认。之后仍需在用户设备上另行进行重新转卡、真实模型与真实 ComfyUI 的端到端验收；这些验证涉及 `play/` 与外部服务，不属于本轮已授权的根目录修复范围。
+**已实施**：批次 1 的 FIX-001 / 002 / 005 / 006a / 012 / 013 / 014。
+
+**待实施**（顺序见缺陷清单的「实施顺序约束」）：
+
+- **批次 2**：FIX-003（前台终态失败未释放回合占用）+ FIX-004（文件/配置类错误被误判为模型失败）+ FIX-011（`#changed` 未隔离 `onChange` 异常）。这三条共同决定"运行期失败是否诚实且可恢复"。
+- **批次 3**：FIX-006b + FIX-007（校验职责重划分）。**必须在批次 2 之后**：软化校验把"事前拦截"换成"事中可恢复"，而后者目前还不存在。
+- **批次 4**：FIX-008（失败批次被当作幂等重放）+ FIX-009 + FIX-010。
+- **提示词清单**：A 组 7 条措辞改动 + C 组 1 条正向授权，全部已定稿可实施；其中 P-005 与刚搬迁的 `prepare-recent-narrative-stories.mjs` 同文件。
+- 两份清单各自的「后续待定稿」与「待取证」条目；其中来自并行代理而未经逐行复核的，升级前必须先复核。
+
+**尚未开始**：`.pi/APPEND_SYSTEM.md` 的内容已决定**全部舍弃**（该文件要么移除，要么只保留所有 Agent 都需要的总体概述），相关改动不在本轮范围内。
+

@@ -8,6 +8,6 @@
 4. 前置调用返回后，再调用 `world-narrative-coordinator/materialize-guidance`，参数至少包含 `publicationId=publication-narrative` 与 `channel=narrative`，将返回文档作为当前轮创作依据。
 5. 正文完成后，由顶层 `director-post-turn` 工作流接手后置复盘；正文 Agent 不替后置导演做常规复盘。
 
-若启用近场或广域叙事，正文前还应运行公共 `prepare-recent-narrative-stories` 节点。它读取正文工作流的 `turnContext.recentCompleteTurns`（默认5），为两个模块导出摘要式目录及按需全文；不是只提供上一轮。正文写作节点发布时必须生成 `document-workspace-snapshot`，供后置导演和候选创作共享本轮实际获准资料与最终正文。下一轮前置导演必须明确检查刚发布的模块故事与新玩家输入是否相交。
+若启用近场或广域叙事，正文前还应运行 `prepare-recent-narrative-stories` 节点。它是**随卡安装**的支持脚本（模板资产 `assets/card-runtime/runtime/workflow/`、卡内 `runtime/workflow/`），由正文工作流以卡内相对 `metadata.entryFile` 引用；未安装该脚本时转卡校验会直接报错。它读取正文工作流的 `turnContext.recentCompleteTurns`（默认5），为两个模块导出摘要式目录及按需全文；不是只提供上一轮。正文写作节点发布时必须生成 `document-workspace-snapshot`，供后置导演和候选创作共享本轮实际获准资料与最终正文。下一轮前置导演必须明确检查刚发布的模块故事与新玩家输入是否相交。
 
 正文节点的 `workflowCalls` 只能显式列出上述目标。模型仍由顶层工作流绑定，模块不得写死特定供应商或强弱档位。

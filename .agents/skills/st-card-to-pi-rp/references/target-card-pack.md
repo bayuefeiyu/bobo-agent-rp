@@ -26,7 +26,8 @@ play/cards/<card-id>/
 │   ├── retrieval-policy.json
 │   └── skill/SKILL.md          # required only for Agent-enabled message retrieval
 ├── runtime/
-│   └── context-processors/
+│   ├── context-processors/
+│   └── workflow/               # card-owned support scripts for top-level code nodes
 ├── agents/
 │   └── <agent-id>/override.json
 ├── workflows/

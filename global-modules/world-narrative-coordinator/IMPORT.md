@@ -19,7 +19,14 @@
 4. 开场初始化：`turn-background`，`trigger.type=after-opening` 且阻塞首次输入，复用后置导演 Agent 并传入 `phase=opening`。另生成一个在初始化完成后检查深度启动建议的非阻塞包装工作流；是否建议启动由开场初始化结合 `settings.opening.deepMode` 决定。
 5. 统计、手动维护和手动完整性修复：复制并注册 `director-health-check`、`director-manual-maintenance` 与完整性修复包装。统计更新 `health-dashboard` 前端快照但不维护数据；维护和修复仍只由用户手动启动。
 
-导入时还必须把 `director-archive-source-capture` 的 `DIRECTOR_POST_WORKFLOW_ID` 替换为本卡实际采用的后置导演工作流ID；不要同时启用精简版和近场/广域统筹版后置流程。
+导入时还必须替换集成模板中的**两个占位符**。未替换时对应的 `after-workflow` 触发器永远不匹配——副本里的工作流会静默地永不运行，而校验器会直接拒绝该引用：
+
+| 占位符 | 位置 | 替换为 |
+| --- | --- | --- |
+| `DIRECTOR_ENABLED_FOREGROUND_ID` | `director-post-turn`、`director-post-with-narratives` 的 `trigger.workflowId` | 本卡实际启用的**前台正文工作流 ID** |
+| `DIRECTOR_POST_WORKFLOW_ID` | `director-archive-source-capture` 的 `trigger.workflowId` | 本卡实际采用的后置导演工作流 ID（`director-post-turn` 或 `director-post-with-narratives`） |
+
+不要同时启用精简版和近场/广域统筹版后置流程。
 
 前置与后置不会同时执行，可以锁定同一 `private-state`。旧版单 Agent 深度导演仍在运行期间锁定 `deep-workbench`；团队版只在 begin、commit、finish 三个短事务中锁相应目录，长时间讨论不占写入通道，并可与日常导演并行。旧模块未声明 `writeLocks` 时，模块内部写工作流默认锁整个模块，保持原有排他行为。
 
