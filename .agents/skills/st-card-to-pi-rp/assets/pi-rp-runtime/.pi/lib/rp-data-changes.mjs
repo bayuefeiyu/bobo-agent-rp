@@ -247,9 +247,15 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
   }
   const batchHash = createHash("sha256").update(JSON.stringify(batch)).digest("hex");
   const existing = await readDataReceipt(store.sessionDirectory, batch.batchId);
-  if (existing) {
+  // Only a receipt that recorded an outcome is replayable. A `failed` receipt means no operation
+  // was accepted, so the very same batch must be allowed to run again — otherwise a deterministic
+  // failure returns its own stale receipt forever and neither a node retry nor a model change can
+  // escape it. Re-running is safe because `failed` implies nothing landed; the one boundary, a
+  // failure raised while committing, is guarded by per-operation idempotency and expectedRevision
+  // and surfaces as a conflict instead of a silent double write.
+  if (existing && existing.status !== "failed") {
     if (existing.batchHash === batchHash) return { ...existing, idempotentReplay: true };
-    if (existing.status !== "failed") return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
+    return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
   }
   let states = new Map();
   const results = [];

@@ -80,9 +80,10 @@ Simulate the default and one alternate opening, ordinary narration, on-demand lo
 - denied view/capability and a conservative-budget boundary;
 - create/update/revise/archive/restore as declared;
 - explicit submit and node-end fallback without duplicate commit;
-- atomic/grouped behavior, idempotent replay, revision conflict, and failure receipt;
+- atomic/grouped behavior, idempotent replay of an outcome (`committed`/`partial`), revision conflict, and failure receipt — remember a `failed` receipt re-executes rather than replaying itself;
 - frontend rendering based on customized code, background invisibility, and display ordering;
-- message-suffix pruning for bound data;
+- message-suffix pruning for bound data, including a hybrid collection whose seeded initial record was deleted;
+- derived-index damage: an unreadable index rebuilds with a warning while a damaged authoritative file still fails;
 - initial data and opening-specific initialization where authored.
 
 For context processors, test each branch boundary, declared input isolation, known-fragment enforcement, and failure policy. Judge preservation of facts, voice, motivation, knowledge, and output separation rather than exact generated wording.

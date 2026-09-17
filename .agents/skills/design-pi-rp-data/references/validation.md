@@ -29,12 +29,13 @@ Test representative cases for:
 - denied collection, capability, view, and excessive budget;
 - create and every declared existing-record action;
 - missing/stale `expectedRevision`;
-- idempotent replay and conflicting ID reuse;
+- idempotent replay and conflicting ID reuse, including that a `failed` receipt re-executes rather than replaying its own failure;
 - explicit submission and node-end fallback without duplicate commit;
 - atomic/grouped rollback and intentionally authorized best-effort behavior;
 - invalid processor parameters and processor failure;
+- a corrupted derived index rebuilt with a visible warning, while a corrupted authoritative file still fails;
 - concurrent writers and workflow dependency ordering;
-- message-suffix pruning and restoration of surviving effective state;
+- message-suffix pruning and restoration of surviving effective state, including a hybrid collection whose seeded initial record was deleted;
 - initial and opening-specific state;
 - frontend rendering without changing Agent visibility or authority.
 

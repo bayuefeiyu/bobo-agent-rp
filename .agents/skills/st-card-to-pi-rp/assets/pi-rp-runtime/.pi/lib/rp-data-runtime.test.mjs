@@ -262,6 +262,202 @@ test("derived indexes can be removed and rebuilt from authoritative data", async
   assert.equal(index.entries.length, 1);
 });
 
+test("a corrupted derived index is rebuilt and announced instead of failing the query", async t => {
+  const { store } = await fixture(t);
+  await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "batch-corrupt-index",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "op-corrupt-index", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.queen", data: { content: "王冠是赝品", source: "character.queen" } }],
+  }, { access: { rumors: ["rumor.write"] } });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = message => { warnings.push(String(message)); };
+  try {
+    await writeFile(join(store.sessionDirectory, "indexes", "rumors.json"), "{\"schemaVersion\": 1, \"entries\": [", "utf8");
+    const index = await store.readIndex("rumors");
+    assert.equal(index.entries.length, 1);
+    assert.equal(JSON.parse(await readFile(join(store.sessionDirectory, "indexes", "rumors.json"), "utf8")).entries.length, 1);
+
+    await writeFile(join(store.sessionDirectory, "indexes", "identities.json"), "not json at all", "utf8");
+    // This module declares no identity-bearing record type, so a successful repair resolves nothing —
+    // what matters is that the call returns instead of throwing and leaves a usable registry behind.
+    assert.deepEqual(await store.resolveIdentity("rumor.queen"), []);
+    const rebuilt = JSON.parse(await readFile(join(store.sessionDirectory, "indexes", "identities.json"), "utf8"));
+    assert.equal(Array.isArray(rebuilt.entries), true);
+
+    // Authoritative data is not repair-on-read: a damaged snapshot must still fail loudly.
+    await writeFile(join(store.collectionRoot("rumors", "entries"), "snapshot.json"), "{broken", "utf8");
+    await assert.rejects(store.readCollection("rumors", "entries"), SyntaxError);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /indexes\/rumors\.json was unreadable/);
+  assert.match(warnings[1], /indexes\/identities\.json was unreadable/);
+});
+
+test("hybrid pruning keeps a deleted seeded record deleted", async t => {
+  const root = await mkdtemp(join(tmpdir(), "rp-data-hybrid-prune-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const moduleDirectory = join(root, "card", "features", "field-notes");
+  await mkdir(join(moduleDirectory, "collections", "notes", "initial"), { recursive: true });
+  // A card-shipped initial record: `readCollection` re-seeds it into the history view on every read,
+  // which is exactly why pruning must take `records` from the snapshot rather than from history.
+  await writeFile(join(moduleDirectory, "collections", "notes", "initial", "snapshot.json"), JSON.stringify({
+    protocolVersion: 2, id: "note.seeded", moduleId: "field-notes", collectionId: "notes", recordType: "note.entry", dataSchemaVersion: 1, revision: 1, sequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", status: "active",
+    provenance: { source: "initial" }, binding: { messageId: "message.seeded", turn: 0 }, data: { text: "卡内初始记录" }, note: null,
+  }), "utf8");
+  const notesContract = normalizeDataContract({
+    schemaVersion: 1,
+    moduleId: "field-notes",
+    collections: {
+      notes: {
+        storage: { kind: "hybrid", partition: { mode: "single" }, initialSnapshotFile: "collections/notes/initial/snapshot.json" },
+        recordTypes: { "note.entry": { dataSchemaVersion: 1, indexes: {}, searchableFields: [], views: { rp: { format: "text", fields: [{ path: "/data/text" }] } }, actions: ["create", "delete"] } },
+      },
+    },
+    capabilities: {
+      "note.query": { collections: ["notes"], actions: ["query"], views: ["rp"] },
+      "note.write": { collections: ["notes"], actions: ["create", "delete"], views: [] },
+    },
+  });
+  const store = new RpDataStore({ sessionDirectory: join(root, "session"), modules: [{ contract: notesContract, moduleDirectory }] });
+  await store.initialize();
+  assert.deepEqual((await store.readCollection("field-notes", "notes")).records.map(record => record.id), ["note.seeded"]);
+
+  const submit = (batchId, operations, messageId) => executeDataBatch(store, { protocolVersion: 1, batchId, status: "pending", commitPolicy: "atomic", operations }, {
+    access: { "field-notes": ["note.write"] },
+    context: { binding: { turn: 1, messageId } },
+  });
+  const created = await submit("note-create", [{ operationId: "create", moduleId: "field-notes", collectionId: "notes", recordType: "note.entry", action: "create", targetId: "note.later", data: { text: "后来的一轮" } }], "message.later");
+  assert.equal(created.status, "committed");
+  const deleted = await submit("note-delete", [{ operationId: "delete", moduleId: "field-notes", collectionId: "notes", recordType: "note.entry", action: "delete", targetId: "note.seeded", expectedRevision: 1 }], "message.seeded");
+  assert.equal(deleted.status, "committed");
+  assert.deepEqual((await store.readCollection("field-notes", "notes")).records.map(record => record.id), ["note.later"]);
+
+  // Pruning an unrelated message must not write the deleted record back into the authority.
+  await store.pruneByMessageIds(["message.later"]);
+  assert.deepEqual((await store.readCollection("field-notes", "notes")).records.map(record => record.id), []);
+  assert.deepEqual(JSON.parse(await readFile(join(store.collectionRoot("field-notes", "notes"), "snapshot.json"), "utf8")), []);
+});
+
+test("a failed batch is re-executed instead of being replayed from its own failure", async t => {
+  const { store } = await fixture(t);
+  const seed = await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "retry-seed",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "seed", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.retry", data: { content: "初始", source: "character.queen" } }],
+  }, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 1, messageId: null } } });
+  assert.equal(seed.status, "committed");
+  const batch = {
+    protocolVersion: 1,
+    batchId: "retry-update",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "update", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "update", targetId: "rumor.retry", expectedRevision: 5, data: { content: "过期版本", source: "character.queen" } }],
+  };
+  const first = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
+  assert.equal(first.status, "failed");
+  assert.equal(first.results[0].code, "revision_conflict");
+
+  // Byte-identical retry: the same failure must come from re-running, not from the stored receipt.
+  const retry = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
+  assert.equal(retry.idempotentReplay ?? false, false);
+  assert.notEqual(retry.runtimeReceiptId, first.runtimeReceiptId);
+  assert.equal(retry.status, "failed");
+  assert.equal(retry.results[0].code, "revision_conflict");
+
+  // Once the revision guard is satisfied, the same batch ID finally commits.
+  const corrected = await executeDataBatch(store, { ...batch, operations: [{ ...batch.operations[0], expectedRevision: 1 }] }, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
+  assert.equal(corrected.status, "committed");
+  assert.equal((await store.readCollection("rumors", "entries")).records[0].data.content, "过期版本");
+
+  // An outcome that did land stays idempotent, and a conflicting replay is still refused.
+  const replay = await executeDataBatch(store, { ...batch, operations: [{ ...batch.operations[0], expectedRevision: 1 }] }, { access: { rumors: ["rumor.write"] } });
+  assert.equal(replay.idempotentReplay, true);
+  const conflict = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] } });
+  assert.equal(conflict.results[0].code, "idempotency_conflict");
+});
+
+test("a partial receipt is still replayed idempotently", async t => {
+  const { store } = await fixture(t);
+  const access = { access: { rumors: ["rumor.write"] } };
+  await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "partial-seed",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "seed", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.taken", data: { content: "已存在", source: "character.queen" } }],
+  }, access);
+  const batch = {
+    protocolVersion: 1,
+    batchId: "partial-batch",
+    status: "pending",
+    commitPolicy: "grouped",
+    operations: [
+      { operationId: "ok", groupId: "first", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.fresh", data: { content: "新的", source: "character.queen" } },
+      { operationId: "duplicate", groupId: "second", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.taken", data: { content: "重复", source: "character.queen" } },
+    ],
+  };
+  const partial = await executeDataBatch(store, batch, access);
+  assert.equal(partial.status, "partial");
+  assert.deepEqual(partial.results.map(result => result.status), ["committed", "failed"]);
+  const replay = await executeDataBatch(store, batch, access);
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.status, "partial");
+  assert.equal((await store.readCollection("rumors", "entries")).history.length, 2);
+});
+
+test("re-running a batch whose commit failed exposes a conflict instead of double-writing", async t => {
+  const { store } = await fixture(t);
+  const seed = await executeDataBatch(store, {
+    protocolVersion: 1,
+    batchId: "commit-boundary-seed",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "seed", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "create", targetId: "rumor.boundary", data: { content: "写入前", source: "character.queen" } }],
+  }, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 1, messageId: null } } });
+  assert.equal(seed.status, "committed");
+
+  // The one place where a `failed` receipt does not imply "nothing landed": the transaction wrote
+  // its files and then reported failure. Re-running must not write a second time.
+  const realCommit = store.commit.bind(store);
+  let failAfterWriting = true;
+  store.commit = async (...args) => {
+    const result = await realCommit(...args);
+    if (failAfterWriting) {
+      failAfterWriting = false;
+      throw new Error("the commit transaction failed after writing its files");
+    }
+    return result;
+  };
+  const batch = {
+    protocolVersion: 1,
+    batchId: "commit-boundary-update",
+    status: "pending",
+    commitPolicy: "atomic",
+    operations: [{ operationId: "update", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", action: "update", targetId: "rumor.boundary", expectedRevision: 1, data: { content: "写入后", source: "character.queen" } }],
+  };
+  const interrupted = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
+  assert.equal(interrupted.status, "failed");
+  assert.equal(interrupted.results.at(-1).code, "commit_failed");
+  const written = (await store.readCollection("rumors", "entries")).records[0];
+  assert.equal(written.revision, 2);
+
+  const retried = await executeDataBatch(store, batch, { access: { rumors: ["rumor.write"] }, context: { binding: { turn: 2, messageId: null } } });
+  assert.equal(retried.idempotentReplay ?? false, false);
+  assert.equal(retried.status, "failed");
+  assert.equal(retried.results[0].code, "revision_conflict");
+  const afterRetry = (await store.readCollection("rumors", "entries")).records[0];
+  assert.equal(afterRetry.revision, 2);
+  assert.equal(afterRetry.data.content, "写入后");
+});
+
 test("module-local processors implement guarded custom record operations", async t => {
   const { store } = await fixture(t);
   const runtime = join(store.module("rumors").moduleDirectory, "runtime");

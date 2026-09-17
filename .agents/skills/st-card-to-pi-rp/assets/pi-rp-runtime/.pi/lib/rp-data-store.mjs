@@ -28,6 +28,27 @@ async function text(path, fallback = "") {
   });
 }
 
+/**
+ * Read a rebuildable JSON document, treating an unreadable one exactly like an absent one.
+ *
+ * Derived files — the per-module index and the identity registry — are rebuilt from authoritative
+ * records, so a truncated file must not fail the query that happens to read it first. The damage is
+ * still announced: repairing it silently would hide whatever corrupted it, and the rebuild then
+ * overwrites the only evidence.
+ *
+ * Authoritative files (snapshot.json, history partitions, initial records) deliberately keep using
+ * `json`, where a parse error stays an error.
+ */
+async function derivedJson(path, label) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    console.warn(`${label} was unreadable (${error instanceof Error ? error.message : String(error)}); rebuilding it from authoritative records.`);
+    return null;
+  }
+}
+
 function latestRecords(history) {
   const latest = new Map();
   for (const record of history) {
@@ -232,7 +253,7 @@ export class RpDataStore {
 
   async resolveIdentity(value) {
     if (typeof value !== "string" || !value.trim()) return [];
-    let registry = await json(safeResolve(this.sessionDirectory, "indexes", "identities.json"), null);
+    let registry = await derivedJson(safeResolve(this.sessionDirectory, "indexes", "identities.json"), "indexes/identities.json");
     if (!registry) {
       await this.rebuildIndexes();
       registry = await json(safeResolve(this.sessionDirectory, "indexes", "identities.json"), { entries: [] });
@@ -244,7 +265,7 @@ export class RpDataStore {
   async readIndex(moduleId) {
     const module = this.module(moduleId);
     const path = safeResolve(this.sessionDirectory, "indexes", `${moduleId}.json`);
-    let index = await json(path, null);
+    let index = await derivedJson(path, `indexes/${moduleId}.json`);
     if (!index) {
       const records = [];
       for (const collectionId of Object.keys(module.contract.collections)) records.push(...(await this.readCollection(moduleId, collectionId)).records);
@@ -301,9 +322,12 @@ export class RpDataStore {
       for (const collectionId of Object.keys(module.contract.collections)) {
         const state = await this.readCollection(module.contract.moduleId, collectionId);
         const history = state.history.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
-        const records = module.contract.collections[collectionId].storage.kind === "snapshot"
-          ? state.records.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId))
-          : latestRecords(history);
+        // Prune whichever source is authoritative for this collection, exactly as reading does. A
+        // hybrid collection's authority is its snapshot, so deriving `records` from history would
+        // write back every record that a lifecycle `delete` had already removed from the snapshot.
+        const records = module.contract.collections[collectionId].storage.kind === "record-log"
+          ? latestRecords(history)
+          : state.records.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
         if (history.length !== state.history.length || records.length !== state.records.length) {
           states.set(`${module.contract.moduleId}/${collectionId}`, { moduleId: module.contract.moduleId, collectionId, history, records });
         }
