@@ -2,7 +2,7 @@
 
 ## 时间
 
-每张卡必须在导入时填写 `config/time-system.json`，定义该卡的 `trueTime`格式、允许粒度、`sortValue`派生算法、歧义处理、示例和是否需要时间辅助记录。
+每张卡必须在导入时填写 `config/time-system.json`，定义该卡的 `trueTime`格式、允许粒度、`sortValue`派生算法、歧义处理、示例和是否需要时间辅助记录。**声明与实现必须一起完成**：同一份规格要落到 `runtime/time-adapter.mjs`（导出 `timeRuleVersion`、`deriveSortValue(trueTime)`、`validateTrueTime(trueTime)`），模块自带的 `runtime/time-adapter.mjs` 在未配置时是抛错占位。只填 JSON 不实现适配器时，静态检查与游玩开场都不会报错，直到**第一次归档事件**在派生 `sortValue` 时失败（`narrative-memory time adapter is not configured for this card.`）——卡包校验器会核对两者是否一致。
 
 无论现代日期还是“第N天”，事件都保留 `trueTime`和持久化 `sortValue`。自然语言时间可以模糊；trueTime要么精确到卡定义的小时、时辰或其他离散单位，要么降为整日，不能写“上午”“下午”“黄昏”。“大约十年前”可以为排序选择合理的近似日期，但展示时间仍保留“大约十年前”，且不得虚构小时。
 

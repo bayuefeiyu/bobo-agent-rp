@@ -21,6 +21,7 @@ else {
       const inputs = Object.keys(node.inputs);
       const type = node.class_type;
       const candidates = [];
+      let seedLimit = null;
       for (const input of inputs) {
         if (/^(text|prompt|positive)$/i.test(input)) candidates.push({ role: "prompt", input });
         if (/negative/i.test(input)) candidates.push({ role: "negative", input });
@@ -29,11 +30,17 @@ else {
         if (/filename.*prefix|prefix.*filename/i.test(input)) candidates.push({ role: "filenamePrefix", input });
         if (/lora|strength_model|strength_clip/i.test(input)) candidates.push({ role: "lora", input });
         if (/ckpt|unet_name|model_name|vae_name|clip_name/i.test(input)) candidates.push({ role: "loader", input });
+        // A seed node sometimes carries its own ceiling as a sibling input. Reporting it here is what
+        // lets the adaptation step write a verified `seedRange`. No static class-name table is kept:
+        // a custom seed node's limit belongs to the installed node version, not to this parser, so a
+        // null result means the limit must come from `/object_info` or the node's documented behaviour
+        // — and the profile's `seedRange.source` must say which.
+        if (/^(max|maximum)$/i.test(input) && Number.isSafeInteger(node.inputs[input]) && node.inputs[input] >= 0) seedLimit = node.inputs[input];
       }
       const output = /saveimage|previewimage|save.*image|image.*save/i.test(type);
       if (output) candidates.push({ role: "output", input: null });
       if (!/^(CLIPTextEncode|KSampler|KSamplerAdvanced|CheckpointLoaderSimple|UNETLoader|VAELoader|LoraLoader|EmptyLatentImage|SaveImage|PreviewImage|LoadImage)$/i.test(type)) customNodes.push({ nodeId, classType: type });
-      nodes.push({ nodeId, classType: type, title: node._meta?.title || "", candidates });
+      nodes.push({ nodeId, classType: type, title: node._meta?.title || "", candidates, declaredSeedLimit: seedLimit });
     }
     console.log(JSON.stringify({ schemaVersion: 1, nodeCount: nodes.length, nodes: nodes.filter(item => item.candidates.length), customNodes }, null, 2));
   } catch (error) {

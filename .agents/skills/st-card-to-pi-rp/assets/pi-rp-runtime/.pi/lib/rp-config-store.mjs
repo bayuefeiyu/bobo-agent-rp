@@ -85,7 +85,7 @@ function cleanSecretDocument(value) {
   return { schemaVersion: 1, models };
 }
 
-export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null } = {}) {
+export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null, resolveModuleWorkflow = null } = {}) {
   const root = resolve(rootDirectory);
   const card = resolve(cardDirectory);
   const secretDirectory = resolve(secretCacheDirectory || systemCacheRoot(), "projects", projectCacheId(root));
@@ -99,6 +99,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     cardAgents: resolve(card, "agents"),
     workflows: resolve(root, "workflows"),
     cardWorkflows: resolve(card, "workflows"),
+    moduleWorkflowOverrides: resolve(card, "module-workflow-overrides.json"),
   };
 
   async function modelDocuments({ migrate = false } = {}) {
@@ -149,6 +150,79 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     if (profile.workflowOverrides?.[workflowId]) return profile.workflowOverrides[workflowId];
     const key = Object.keys(profile.workflowOverrides || {}).find(item => item.endsWith(`/workflow/${workflowId}`));
     return key ? profile.workflowOverrides[key] : null;
+  }
+
+  /**
+   * Overrides are keyed by owner first. A module workflow and a top-level workflow may legally share
+   * `workflowId`, and "save as default" must only ever touch the definition the failed run came
+   * from — including when the two owners live in different storage layers.
+   */
+  function workflowOverrideKey(ownerModuleId, workflowId) {
+    return ownerModuleId ? `${ownerModuleId}/workflow/${workflowId}` : workflowId;
+  }
+
+  function profileOwnerWorkflowOverride(profile, ownerModuleId, workflowId) {
+    if (!profile) return null;
+    const overrides = profile.workflowOverrides || {};
+    const exact = workflowOverrideKey(ownerModuleId, workflowId);
+    if (overrides[exact]) return overrides[exact];
+    for (const [key, value] of Object.entries(overrides)) {
+      if (key === exact || key.endsWith(`/${exact}`)) return value;
+    }
+    return ownerModuleId ? null : profileWorkflowOverride(profile, workflowId);
+  }
+
+  async function moduleWorkflowOverrides() {
+    const document = await readJson(paths.moduleWorkflowOverrides, { schemaVersion: 1, workflows: {} });
+    if (!document || typeof document !== "object" || Array.isArray(document) || typeof document.workflows !== "object" || document.workflows === null || Array.isArray(document.workflows)) {
+      throw new Error("Card module-workflow overrides must be a schemaVersion 1 document with a workflows object.");
+    }
+    return document;
+  }
+
+  /**
+   * Resolve a workflow definition by owner. Every caller that has a persisted run — restore, retry,
+   * panel actions — resolves through this, so a module workflow is never looked up in the top-level
+   * store (which is what made panel retry answer `Workflow <id> was not found`).
+   */
+  async function resolveOwnedWorkflow(ownerModuleId, workflowId) {
+    assertId(workflowId, "workflowId");
+    const profile = await activeProfile();
+    if (!ownerModuleId) {
+      const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
+      const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
+      const raw = await readJson(cardPath, null) || await readJson(globalPath, null);
+      if (!raw) throw new Error(`Workflow ${workflowId} was not found in the card or the shared runtime.`);
+      const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
+      if (workflow.kind.startsWith("module-")) throw new Error(`Module workflow ${workflowId} must be resolved through its owning module, not the top-level workflow store.`);
+      return workflow;
+    }
+    assertId(ownerModuleId, "ownerModuleId");
+    if (typeof resolveModuleWorkflow !== "function") throw new Error(`Module workflow ${ownerModuleId}/${workflowId} cannot be resolved: the card has no feature-module registry.`);
+    const raw = await resolveModuleWorkflow(ownerModuleId, workflowId);
+    if (!raw) throw new Error(`Module workflow ${ownerModuleId}/${workflowId} was not found in the loaded card modules.`);
+    const stored = profile ? null : (await moduleWorkflowOverrides()).workflows[workflowOverrideKey(ownerModuleId, workflowId)] || null;
+    const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileOwnerWorkflowOverride(profile, ownerModuleId, workflowId) || stored));
+    if (workflow.kind !== "module-external" && workflow.kind !== "module-internal") throw new Error(`Workflow ${ownerModuleId}/${workflowId} must be a module workflow.`);
+    if (workflow.ownerModuleId && workflow.ownerModuleId !== ownerModuleId) throw new Error(`Module workflow ${ownerModuleId}/${workflowId} declares owner ${workflow.ownerModuleId}.`);
+    return workflow;
+  }
+
+  /** Where an edited module workflow is written: the active profile, or the card's override layer. */
+  async function saveModuleWorkflowOverride(value) {
+    const workflow = normalizeWorkflowDefinition(value);
+    if (!workflow.kind.startsWith("module-") || !workflow.ownerModuleId) throw new Error("Only an owned module workflow can be saved as a module override.");
+    if (typeof resolveModuleWorkflow !== "function") throw new Error(`Module workflow ${workflow.ownerModuleId}/${workflow.id} cannot be resolved: the card has no feature-module registry.`);
+    const profile = await activeProfile();
+    if (profile) {
+      profile.workflowOverrides[workflowOverrideKey(workflow.ownerModuleId, workflow.id)] = workflow;
+      await profileStore.save(profile);
+      return workflow;
+    }
+    const document = await moduleWorkflowOverrides();
+    document.workflows[workflowOverrideKey(workflow.ownerModuleId, workflow.id)] = workflow;
+    await atomicJson(paths.moduleWorkflowOverrides, document);
+    return workflow;
   }
 
   return {
@@ -328,29 +402,32 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       return result;
     },
     async getWorkflow(workflowId) {
-      assertId(workflowId, "workflowId");
-      const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
-      const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
-      const raw = await readJson(cardPath, null) || await readJson(globalPath, null);
-      if (!raw) throw new Error(`Workflow ${workflowId} was not found in the card or the shared runtime.`);
-      const profile = await activeProfile();
-      const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
-      if (workflow.kind.startsWith("module-")) throw new Error("Module workflows must be registered through module.json.workflowFiles, not the top-level workflow store.");
-      return workflow;
+      return resolveOwnedWorkflow(null, workflowId);
     },
-    async copyWorkflowToCard(workflowId) {
-      const workflow = await this.getWorkflow(workflowId);
+    async getModuleWorkflow(ownerModuleId, workflowId) {
+      return resolveOwnedWorkflow(ownerModuleId, workflowId);
+    },
+    /**
+     * Return the definition a panel edit should modify. A module workflow is already card-owned
+     * through its module registration, so it is never copied into the top-level workflow store —
+     * that copy would be an unreachable second definition of the same workflow.
+     */
+    async copyWorkflowToCard(workflowId, ownerModuleId = null) {
       const profile = await activeProfile();
-      if (profile) return workflow;
-      await atomicJson(resolve(paths.cardWorkflows, workflowId, "workflow.json"), workflow);
-      return workflow;
+      if (!ownerModuleId) {
+        const workflow = await resolveOwnedWorkflow(null, workflowId);
+        if (profile) return workflow;
+        await atomicJson(resolve(paths.cardWorkflows, workflowId, "workflow.json"), workflow);
+        return workflow;
+      }
+      return resolveOwnedWorkflow(ownerModuleId, workflowId);
     },
     async saveCardWorkflow(value) {
       const workflow = normalizeWorkflowDefinition(value);
-      if (workflow.kind.startsWith("module-")) throw new Error("Module workflows cannot be saved as top-level card workflows.");
+      if (workflow.kind.startsWith("module-")) return saveModuleWorkflowOverride(workflow);
       const profile = await activeProfile();
       if (profile) {
-        profile.workflowOverrides[workflow.id] = workflow;
+        profile.workflowOverrides[workflowOverrideKey(null, workflow.id)] = workflow;
         await profileStore.save(profile);
         return workflow;
       }

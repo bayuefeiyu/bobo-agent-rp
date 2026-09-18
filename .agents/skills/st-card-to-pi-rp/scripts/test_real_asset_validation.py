@@ -8,8 +8,8 @@ packages out as standalone roots, covering validation of the project-global sour
 themselves, where no card manifest exists.
 
 Deliberately avoids `tempfile`: some sandboxes deny the `chmod` that Python's
-TemporaryDirectory performs. Both fixtures are built in git-ignored directories at the
-repository root instead.
+TemporaryDirectory performs. Both fixtures are built under the git-ignored local
+development records directory instead.
 
 Usage:
     python -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_real_asset_validation.py
@@ -39,8 +39,9 @@ sys.path.insert(0, str(SCRIPTS))
 import validate_card_pack as V  # noqa: E402
 
 ASSETS = ROOT / ".agents" / "skills" / "st-card-to-pi-rp" / "assets"
-FIXTURE = ROOT / ".tmp-card-validation"
-SOURCE_FIXTURE = ROOT / ".tmp-module-source-validation"
+LOCAL_TEMP = ROOT / "local-development-records" / "temp"
+FIXTURE = LOCAL_TEMP / "card-validation"
+SOURCE_FIXTURE = LOCAL_TEMP / "module-source-validation"
 MODULE_IDS = ["card-context-library", "narrative-memory", "local-scene-narrative",
               "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation"]
 INTEGRATION = ROOT / "global-modules" / "world-narrative-coordinator" / "integration" / "workflows"
@@ -177,9 +178,10 @@ def build_source_fixture() -> list[str]:
     if SOURCE_FIXTURE.exists():
         shutil.rmtree(SOURCE_FIXTURE)
     paths: list[str] = []
+    fixture_prefix = SOURCE_FIXTURE.relative_to(ROOT).as_posix()
     for module_id in MODULE_IDS:
         shutil.copytree(module_source(module_id), SOURCE_FIXTURE / module_id)
-        paths.append(f"{SOURCE_FIXTURE.name}/{module_id}/module.json")
+        paths.append(f"{fixture_prefix}/{module_id}/module.json")
     return paths
 
 
@@ -252,6 +254,152 @@ report("positive: replaced placeholders must not fail",
        [e for e in run_cli(FIXTURE) if "trigger.workflowId" in e])
 
 print()
+print("== trigger documents must resolve against the source workflow's outputs ==")
+
+# RC-06: the converted wrapper kept `metadata.triggerInputs: ["story-context"]` after its post
+# -director integration was swapped for one whose review node produced no such output, so the whole
+# wrapper normalized as invalid. The reference is structurally checkable at conversion time.
+deep_wrapper = FIXTURE / "workflows" / "director-deep-wrapper" / "workflow.json"
+deep_original = deep_wrapper.read_text(encoding="utf-8")
+deep_document = json.loads(deep_original)
+report("positive: the shipped deep wrapper resolves its trigger document",
+       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e])
+
+broken = json.loads(deep_original)
+broken["trigger"]["documents"]["story-context"] = {"fromNode": "no-such-node", "output": "story-context"}
+write_json(deep_wrapper, broken)
+report("negative: a trigger document naming an absent upstream node must fail",
+       [e for e in run_cli(FIXTURE) if "trigger.documents.story-context.fromNode must reference a node of" in e],
+       expect_empty=False)
+
+broken = json.loads(deep_original)
+broken["trigger"]["documents"]["story-context"] = {"fromNode": "review", "output": "no-such-output"}
+write_json(deep_wrapper, broken)
+report("negative: a trigger document naming an output the upstream node never declares must fail",
+       [e for e in run_cli(FIXTURE) if "trigger.documents.story-context.output must reference an output declared by" in e],
+       expect_empty=False)
+
+broken = json.loads(deep_original)
+broken["trigger"]["documents"] = {}
+write_json(deep_wrapper, broken)
+report("negative: a node reading an unmapped trigger input must fail",
+       [e for e in run_cli(FIXTURE) if "metadata.triggerInputs references undeclared trigger document story-context" in e],
+       expect_empty=False)
+
+# The with-narratives integration reviews through `post-director`, whose only output is the
+# delegation plan. Re-pointing the wrapper at it — the conversion mistake that produced RC-06 —
+# keeps a syntactically valid mapping that can never resolve, so it must be rejected.
+broken = json.loads(deep_original)
+broken["trigger"]["workflowId"] = "director-post-with-narratives"
+broken["trigger"]["documents"]["story-context"] = {"fromNode": "post-director", "output": "story-context"}
+write_json(deep_wrapper, broken)
+report("negative: pointing the wrapper at an integration without that output must fail",
+       [e for e in run_cli(FIXTURE) if "trigger.documents.story-context.output must reference an output declared by director-post-with-narratives/post-director" in e],
+       expect_empty=False)
+deep_wrapper.write_text(deep_original, encoding="utf-8")
+report("positive: restoring the shipped wrapper clears the trigger-document findings",
+       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e])
+
+print()
+print("== deep wrappers must authorize every call their runtime script makes ==")
+
+# The wrapper's code node drives begin/planning/commit/finish. A template that declares only the
+# planning call makes the node fail before any model runs — the same mismatch class as RC-06.
+DEEP_RUNTIME_CALLS = {
+    "director-deep-wrapper": [
+        "world-narrative-coordinator/begin-deep-operation",
+        "world-narrative-coordinator/deep-director-planning",
+        "world-narrative-coordinator/deep-director-team-planning",
+        "world-narrative-coordinator/commit-deep-operation",
+        "world-narrative-coordinator/finish-deep-operation",
+    ],
+    "director-opening-deep-wrapper": [
+        "world-narrative-coordinator/begin-deep-operation",
+        "world-narrative-coordinator/deep-director-planning",
+        "world-narrative-coordinator/finish-deep-operation",
+    ],
+}
+for wrapper_id, expected in DEEP_RUNTIME_CALLS.items():
+    wrapped = load(FIXTURE / "workflows" / wrapper_id / "workflow.json")
+    declared = wrapped["nodes"][0].get("workflowCalls", [])
+    missing = [target for target in expected if target not in declared]
+    report(f"{wrapper_id} authorizes every call its script makes", missing)
+
+print()
+print("== nodes that write a record must be able to read the whole record ==")
+
+# The runtime renders a read through the view the node asked for, and an `update` carries the whole
+# record data. A writer holding only a projection (`deep-status` hides the world-time fields) cannot
+# produce a valid update: the batch is rejected by the record schema, so the failure the node was
+# recording is lost and the operation stays open. This is the shape of the run-3 stuck-operation bug.
+for wrapper_id in DEEP_RUNTIME_CALLS:
+    wrapper_path = FIXTURE / "workflows" / wrapper_id / "workflow.json"
+    wrapper_original = wrapper_path.read_text(encoding="utf-8")
+    narrowed = load(wrapper_path)
+    for node in narrowed["nodes"]:
+        for access in node.get("moduleAccess", []):
+            if access.get("collectionId") == "deep-workbench" and "director.deep.write" in access.get("capabilities", []):
+                access["views"] = ["deep-status"]
+    write_json(wrapper_path, narrowed)
+    report(f"negative: {wrapper_id} granted only the deep-status projection must fail",
+           [e for e in run_cli(FIXTURE) if "cannot produce a valid update" in e], expect_empty=False)
+    wrapper_path.write_text(wrapper_original, encoding="utf-8")
+    report(f"positive: restoring {wrapper_id} clears the view-coverage findings",
+           [e for e in run_cli(FIXTURE) if "cannot produce a valid update" in e])
+
+print()
+print("== a node that reads a staged trigger document must declare it ==")
+
+# The runtime stages a run's frozen trigger documents at `trigger/<id>` in the node workspace, but
+# only for the ids the node declares. `dispatch-story-candidate.mjs` reads `trigger/turn-context`
+# unconditionally, so dropping the declaration reproduces the real turn-1 dispatch failure
+# (`ENOENT … dispatch-local/trigger/turn-context`) at conversion time instead of during play.
+post_workflow = FIXTURE / "workflows" / "director-post-with-narratives" / "workflow.json"
+post_original = post_workflow.read_text(encoding="utf-8")
+undeclared = load(post_workflow)
+for node in undeclared["nodes"]:
+    if node.get("id") == "dispatch-local":
+        node["metadata"].pop("triggerInputs", None)
+write_json(post_workflow, undeclared)
+report("negative: a node reading trigger/turn-context without declaring it must fail",
+       [e for e in run_cli(FIXTURE) if "does not declare metadata.triggerInputs" in e], expect_empty=False)
+post_workflow.write_text(post_original, encoding="utf-8")
+report("positive: restoring the declaration clears the trigger-read findings",
+       [e for e in run_cli(FIXTURE) if "does not declare metadata.triggerInputs" in e])
+
+print()
+print("== a configured time rule needs an implemented adapter ==")
+
+# The real card that failed its first archive documented its whole time rule in
+# `config/time-system.json` (format, granularity, sort algorithm, examples) while
+# `runtime/time-adapter.mjs` was still the module's throwing stub. Every static check passed and the
+# failure only appeared when an archived event needed its `sortValue`.
+time_declaration = FIXTURE / "features" / "narrative-memory" / "config" / "time-system.json"
+time_adapter = FIXTURE / "features" / "narrative-memory" / "runtime" / "time-adapter.mjs"
+declaration_original = time_declaration.read_text(encoding="utf-8")
+adapter_original = time_adapter.read_text(encoding="utf-8")
+configured = load(time_declaration)
+configured["configured"] = True
+configured["timeRuleVersion"] = "fixture-days-v1"
+write_json(time_declaration, configured)
+report("negative: a documented time rule with the stub adapter must fail",
+       [e for e in run_cli(FIXTURE) if "is still the unconfigured stub" in e], expect_empty=False)
+
+adapter_configured = adapter_original.replace('export const timeRuleVersion = "unconfigured";',
+                                              'export const timeRuleVersion = "other-rule-v1";')
+time_adapter.write_text(adapter_configured, encoding="utf-8")
+report("negative: an adapter whose rule version contradicts the declaration must fail",
+       [e for e in run_cli(FIXTURE) if "but config/time-system.json declares" in e], expect_empty=False)
+
+time_declaration.write_text(declaration_original, encoding="utf-8")
+report("negative: an implemented adapter with an unconfigured declaration must fail",
+       [e for e in run_cli(FIXTURE) if "is not configured" in e], expect_empty=False)
+
+time_adapter.write_text(adapter_original, encoding="utf-8")
+report("positive: the shipped pair (unconfigured rule and stub adapter) validates",
+       [e for e in run_cli(FIXTURE) if "time-adapter" in e or "time-system" in e])
+
+print()
 print("== module workflow nodes share the call checks ==")
 coordinator_call = FIXTURE / "features" / "world-narrative-coordinator" / "workflows" / "post-director-update" / "workflow.json"
 coordinator_text = coordinator_call.read_text(encoding="utf-8")
@@ -321,6 +469,46 @@ report("negative: a module entry file missing from its own package must fail",
 source_entry.write_text(source_entry_original, encoding="utf-8")
 report("positive: restored package sources report no entryFile error",
        [e for e in source_errors(source_paths) if "metadata.entryFile" in e])
+
+print()
+print("== shipped module Skills must be loadable, not merely present ==")
+
+# RC-01: `local-scene-narrative` shipped a Skill with no YAML frontmatter, so the bridge refused to
+# start the card even though every file existed. These checks assert the header contract, not file
+# presence, and the runtime mirrors them in `rp-skill-contract.mjs`.
+for module_id in MODULE_IDS:
+    module_root = FIXTURE / "features" / module_id
+    module_manifest = load(module_root / "module.json")
+    skill_relative = module_manifest.get("skillFile")
+    skill_findings: list[str] = []
+    V.validate_skill_frontmatter(module_root, skill_relative, f"{module_id}.skillFile", skill_findings)
+    report(f"{module_id} publishes a loadable Skill header", skill_findings)
+
+skill_path = FIXTURE / "features" / "local-scene-narrative" / "skill" / "SKILL.md"
+skill_original = skill_path.read_text(encoding="utf-8")
+# The validator labels a module Skill by its `feature_modules` slot, so match the contract suffix
+# and keep the fixture's module ordering free to change.
+SKILL_HEADER_ERROR = ".skillFile must start with YAML frontmatter"
+SKILL_NAME_ERROR = ".skillFile frontmatter must contain a one-line name"
+SKILL_DESCRIPTION_ERROR = ".skillFile frontmatter must contain a one-line description"
+skill_body = skill_original.split("---", 2)[2].lstrip("\n")
+skill_path.write_text(skill_body, encoding="utf-8")
+report("negative: a module Skill without frontmatter must fail",
+       [e for e in run_cli(FIXTURE) if e.endswith(SKILL_HEADER_ERROR)], expect_empty=False)
+# Rebuild each negative header literally instead of editing the original one: byte-level
+# replacements over the CJK body are not guaranteed to survive a POSIX-locale round trip.
+skill_path.write_text(f"---\nname: local-scene-narrative\nnote: A description.\n---\n\n{skill_body}", encoding="utf-8")
+report("negative: a module Skill without a one-line description must fail",
+       [e for e in run_cli(FIXTURE) if e.endswith(SKILL_DESCRIPTION_ERROR)], expect_empty=False)
+skill_path.write_text(f"---\nname: local-scene-narrative\ndescription: |\n  A description.\n---\n\n{skill_body}", encoding="utf-8")
+report("negative: a block-scalar description is not a one-line description",
+       [e for e in run_cli(FIXTURE) if e.endswith(SKILL_DESCRIPTION_ERROR)], expect_empty=False)
+skill_path.write_text(f"---\ntitle: local-scene-narrative\ndescription: A description.\n---\n\n{skill_body}", encoding="utf-8")
+report("negative: a module Skill without a name must fail",
+       [e for e in run_cli(FIXTURE) if e.endswith(SKILL_NAME_ERROR)], expect_empty=False)
+skill_path.write_text(skill_original, encoding="utf-8")
+report("positive: the restored module Skill reports no header error",
+       [e for e in run_cli(FIXTURE) if ".skillFile" in e])
 
 print()
 print("== shipped design conventions warn; a card's own invariants bind ==")

@@ -324,7 +324,8 @@ test("a recovery-required team child retains the deep operation ownership", asyn
   } };
   const run = { id: "wrapper-recovery", turn: 1 };
   await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_recovery_required");
-  assert.deepEqual(state, { status: "running", currentRunId: "wrapper-recovery-deep-operation" });
+  // Awaiting recovery is not a failure: the operation stays open and owned by this turn.
+  assert.deepEqual(state, { status: "running", currentRunId: "deep-operation-turn-1" });
 });
 
 test("a model-choice child wait retains the deep operation ownership", async () => {
@@ -347,8 +348,8 @@ test("a model-choice child wait retains the deep operation ownership", async () 
   } };
   const run = { id: "wrapper-model-choice", turn: 1 };
   await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_child_waiting");
-  assert.equal(finishCalls, 0);
-  assert.deepEqual(state, { status: "running", currentRunId: "wrapper-model-choice-deep-operation" });
+  assert.equal(finishCalls, 0, "waiting for a model choice must not finish the operation");
+  assert.deepEqual(state, { status: "running", currentRunId: "deep-operation-turn-1" });
 });
 
 test("deep wrapper routes single and team modes through their intended call sequences", async () => {
@@ -374,15 +375,17 @@ test("deep wrapper routes single and team modes through their intended call sequ
     } };
     const result = await runDeepIfNeeded({ run, node, conversation, data, calls, workspace });
     assert.equal(result.started, true);
-    if (mode === "single") {
-      assert.deepEqual(callsMade.map(item => item.workflow), ["world-narrative-coordinator/deep-director-planning"]);
-    } else {
-      assert.deepEqual(callsMade.map(item => item.workflow), [
-        "world-narrative-coordinator/begin-deep-operation",
-        "world-narrative-coordinator/deep-director-team-planning",
-        "world-narrative-coordinator/commit-deep-operation",
-      ]);
-      assert.deepEqual(callsMade[1].documents, { "story-context": "trigger/story-context" });
+    // Both modes register the operation first, so the identity is stable before any child runs.
+    assert.deepEqual(callsMade.map(item => item.workflow), [
+      "world-narrative-coordinator/begin-deep-operation",
+      `world-narrative-coordinator/deep-director-${mode === "team" ? "team-planning" : "planning"}`,
+      ...(mode === "team" ? ["world-narrative-coordinator/commit-deep-operation"] : []),
+    ]);
+    assert.equal(result.operationId, "deep-operation-turn-7");
+    assert.equal(callsMade[0].arguments.operationId, "deep-operation-turn-7");
+    const planningCall = callsMade[1];
+    assert.deepEqual(planningCall.documents, { "story-context": "trigger/story-context" });
+    if (mode === "team") {
       assert.deepEqual(callsMade[2].documents, { report: "team-deep-report.json", references: "team-deep-references.json", basis: "deep-publication-basis.json" });
     }
   }
@@ -392,7 +395,7 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
   const workspace = await mkdtemp(resolve(tmpdir(), "director-deep-wrapper-resume-"));
   await mkdir(resolve(workspace, "trigger/story-context"), { recursive: true });
   await writeFile(resolve(workspace, "trigger/story-context/DOCUMENTS.md"), "# Frozen story context\n", "utf8");
-  const frozenBasis = { schemaVersion: 1, operationId: "wrapper-resume-deep-operation", basisTurn: 7, deepReport: { id: "deep-report-current", revision: 1 }, references: {}, sourceMessages: [{ id: "original-message", revision: 1, turn: 6 }] };
+  const frozenBasis = { schemaVersion: 1, operationId: "deep-operation-turn-7", basisTurn: 7, deepReport: { id: "deep-report-current", revision: 1 }, references: {}, sourceMessages: [{ id: "original-message", revision: 1, turn: 6 }] };
   await writeFile(resolve(workspace, "deep-publication-basis.json"), JSON.stringify(frozenBasis), "utf8");
   const run = { id: "wrapper-resume", turn: 7 };
   const callsMade = [];
@@ -400,7 +403,7 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
     async get(request) {
       if (request.collectionId === "settings") return { value: { enabled: true, deep: { workflowMode: "team" } } };
       if (request.collectionId === "private-state") return { value: { deepRecommendation: { shouldStart: true, reasonCodes: ["resume"] } } };
-      if (request.id === "deep-state-current") return { id: request.id, revision: 2, value: { status: "running", currentRunId: "wrapper-resume-deep-operation" } };
+      if (request.id === "deep-state-current") return { id: request.id, revision: 2, value: { status: "running", currentRunId: "deep-operation-turn-7", currentChildRunId: "existing-team-child" } };
       if (request.id === "deep-report-current") return { id: request.id, revision: 1, value: { basisTurn: 0 } };
       throw new Error(`Unexpected request: ${JSON.stringify(request)}`);
     },
@@ -412,7 +415,10 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
     return { callId: `${request.workflow}-call`, outputs: {} };
   } };
   const result = await runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace });
+  // The wrapper recognises the operation as its own and reattaches to the child that is already in
+  // flight instead of abandoning it or starting a second one.
   assert.equal(result.resumed, true);
+  assert.equal(result.resumedChildRunId, "existing-team-child");
   assert.deepEqual(callsMade.map(item => item.workflow), ["world-narrative-coordinator/begin-deep-operation", "world-narrative-coordinator/deep-director-team-planning", "world-narrative-coordinator/commit-deep-operation"]);
   assert.deepEqual(JSON.parse(await readFile(resolve(workspace, "deep-publication-basis.json"), "utf8")), frozenBasis);
 });

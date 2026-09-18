@@ -62,6 +62,7 @@
           "inputAdapter": "memory-request-v1",
           "fixedArguments": { "budget": { "entityQueryLimit": 40, "initialInspectLimit": 60, "supplementalInspectLimit": 15, "informationLimit": 45, "elasticInformationLimit": 10, "possiblePerQueryLimit": 3 } },
           "exports": ["memory-context"],
+          "timeoutMs": 900000,
           "publicDescription": { "title": "基础记忆检索", "purpose": "正式推演前广泛核实已有实体、事件、关系、认知与世界状态", "limitations": "只负责检索与证据提供，不代替导演推理", "requestExample": "梳理与当前主要势力变化、未决事件和活跃角色有关的既有记录。" }
         },
         "assistants": [
@@ -73,6 +74,7 @@
             "inputAdapter": "memory-request-v1",
             "fixedArguments": { "budget": { "entityQueryLimit": 10, "initialInspectLimit": 15, "supplementalInspectLimit": 4, "informationLimit": 12, "elasticInformationLimit": 2, "possiblePerQueryLimit": 2 } },
             "exports": ["memory-context"],
+            "timeoutMs": 600000,
             "publicDescription": { "title": "定向记忆检索", "purpose": "中途核实一个明确的实体、事件、关系或认知问题", "limitations": "预算较低，不适合重新做全局检索", "requestExample": "请核实A是否知道旧案真相，以及现有记录中的证据。" }
           }
         ],

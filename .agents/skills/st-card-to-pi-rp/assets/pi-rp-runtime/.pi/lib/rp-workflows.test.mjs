@@ -667,3 +667,38 @@ test("authorizes one bounded automatic document snapshot input", () => {
   assert.equal(caller.nodes[0].workflowCalls[0].maxCalls, 1);
   assert.equal(assertWorkflowCallAllowed(caller, caller.nodes[0], target, { agent: true }), "director/pre-review");
 });
+
+test("a node declares which of its dynamic calls this turn must actually obtain", () => {
+  // The workflow author decides whether a missing retrieval is a degradation or a hard stop; the
+  // runtime only enforces the declaration, so the field has to be explicit and cross-checked.
+  const workflow = normalizeWorkflowDefinition({
+    schemaVersion: 3,
+    id: "foreground",
+    kind: "turn-background",
+    nodes: [{
+      id: "write",
+      type: "agent",
+      workflowCalls: [{ target: "memory/retrieve", maxCalls: 1 }, { target: "director/guidance" }],
+      requiredCalls: ["memory/retrieve"],
+    }],
+  });
+  assert.deepEqual(workflow.nodes[0].requiredCalls, ["memory/retrieve"]);
+  assert.deepEqual(normalizeWorkflowDefinition({
+    schemaVersion: 3,
+    id: "foreground",
+    kind: "turn-background",
+    nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "memory/retrieve" }] }],
+  }).nodes[0].requiredCalls, [], "omitting the declaration keeps every call optional");
+
+  const build = node => () => normalizeWorkflowDefinition({ schemaVersion: 3, id: "foreground", kind: "turn-background", nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "memory/retrieve" }], ...node }] });
+  assert.throws(build({ requiredCalls: ["memory/other"] }), /requiredCalls references undeclared workflowCalls target memory\/other/);
+  assert.throws(build({ requiredCalls: ["memory/retrieve", "memory/retrieve"] }), /must not contain duplicate workflow references/);
+  assert.throws(build({ requiredCalls: "memory/retrieve" }), /requiredCalls must be an array/);
+  assert.throws(build({ requiredCalls: ["retrieve"] }), /must use module-id\/workflow-id/);
+  assert.throws(() => normalizeWorkflowDefinition({
+    schemaVersion: 3,
+    id: "foreground",
+    kind: "turn-background",
+    nodes: [{ id: "work", type: "code", requiredCalls: ["memory/retrieve"] }],
+  }), /requiredCalls is supported only for agent and team nodes/);
+});

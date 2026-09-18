@@ -1854,6 +1854,10 @@
                   "label": "currentRunId"
                 },
                 {
+                  "path": "/data/currentChildRunId",
+                  "label": "currentChildRunId"
+                },
+                {
                   "path": "/data/lastTriggerTurn",
                   "label": "lastTriggerTurn"
                 },
@@ -1918,6 +1922,10 @@
                 {
                   "path": "/data/currentRunId",
                   "label": "currentRunId"
+                },
+                {
+                  "path": "/data/currentChildRunId",
+                  "label": "currentChildRunId"
                 },
                 {
                   "path": "/data/lastTriggerTurn",

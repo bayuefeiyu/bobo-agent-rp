@@ -5,6 +5,6 @@
   },
   {
     "protocolVersion": 2, "id": "deep-state-current", "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "recordType": "director.deep-state", "dataSchemaVersion": 1, "sequence": 1, "revision": 1, "status": "active", "createdAt": "2026-09-12T00:00:00.000Z", "updatedAt": "2026-09-12T00:00:00.000Z", "binding": { "messageId": null, "turn": 0 },
-    "data": { "status": "idle", "currentRunId": null, "lastTriggerTurn": null, "lastTriggerWorldTime": null, "lastCompletedTurn": null, "lastCompletedWorldTime": null, "currentReportRevision": 1, "triggerReasons": [], "failure": null }, "note": null, "provenance": {}
+    "data": { "status": "idle", "currentRunId": null, "currentChildRunId": null, "lastTriggerTurn": null, "lastTriggerWorldTime": null, "lastCompletedTurn": null, "lastCompletedWorldTime": null, "currentReportRevision": 1, "triggerReasons": [], "failure": null }, "note": null, "provenance": {}
   }
 ]

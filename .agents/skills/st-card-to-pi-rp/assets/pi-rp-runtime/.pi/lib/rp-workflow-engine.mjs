@@ -60,6 +60,10 @@ const DETERMINISTIC_FAILURE_CODES = new Set([
   "best_effort_not_allowed",
   "missing_handler",
   "invalid_processor_result",
+  // The provider refused the request because a tool schema this runtime sent is not a valid
+  // function schema. Switching models cannot repair a malformed schema, so the failure is
+  // configuration, not model output.
+  "tool_schema_invalid",
 ]);
 
 function deferred() {
@@ -105,7 +109,7 @@ export class RpWorkflowEngine {
   }
 
   snapshot() {
-    return [...this.runs.values()].map(entry => structuredClone(entry.run));
+    return [...this.runs.values()].map(entry => ({ ...structuredClone(entry.run), terminalFinalized: entry.terminalFinalized === true }));
   }
 
   blockingTurnRuns() {
@@ -223,7 +227,16 @@ export class RpWorkflowEngine {
     else if (Object.values(run.nodes).some(state => state.status === "awaiting-child")) run.status = "awaiting-child";
     const identity = workflowRuntimeIdentity(workflow);
     const instanceInput = resolveWorkflowInstanceInput(workflow, run);
-    const expectedKey = resolveInstanceKey(workflow, instanceInput, run.id);
+    // A `multiple` workflow without a `dedupeKey` is given a random unique suffix when it starts, so
+    // the persisted key is the only record of that suffix. Recomputing the key from the run id made
+    // every interrupted run of such a workflow unrestorable: `restore` threw "instance key does not
+    // match its persisted input", the host skipped the run with a warning, and its persisted record
+    // stayed non-terminal forever — a zombie run no retry could reach (RC-13). Dedupe-key and
+    // single-instance workflows ignore this argument, so their keys are still derived from input.
+    const persistedSuffix = typeof run.instanceKey === "string" && run.instanceKey.startsWith(`${identity}:`)
+      ? run.instanceKey.slice(identity.length + 1)
+      : null;
+    const expectedKey = resolveInstanceKey(workflow, instanceInput, persistedSuffix || run.id);
     const expectedFingerprint = workflowInvocationFingerprint(run.invocationIdentity || instanceInput);
     if (run.instanceKey && run.instanceKey !== expectedKey) throw new Error(`Restored workflow instance key does not match its persisted input: ${run.instanceKey}.`);
     if (run.invocationFingerprint && run.invocationFingerprint !== expectedFingerprint) throw new Error("Restored workflow invocation fingerprint does not match its persisted input.");

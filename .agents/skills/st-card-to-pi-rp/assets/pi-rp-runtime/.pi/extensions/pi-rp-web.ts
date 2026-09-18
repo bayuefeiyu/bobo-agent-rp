@@ -31,6 +31,10 @@ import { withTerminalForegroundRelease } from "../lib/rp-workflow-host.mjs";
 import { composeNodePrompt, composeWorkflowNodeDynamicContext, moveModelTailToEnd, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
 import { assertDocumentWorkspaceAgentTools, canonicalWorkflowRef, normalizeWorkflowDefinition, resolveCodeNodeRoute, resolveNodeQueryBudget, workflowTriggerMatches } from "../lib/rp-workflows.mjs";
 import { normalizeFeatureModuleManifest } from "../lib/rp-feature-modules.mjs";
+import { assertLoadableSkill } from "../lib/rp-skill-contract.mjs";
+import { describeTurnFailureReason, narrativeOutputUnavailableError, noTextOutputError } from "../lib/rp-model-failures.mjs";
+import { parseAgentJson } from "../lib/rp-agent-output.mjs";
+import { DATA_GET_PARAMETERS, DATA_GET_REQUIRED, DATA_QUERY_PARAMETERS, DATA_QUERY_REQUIRED } from "../lib/rp-data-tool-schemas.mjs";
 import { normalizeResourceCatalog } from "../lib/rp-resource-catalog.mjs";
 import { copyDocumentSet, copyWorkspaceEntry, writeCollisionSafeFile } from "../lib/rp-document-sets.mjs";
 import { tokenUsageFromMessages } from "../lib/rp-token-usage.mjs";
@@ -39,6 +43,7 @@ import { capabilityAllows, normalizeDataContract } from "../lib/rp-data-contract
 import { RpDataStore } from "../lib/rp-data-store.mjs";
 import { getDataRecord, getDataRecordHistory, queryAllData, queryData, queryDataStable } from "../lib/rp-data-query.mjs";
 import { createDataReadView, deleteDataReadView, readDataReadViewCollection, resolveDataReadViewIdentity } from "../lib/rp-data-read-view.mjs";
+import { createDataReadViewRegistry } from "../lib/rp-data-read-view-lifecycle.mjs";
 import { createDataBatchDraft, executeDataBatch, executeDataBatchOrThrow, updateDataBatchDraft } from "../lib/rp-data-changes.mjs";
 import { inspectDataImpact, inspectDataIntegrity, readDataReceipt } from "../lib/rp-data-transactions.mjs";
 import { dataValueAt } from "../lib/rp-data-index.mjs";
@@ -249,12 +254,21 @@ function recordsToWebMessages(records: RecordEnvelope[]) {
   return records.map(recordToWebMessage);
 }
 
-function parseSkillDescription(text: string, label: string) {
-  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) throw new Error(`${label} must start with YAML frontmatter.`);
-  const description = match[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
-  if (!description) throw new Error(`${label} frontmatter must contain a one-line description.`);
-  return description.replace(/^['"]|['"]$/g, "");
+/**
+ * Build a function-calling parameter schema from a JSON Schema descriptor.
+ *
+ * `Type.Unsafe` is the honest way to say "this is already JSON Schema": every provider requirement
+ * — an object root, single-operator `where` values, an integer `limit`, a nullable `cursor` — is
+ * written once in `rp-data-tool-schemas.mjs` and reaches the provider unchanged. Composing these
+ * tools out of `Type.Any()` instead produced an empty root schema and a hard 400 before the Agent
+ * ever ran.
+ */
+function toolParameters(parameters: Record<string, any>, required: readonly string[]) {
+  const requiredFields = new Set(required);
+  const properties = Object.fromEntries(
+    Object.entries(parameters).map(([name, schema]) => [name, requiredFields.has(name) ? Type.Unsafe(schema) : Type.Optional(Type.Unsafe(schema))]),
+  );
+  return Type.Object(properties, { additionalProperties: false });
 }
 
 function avatarExtension(mimeType: string) {
@@ -422,7 +436,7 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
       viewPath,
       moduleDirectory,
       skillPath,
-      skillDescription: parseSkillDescription(skillText, `${record.id}.skillFile`),
+      skillDescription: assertLoadableSkill(skillText, `${record.id}.skillFile`).description,
       workflows,
     });
   }
@@ -482,7 +496,7 @@ async function readMessageRetrievalSkill(cardDirectory: string, path: unknown, p
   const skillPath = resolveCardChild(cardDirectory, path);
   if (!skillPath) throw new Error("manifest context_skill escapes the card directory.");
   const text = await readFile(skillPath, "utf8");
-  return { path: skillPath, description: parseSkillDescription(text, "context_skill") };
+  return { path: skillPath, description: assertLoadableSkill(text, "context_skill").description };
 }
 
 /**
@@ -676,13 +690,25 @@ async function locateCardCover(cardDirectory: string, manifest: any) {
   return null;
 }
 
+/**
+ * Best-effort browser launch.
+ *
+ * Opening the browser is a convenience, never a precondition: the bridge is already listening when
+ * this runs, and the URL is reported to the user either way. Throwing here would turn "the desktop
+ * has no browser handler" (or a restricted environment that denies spawning a helper process) into a
+ * failed `/rp-web` command and a bridge nobody can reach.
+ */
 function openBrowser(url: string) {
-  if (process.platform === "win32") {
-    execFile("rundll32.exe", ["url.dll,FileProtocolHandler", url]);
-  } else if (process.platform === "darwin") {
-    execFile("open", [url]);
-  } else {
-    execFile("xdg-open", [url]);
+  try {
+    if (process.platform === "win32") {
+      execFile("rundll32.exe", ["url.dll,FileProtocolHandler", url], () => {});
+    } else if (process.platform === "darwin") {
+      execFile("open", [url], () => {});
+    } else {
+      execFile("xdg-open", [url], () => {});
+    }
+  } catch (error) {
+    console.warn(`Could not open a browser for ${url}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -708,6 +734,13 @@ function messageText(message: any): string {
     .join("\n")
     .trim();
 }
+
+/**
+ * A provider may finish a turn with no usable text. Reporting that as "no text output" hides the
+ * real reason — an HTTP 400 naming an invalid tool schema, a rate limit, a network failure — and
+ * sends the user off switching models at random. `rp-model-failures.mjs` keeps whatever the
+ * provider actually said and separates a rejected tool schema from a model-output problem.
+ */
 
 function debugMessageContent(message: any): string {
   if (typeof message?.content === "string") return message.content;
@@ -789,12 +822,14 @@ export default function (pi: ExtensionAPI) {
     if (!active || !rpRun || rpRun.workflowRunId !== runId || !rpRun.agentSettled || !rpRun.workflowCompleted) return;
     releaseRpTurn("completed", null);
   }
-  /** Short, player-readable reason for a foreground turn that produced no narrative. */
+  /**
+   * Short, player-readable reason for a foreground turn that produced no narrative.
+   *
+   * `rp-model-failures.mjs` owns the wording so the panel message and the regression that locks it
+   * cannot drift.
+   */
   function describeTurnFailure(run: any, narrativePublished: boolean): string {
-    if (run.status === "completed" && !narrativePublished) return "回合收尾节点未发布正文";
-    const failed = Object.values(run.nodes || {}).find((state: any) => ["failed", "cancelled"].includes(state?.status));
-    const error = typeof failed?.error === "string" && failed.error ? failed.error : null;
-    return error ? `${failed.id}：${error}` : `工作流以 ${run.status} 结束`;
+    return describeTurnFailureReason(run, narrativePublished);
   }
   async function ensureFeatureModuleRecords(target: ActiveBridge) {
     if (!target.recordId || !target.sessionDirectory) return;
@@ -1153,8 +1188,18 @@ export default function (pi: ExtensionAPI) {
       const sourceNode = workflow.nodes.find((candidate: any) => candidate.id === node.narrative.fromNode);
       const sourceOutput = sourceNode?.outputs?.[node.narrative.output];
       if (!sourceNode || !sourceOutput) throw new Error("Turn finalization narrative source is unavailable.");
+      // The narrative output only exists once its node completed. Reading a path that was never
+      // produced yields a bare ENOENT that hides the real failure, so name the source node and its
+      // state instead — the turn is released with the original cause still visible.
+      const sourceState = run.nodes?.[sourceNode.id];
+      if (sourceState && sourceState.status !== "completed") {
+        throw narrativeOutputUnavailableError({ nodeId: node.id, sourceNodeId: sourceNode.id, outputId: node.narrative.output, sourceState });
+      }
       const sourcePath = resolve(workflowNodeWorkspace(active.sessionDirectory, workflow.id, run.id, sourceNode.id), sourceOutput.path);
-      const content = (await readFile(sourcePath, "utf8")).trim();
+      const content = (await readFile(sourcePath, "utf8").catch((error: any) => {
+        if (error?.code !== "ENOENT") throw error;
+        throw narrativeOutputUnavailableError({ nodeId: node.id, sourceNodeId: sourceNode.id, outputId: node.narrative.output, sourceState });
+      })).trim();
       if (!content) throw new Error("The selected narrative output is empty.");
       const narrativeSource = normalizeNarrativeSource(run.nodes[sourceNode.id]?.narrativeSource, { producerKind: "agent", layer: "story" });
       const existing = active.messages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
@@ -1212,6 +1257,11 @@ export default function (pi: ExtensionAPI) {
         const destination = resolve(parentWorkspace, requested);
         const destinationRelative = relative(parentWorkspace, destination);
         if (!destinationRelative || destinationRelative.startsWith("..") || destinationRelative.includes(`..${sep}`)) throw new Error(`Output path for ${exportId} escapes the caller workspace.`);
+        // A retried child run re-exports into the same caller path. Replace the previous delivery
+        // instead of colliding with it: the caller asked this invocation for this export, the bytes
+        // are the completed run's own output, and refusing the retry would strand the parent on a
+        // path only the abandoned attempt ever wrote.
+        await rm(destination, { recursive: true, force: true });
         const sourceNode = workflow.nodes.find((candidate: any) => candidate.id === source.fromNode);
         const outputDefinition = source.output ? sourceNode?.outputs?.[source.output] : null;
         if (outputDefinition?.format === "document-set") {
@@ -1517,6 +1567,12 @@ export default function (pi: ExtensionAPI) {
     const sdk: any = await import("@earendil-works/pi-coding-agent");
     const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
     let teamControl: any = null;
+    // One recorder per node attempt: `requiredCalls` is checked against the calls this turn really
+    // made, so a retrieval the workflow declared mandatory cannot silently degrade into a narrative
+    // written from memory.
+    const requiredCalls: string[] = Array.isArray(node.requiredCalls) ? node.requiredCalls : [];
+    const calledTargets = new Set<string>();
+    const failedTargets = new Map<string, string>();
     const nodeToolFactory = {
       name: "rp-node-tools",
       hidden: true,
@@ -1608,27 +1664,36 @@ export default function (pi: ExtensionAPI) {
           async execute(_id: string, parameters: any) {
             const request = structuredClone(parameters);
             const callBinding = node.workflowCalls.find((item: any) => item.target === request.workflow);
-            if (callBinding?.documentSnapshotInput) {
-              request.documents ||= {};
-              if (request.documents[callBinding.documentSnapshotInput]) throw new Error(`Document input ${callBinding.documentSnapshotInput} is supplied automatically and cannot be overridden.`);
-              const snapshotPath = `.call-snapshots/${String(++documentSnapshotSequence).padStart(3, "0")}-${request.workflow.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-              await createDocumentWorkspaceSnapshot({
-                nodeWorkspace,
-                outputPath: snapshotPath,
-                documents: workspaceDocuments,
-                dynamicOutputs: dynamicCallOutputs,
-                currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
-                narrative: "",
-                turnContext: workflow.turnContext,
-              });
-              request.documents[callBinding.documentSnapshotInput] = snapshotPath;
+            try {
+              if (callBinding?.documentSnapshotInput) {
+                request.documents ||= {};
+                if (request.documents[callBinding.documentSnapshotInput]) throw new Error(`Document input ${callBinding.documentSnapshotInput} is supplied automatically and cannot be overridden.`);
+                const snapshotPath = `.call-snapshots/${String(++documentSnapshotSequence).padStart(3, "0")}-${request.workflow.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+                await createDocumentWorkspaceSnapshot({
+                  nodeWorkspace,
+                  outputPath: snapshotPath,
+                  documents: workspaceDocuments,
+                  dynamicOutputs: dynamicCallOutputs,
+                  currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
+                  narrative: "",
+                  turnContext: workflow.turnContext,
+                });
+                request.documents[callBinding.documentSnapshotInput] = snapshotPath;
+              }
+              const result = await task.invokeWorkflow(request, { agent: true });
+              // Only a call that actually returned counts as satisfying the declaration; the tool
+              // result the model sees still carries the failure, but the node must not be treated as
+              // having retrieved the material.
+              calledTargets.add(request.workflow);
+              for (const [id, path] of Object.entries(result.outputs || {})) {
+                if (typeof path !== "string") continue;
+                dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: `Declared output ${id} from ${request.workflow}.` });
+              }
+              return { content: [{ type: "text", text: JSON.stringify(result.outputs, null, 2) }], details: result };
+            } catch (error) {
+              failedTargets.set(request.workflow, error instanceof Error ? error.message : String(error));
+              throw error;
             }
-            const result = await task.invokeWorkflow(request, { agent: true });
-            for (const [id, path] of Object.entries(result.outputs || {})) {
-              if (typeof path !== "string") continue;
-              dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: `Declared output ${id} from ${request.workflow}.` });
-            }
-            return { content: [{ type: "text", text: JSON.stringify(result.outputs, null, 2) }], details: result };
           },
         });
         }
@@ -1638,7 +1703,7 @@ export default function (pi: ExtensionAPI) {
           name: "rp_data_query",
           label: "Query RP data",
           description: "Query authorized indexed RP data with a named return view.",
-          parameters: Type.Any(),
+          parameters: toolParameters(DATA_QUERY_PARAMETERS, DATA_QUERY_REQUIRED),
           async execute(_id: string, parameters: any) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
@@ -1653,7 +1718,7 @@ export default function (pi: ExtensionAPI) {
           name: "rp_data_get",
           label: "Read one RP record",
           description: "Read one exact authorized RP record through a named view.",
-          parameters: Type.Any(),
+          parameters: toolParameters(DATA_GET_PARAMETERS, DATA_GET_REQUIRED),
           async execute(_id: string, parameters: any) {
             const access = node.moduleAccess?.find((item: any) => item.moduleId === parameters.moduleId && item.collectionId === parameters.collectionId);
             if (!access) throw new Error(`This node has no access to ${parameters.moduleId}/${parameters.collectionId}.`);
@@ -1725,6 +1790,22 @@ export default function (pi: ExtensionAPI) {
       return active.featureModules.find(module => module.id === moduleId)?.workflows.some(candidate => canonicalWorkflowRef(candidate) === binding.target);
     });
     if (hasResolvedWorkflowCall) tools.push("rp_call");
+    // A required call that the Agent cannot even attempt is a card-authoring error. Failing before
+    // the model runs keeps it out of the "the model forgot" bucket, where another attempt would look
+    // like the remedy.
+    if (requiredCalls.length && !tools.includes("rp_call")) {
+      throw Object.assign(
+        new Error(`Node ${node.id} requires ${requiredCalls.join(", ")} but its Agent is not authorized for rp_call.`),
+        { code: "workflow_configuration_invalid" },
+      );
+    }
+    const unresolvableRequired = requiredCalls.filter(target => !node.workflowCalls.some((binding: any) => binding.target === target && active.featureModules.some(module => module.workflows.some(candidate => canonicalWorkflowRef(candidate) === target))));
+    if (unresolvableRequired.length) {
+      throw Object.assign(
+        new Error(`Node ${node.id} requires ${unresolvableRequired.join(", ")}, which this card cannot resolve.`),
+        { code: "workflow_configuration_invalid" },
+      );
+    }
     const teamSessionDirectory = node.metadata?.teamMember === true ? resolve(nodeWorkspace, ".session") : null;
     if (teamSessionDirectory) await mkdir(teamSessionDirectory, { recursive: true });
     const teamSessionPointer = teamSessionDirectory ? resolve(teamSessionDirectory, "CURRENT.txt") : null;
@@ -1757,7 +1838,20 @@ export default function (pi: ExtensionAPI) {
       }
       const assistant = [...session.messages].reverse().find((message: any) => message.role === "assistant");
       const content = messageText(assistant);
-      if (!content) throw new Error("Workflow agent returned no text output.");
+      if (!content) throw noTextOutputError({ message: assistant, label: `Workflow agent ${agent?.id || node.id}` });
+      // A workflow that declared a call as required has already decided that continuing without it
+      // is worse than failing the turn. Whether a missing retrieval is a degradation or a hard stop
+      // is the card's decision, so the runtime enforces the declaration rather than guessing.
+      if (requiredCalls.length) {
+        const missing = requiredCalls.filter(target => !calledTargets.has(target));
+        if (missing.length) {
+          const failure = failedTargets.get(missing[0]);
+          throw Object.assign(
+            new Error(`Node ${node.id} requires ${missing.join(", ")} but the Agent did not obtain ${missing.length === 1 ? "it" : "them"}${failure ? ` (${missing[0]} failed: ${failure})` : ""}.`),
+            { code: "required_call_missing" },
+          );
+        }
+      }
       if (node.metadata?.teamMember === true && typeof task.teamMember?.validateOutput === "function") {
         try { task.teamMember.validateOutput(content); }
         catch (error) {
@@ -1768,9 +1862,17 @@ export default function (pi: ExtensionAPI) {
       }
       let output: any = content;
       if (agent?.outputMode === "json") {
-        const normalized = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-        try { output = JSON.parse(normalized); }
-        catch { throw new Error(`Workflow Agent ${agent.id} must return valid JSON.`); }
+        // A JSON-mode reply may carry prose around the document. The runtime locates the JSON
+        // (whole reply, fenced block, then first balanced value) instead of demanding that the reply
+        // start with it; a real failure quotes what arrived so the retry and the panel carry evidence.
+        const parsed = parseAgentJson(content);
+        if (!parsed.ok) {
+          throw Object.assign(
+            new Error(`Workflow Agent ${agent.id} must return valid JSON (${parsed.reason}); received ${parsed.characters} characters starting: ${parsed.preview}${parsed.characters > 400 ? "…" : ""}`),
+            { code: "agent_output_not_json", output: { characters: parsed.characters, preview: parsed.preview } },
+          );
+        }
+        output = parsed.value;
       }
       for (const definition of Object.values(node.outputs || {}) as any[]) {
         if (definition.format !== "narrative") continue;
@@ -1865,7 +1967,17 @@ export default function (pi: ExtensionAPI) {
       ownerId: manifest.id,
     });
     await configProfiles.ensure();
-    const configStore = createRpConfigStore(context.cwd, cardDirectory, { profileStore: configProfiles });
+    // Module workflows are read through their owning module registry, exactly like the workflow
+    // engine does, so restore/retry/panel-default edits resolve the same definition the failed run
+    // was started from and never fabricate a duplicate top-level workflow.
+    const configStore = createRpConfigStore(context.cwd, cardDirectory, {
+      profileStore: configProfiles,
+      resolveModuleWorkflow: async (ownerModuleId: string, workflowId: string) => {
+        const owned = active?.featureModules.find(module => module.id === ownerModuleId)?.workflows.find(candidate => candidate.id === workflowId);
+        return owned ? structuredClone(owned) : null;
+      },
+    });
+
     const configToken = randomBytes(24).toString("base64url");
     await Promise.all([
       mkdir(commonSettingsDirectory, { recursive: true }),
@@ -1952,6 +2064,9 @@ export default function (pi: ExtensionAPI) {
       return result;
     };
     const nodeCompletionTurns = new Map<string, number>();
+    // Run -> shared data-read view references, rebuildable from persisted run state. Declared here
+    // because both the initial restore and resuming a saved chat rebuild it.
+    const readViewRegistry = createDataReadViewRegistry();
     const hydrateNodeCompletionTurns = async (sessionDirectory: string | null) => {
       nodeCompletionTurns.clear();
       if (!sessionDirectory) return;
@@ -1984,8 +2099,27 @@ export default function (pi: ExtensionAPI) {
             const state = parentRun.nodes?.[mapping.fromNode];
             if (!sourceNode || !output || state?.status !== "completed") throw new Error(`Trigger document ${inputId} is unavailable from ${mapping.fromNode}/${mapping.output}.`);
             if (!["turn", "session", "public"].includes(output.scope)) throw new Error(`Trigger document ${inputId} must use turn, session, or public scope.`);
-            const absolute = resolve(workflowNodeWorkspace(active.sessionDirectory, sourceWorkflow.id, parentRun.id, sourceNode.id), output.path);
-            await readFile(resolve(absolute, output.kind === "directory" ? "DOCUMENTS.md" : ""), output.kind === "directory" ? "utf8" : undefined as any);
+            // Prefer the producer's own output; accept the handoff mirror the producer published with
+            // `workspaceHandoff`, including an intentional `as` rename. Both are declared artifacts of
+            // the same completed node, so neither invents material.
+            const producerWorkspace = workflowNodeWorkspace(active.sessionDirectory, sourceWorkflow.id, parentRun.id, sourceNode.id);
+            const candidates = [
+              resolve(producerWorkspace, output.path),
+              resolve(producerWorkspace, "handoff", sourceNode.id, output.path),
+            ];
+            const rewrite = (sourceNode.workspaceHandoff?.include || []).find((item: any) => item.output === mapping.output);
+            if (typeof rewrite?.as === "string" && rewrite.as) candidates.push(resolve(producerWorkspace, "handoff", sourceNode.id, rewrite.as));
+            let absolute: string | null = null;
+            for (const candidatePath of candidates) {
+              const readable = await readFile(resolve(candidatePath, output.kind === "directory" ? "DOCUMENTS.md" : ""), output.kind === "directory" ? "utf8" : undefined as any).then(() => true, () => false);
+              if (readable) {
+                absolute = candidatePath;
+                break;
+              }
+            }
+            if (!absolute) {
+              throw new Error(`Trigger document ${inputId} was not produced: ${sourceWorkflow.id}/${sourceNode.id} declares output ${mapping.output} at ${output.path}, but no readable artifact exists there or in its handoff mirror.`);
+            }
             triggerDocuments[inputId] = {
               path: relative(active.sessionDirectory, absolute).replaceAll("\\", "/"),
               format: output.format,
@@ -2038,6 +2172,7 @@ export default function (pi: ExtensionAPI) {
         return null;
       },
       onRunStart: async ({ run }: any) => {
+        readViewRegistry.register(run);
         if (run.dataReadViewId) return null;
         if (!active?.sessionDirectory || active.recordId !== run.chatId) throw new Error("The workflow data read view has no active RP chat.");
         const store = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
@@ -2048,6 +2183,7 @@ export default function (pi: ExtensionAPI) {
           visibleThroughTurn: run.visibleThroughTurn,
           visibleThroughTime: run.readSnapshotAt,
         });
+        readViewRegistry.register({ ...run, dataReadViewId: view.viewId });
         return { dataReadViewId: view.viewId, dataReadBatchIds: run.dataReadBatchIds || [] };
       },
       executor: executeWorkflowNode,
@@ -2059,9 +2195,13 @@ export default function (pi: ExtensionAPI) {
         return finalized;
       },
       onRunTerminal: async ({ run }: any) => {
-        if (!run.callContext && run.dataReadViewId && active?.sessionDirectory && active.recordId === run.chatId) {
-          await deleteDataReadView({ sessionDirectory: active.sessionDirectory, viewId: run.dataReadViewId });
-        }
+        // A terminal parent is not the end of its descendants. Release this run's reference and
+        // delete the snapshot only when no run still reads it — a deep-director child that outlives
+        // the wrapper keeps the view it was handed.
+        if (!active?.sessionDirectory || active.recordId !== run.chatId) return;
+        const releasable = readViewRegistry.release(run.id, run.dataReadViewId);
+        if (!releasable) return;
+        await deleteDataReadView({ sessionDirectory: active.sessionDirectory, viewId: releasable });
       },
       nodeHistory: (workflowId: string, nodeId: string) => nodeCompletionTurns.get(`${workflowId}:${nodeId}`) ?? null,
       onNodeComplete: async ({ workflow, run, node, agent, binding, result }: any) => {
@@ -2128,18 +2268,24 @@ export default function (pi: ExtensionAPI) {
 
     const restoreWorkflowRuns = async (sessionDirectory: string | null) => {
       if (!sessionDirectory) return;
-      const persisted = await readFile(resolve(sessionDirectory, "workflow", "runs.jsonl"), "utf8").then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))).catch(error => {
+      // The reference graph is rebuilt from persisted runs *before* any restore, because restoring a
+      // run that is already terminal immediately runs its terminal finalization — and that
+      // finalization must see the other consumers of the same view, not just itself.
+      const persistedRuns = await readFile(resolve(sessionDirectory, "workflow", "runs.jsonl"), "utf8").then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))).catch(error => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw error;
       });
+      const latestPersisted = new Map<string, any>();
+      for (const run of persistedRuns) latestPersisted.set(run.id, run);
+      const revived = readViewRegistry.hydrate([...latestPersisted.values()]);
+      if (revived) console.log(`Data read views kept alive by ${revived} restored workflow run(s).`);
+      const persisted = persistedRuns;
       const latest = new Map<string, any>();
       for (const run of persisted) latest.set(run.id, run);
       for (const run of latest.values()) {
         if (["completed", "skipped", "failed", "cancelled"].includes(run.status)) continue;
         try {
-          const workflow = run.ownerModuleId
-            ? active.featureModules.find(module => module.id === run.ownerModuleId)?.workflows.find(candidate => candidate.id === run.workflowId)
-            : await configStore.getWorkflow(run.workflowId);
+          const workflow = await configStore.getModuleWorkflow(run.ownerModuleId || null, run.workflowId);
           if (!workflow) throw new Error(`Workflow definition was not found for ${run.ownerModuleId ? `${run.ownerModuleId}/` : ""}${run.workflowId}.`);
           for (const state of Object.values(run.nodes || {}) as any[]) {
             if (state.status === "completed") deliveredWorkflowEvents.add(`${run.id}:node:${state.id}:completed`);
@@ -2163,6 +2309,7 @@ export default function (pi: ExtensionAPI) {
             };
           }
           await active.workflowEngine.restore(workflow, run);
+          readViewRegistry.register({ ...run, terminalFinalized: undefined });
         } catch (error) {
           context.ui.notify(`Workflow run ${run.id} could not be restored: ${(error as Error).message}`, "warning");
         }
@@ -2430,14 +2577,16 @@ export default function (pi: ExtensionAPI) {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session.");
             const run = active.workflowEngine.snapshot().find((item: any) => item.id === runId);
             if (!run) throw httpError(404, "Workflow run was not found.");
-            const workflow = await configStore.getWorkflow(run.workflowId);
+            // A failed module node belongs to its owning module's workflow, not to the top-level
+            // store. Resolving by owner is what makes panel retry work for module nodes at all.
+            const workflow = await configStore.getModuleWorkflow(run.ownerModuleId || null, run.workflowId);
             if (workflow.kind === "foreground" && ["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
               throw httpError(409, "A terminal foreground turn cannot be retried in place. Fix the card or configuration, then submit a new player turn.");
             }
             const node = workflow.nodes.find((item: any) => item.id === nodeId);
             if (!node) throw httpError(404, "Workflow node was not found.");
             if (value.saveAsCardDefault === true) {
-              const editableWorkflow = await configStore.copyWorkflowToCard(run.workflowId);
+              const editableWorkflow = await configStore.copyWorkflowToCard(run.workflowId, run.ownerModuleId || null);
               const editableNode = editableWorkflow.nodes.find((item: any) => item.id === nodeId);
               if (!editableNode) throw httpError(404, "Workflow node was not found.");
               if (editableNode.type === "team" && typeof value.memberId === "string") {
@@ -3279,19 +3428,7 @@ export default function (pi: ExtensionAPI) {
     name: "rp_data_query",
     label: "Query RP data",
     description: "Query one module collection through declared indexes/content search and return only an authorized named view under the node's query budget.",
-    parameters: Type.Object({
-      moduleId: Type.String(),
-      collectionId: Type.String(),
-      recordTypes: Type.Optional(Type.Array(Type.String())),
-      where: Type.Optional(Type.Record(Type.String(), Type.Any())),
-      search: Type.Optional(Type.Object({ query: Type.String(), fields: Type.Optional(Type.Array(Type.String())) })),
-      sort: Type.Optional(Type.Array(Type.Object({ field: Type.String(), order: Type.Optional(Type.Union([Type.Literal("asc"), Type.Literal("desc")])) }))),
-      view: Type.Optional(Type.String()),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
-      maxCharacters: Type.Optional(Type.Integer({ minimum: 1 })),
-      cursor: Type.Optional(Type.String()),
-      includeInactive: Type.Optional(Type.Boolean()),
-    }),
+    parameters: toolParameters(DATA_QUERY_PARAMETERS, DATA_QUERY_REQUIRED),
     async execute(_toolCallId, parameters) {
       const { entry, node, store } = currentDataNode();
       await requireCurrentAgentTool(entry, node, "rp_data_query");
@@ -3314,7 +3451,7 @@ export default function (pi: ExtensionAPI) {
     name: "rp_data_get",
     label: "Read one RP data record",
     description: "Read one exact RP data record through an authorized named view.",
-    parameters: Type.Object({ moduleId: Type.String(), collectionId: Type.String(), id: Type.String(), view: Type.Optional(Type.String()) }),
+    parameters: toolParameters(DATA_GET_PARAMETERS, DATA_GET_REQUIRED),
     async execute(_toolCallId, parameters) {
       const { entry, node, store } = currentDataNode();
       await requireCurrentAgentTool(entry, node, "rp_data_get");

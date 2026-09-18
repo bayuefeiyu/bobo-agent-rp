@@ -2,6 +2,8 @@
 
 将本目录复制为目标卡的 `features/narrative-memory/`，在卡的 `manifest.feature_modules` 中注册 `features/narrative-memory/module.json`，再复制所需的 `agents/` 到卡的顶层目录。模块工作流保留在模块内，由 `module.json.workflowFiles` 注册；需要手动前端入口时，另行复制或保留公共运行时中的同名顶层包装工作流。复制后的内容归目标卡所有，不与本全局源包自动同步。
 
+`runtime/test/package.test.mjs` 同时支持本全局源码布局与卡内安装布局：源码态自动使用转换资产中的 `.pi/lib`，卡内态自动使用所属 `play/.pi/lib`。在其他独立测试布局中，可用绝对路径环境变量 `PI_RP_RUNTIME_LIB` 指定公共运行时库。复制模块时须保留同目录的 `runtime-test-runtime.mjs`；转换回归会把模块复制到临时 `play/cards/<id>/` 后再次运行该测试，防止重新引入源码树相对路径。
+
 导入不是机械复制。转卡或开发 Agent 必须先与用户确认：原卡哪些固定资料迁入记忆、哪些继续固定提供、每个开局使用哪份初始记录、卡内时间格式与排序算法、创作工作流中检索节点的位置、其他模块的归档来源和节点权限。
 
 创作侧使用两个对外入口：`narrative-memory/narrative-memory-reference-snapshot` 按参数确定性输出目录、有效事件时间线或两者；`narrative-memory/narrative-memory-retrieve` 从调用方 Agent 提供的自然语言 Markdown 查询清单开始，内部匹配并返回记忆 `document-set`。情景分析与查询清单生成属于调用方 Agent；查询只列实体、关系、事件、认知和知情范围等简单资料目标，推理结论仍由调用方完成。进阶正文工作流通常先固定准备有效事件时间线，再由正文 Agent 分析并动态检索，完成初步规划后才选读按需世界观。来源捕获与归档的顶层触发包装仍必须按目标卡实际模块、来源权限和一致性要求生成。

@@ -3,8 +3,11 @@ import { chmod, mkdir, readdir, readFile, rename, writeFile } from "node:fs/prom
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
+import { deriveSeed, effectiveSeedRange, intersectSeedRanges, LEGACY_SEED_RANGE, normalizeSeedRange, seedRangeLabel } from "./rp-comfyui-seed.mjs";
+import { classifyNodeErrors, describeNodeError, unrelatedStatusMessages } from "./rp-comfyui-diagnostics.mjs";
+
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const PROFILE_FIELDS = ["schemaVersion", "id", "title", "revision", "guideId", "connectionId", "workflowFile", "bindings", "prompt", "output"];
+const PROFILE_FIELDS = ["schemaVersion", "id", "title", "revision", "guideId", "connectionId", "workflowFile", "bindings", "prompt", "output", "seedRange"];
 
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
 function canonical(value) {
@@ -51,18 +54,29 @@ function cleanBindingList(value, role) {
   });
 }
 function normalizeProfile(value, directory, workflow, guide, override = null) {
-  if (!value || value.schemaVersion !== 1 || Object.keys(value).length !== PROFILE_FIELDS.length || PROFILE_FIELDS.some(key => !Object.hasOwn(value, key))) throw new Error("Profile must use the exact profile v1 field set.");
+  // `seedRange` is required for every profile this repository ships and for every newly adapted
+  // profile. A profile written before the field existed is still readable, but it is explicitly
+  // *unverified*: its seed range is whatever the legacy derivation produced, which is exactly how
+  // RC-07 shipped, so the profile reports that instead of claiming a validated range.
+  const allowedFields = PROFILE_FIELDS.filter(field => field !== "seedRange" || Object.hasOwn(value, field));
+  if (!value || value.schemaVersion !== 1 || Object.keys(value).some(key => !allowedFields.includes(key)) || allowedFields.some(key => !Object.hasOwn(value, key))) throw new Error("Profile must use the exact profile v1 field set.");
   for (const key of ["id", "guideId", "connectionId"]) if (!SAFE_ID.test(value[key] || "")) throw new Error(`Profile ${key} is invalid.`);
   if (value.workflowFile !== "workflow.api.json") throw new Error("Profile workflowFile must be workflow.api.json.");
   const bindings = Object.fromEntries(["positive", "negative", "seed", "filenamePrefix"].map(role => [role, cleanBindingList(value.bindings?.[role], role)]));
   if (!bindings.positive.length || !bindings.filenamePrefix.length) throw new Error("Profile requires positive and filenamePrefix bindings.");
   for (const [role, list] of Object.entries(bindings)) for (const binding of list) if (!Object.hasOwn(workflow?.[binding.nodeId]?.inputs || {}, binding.input)) throw new Error(`Profile ${role} binding ${binding.nodeId}.${binding.input} is missing.`);
+  const seedRange = Object.hasOwn(value, "seedRange") ? normalizeSeedRange(value.seedRange, "Profile seedRange") : null;
+  const seedBindingRanges = bindings.seed.length ? intersectSeedRanges([seedRange || LEGACY_SEED_RANGE], "Profile seed range") : null;
   const prompt = { separator: String(value.prompt?.separator ?? ", "), positivePrefix: String(value.prompt?.positivePrefix || ""), positiveSuffix: String(value.prompt?.positiveSuffix || ""), negative: String(value.prompt?.negative || "") };
   const baseProfileDigest = createHash("sha256").update(JSON.stringify(value)).digest("hex");
   const allowedOverride = override?.profileRevision === value.revision && override?.profileDigest === baseProfileDigest ? override.prompt : null;
   const effectivePrompt = allowedOverride ? { ...prompt, ...Object.fromEntries(Object.entries(allowedOverride).filter(([key, item]) => Object.hasOwn(prompt, key) && typeof item === "string")) } : prompt;
   return {
-    ...value, bindings, prompt: effectivePrompt, directory, workflow, guide,
+    ...value, bindings, seedRange, seedEffectiveRange: seedBindingRanges, prompt: effectivePrompt, directory, workflow, guide,
+    seedRangeVerified: seedRange !== null,
+    seedRangeWarning: seedRange === null
+      ? "This profile predates the seed-range contract; re-run the adaptation step to verify the bound node's seed limit."
+      : null,
     digest: baseProfileDigest,
     baseProfileDigest,
     overrideDigest: allowedOverride ? digest(allowedOverride) : null,
@@ -90,6 +104,8 @@ export function freezeComfyProfile(profile, connectionBaseUrl = profile.connecti
     prompt: structuredClone(profile.prompt),
     guide: String(profile.guide || ""),
     outputNodeIds: [...(profile.output?.nodeIds || [])],
+    seedRange: profile.seedEffectiveRange ? structuredClone(profile.seedEffectiveRange) : effectiveSeedRange(profile),
+    seedRangeVerified: profile.seedRangeVerified !== false && (profile.seedRange !== undefined || profile.seedEffectiveRange !== undefined),
   };
   snapshot.effectiveDigest = digest(snapshot);
   snapshot.snapshotId = `${snapshot.id}@${snapshot.effectiveDigest}`;
@@ -103,6 +119,32 @@ function outputRefs(history, allowedNodeIds) {
     for (const image of output?.images || []) if (image && typeof image.filename === "string") result.push({ filename: image.filename, subfolder: String(image.subfolder || ""), type: String(image.type || "output"), nodeId });
   }
   return result;
+}
+
+/**
+ * Turn a finished history record into either image references or a truthful failure.
+ *
+ * `status_str: "success"` only means the execution loop finished: a node that rejected its inputs
+ * records `execution_error` and skips its branch while unrelated branches still run, so the history
+ * can be "successful" with no image at all. Reading the node errors first turns that into a named
+ * cause instead of a vague missing-output message, and an error off the output path is reported as a
+ * warning rather than blamed for the missing image.
+ */
+function interpretHistory(history, { workflow, outputNodeIds, promptId }) {
+  const status = history?.status?.status_str;
+  if (status === "error") throw Object.assign(new Error(`ComfyUI execution failed for prompt ${promptId}.`), { code: "comfy_execution_failed", promptId });
+  const { blocking, unrelated, other } = classifyNodeErrors({ history, workflow, targetNodeIds: outputNodeIds });
+  const warnings = [...unrelated, ...other].map(describeNodeError);
+  const outputs = outputRefs(history, Array.isArray(outputNodeIds) ? outputNodeIds : []);
+  if (!blocking.length && !outputs.length && status !== "success") {
+    throw Object.assign(new Error(`ComfyUI did not finish prompt ${promptId}${status ? ` (${status})` : ""}.`), { code: "comfy_execution_failed", promptId, nodeErrors: [] });
+  }
+  if (blocking.length) {
+    const summary = blocking.map(describeNodeError).join("; ");
+    throw Object.assign(new Error(`ComfyUI skipped the image branch for prompt ${promptId}: ${summary}`), { code: "comfy_output_branch_failed", promptId, nodeErrors: blocking, warnings, status });
+  }
+  if (!outputs.length) throw Object.assign(new Error("ComfyUI completed without an adapted image output reference."), { code: "comfy_output_missing", promptId, nodeErrors: [], warnings, status });
+  return { outputs, warnings, statusMessages: unrelatedStatusMessages(history) };
 }
 function progressSocket(connection, clientId, hasToken) {
   if (hasToken || typeof globalThis.WebSocket !== "function") return null;
@@ -220,6 +262,13 @@ export function createComfyUiService({ rootDirectory, cardDirectory, featureModu
       if (!["http:", "https:"].includes(frozenUrl.protocol) || frozenUrl.username || frozenUrl.password || frozenUrl.search || frozenUrl.hash || frozenUrl.pathname !== "/") throw Object.assign(httpError(400, "Frozen ComfyUI connection URL is invalid."), { code: "comfy_pre_submit_failure" });
       const value = { ...current, baseUrl: frozenUrl.origin };
       const headers = { "content-type": "application/json", ...(value.token ? { authorization: `Bearer ${value.token}` } : {}) };
+      // The authoritative range check happens before anything is queued. Discovering an illegal seed
+      // from the history is strictly worse: ComfyUI accepts the entry, skips the save branch, and the
+      // card has to explain a submitted-but-empty render afterwards.
+      const seedRange = normalizeSeedRange(snapshot.seedRange || LEGACY_SEED_RANGE, "Frozen profile seed range");
+      if (!Number.isSafeInteger(seed) || seed < seedRange.min || seed > seedRange.max) {
+        throw Object.assign(new Error(`Seed ${seed} is outside the frozen profile range ${seedRangeLabel(seedRange)}; the bound seed node would reject it.`), { code: "comfy_pre_submit_failure", seed, seedRange });
+      }
       const workflow = structuredClone(snapshot.workflow);
       setBindings(workflow, snapshot.bindings.positive, positivePrompt);
       setBindings(workflow, snapshot.bindings.negative, negativePrompt);
@@ -266,16 +315,17 @@ export function createComfyUiService({ rootDirectory, cardDirectory, featureModu
         throw Object.assign(new Error(`ComfyUI accepted the prompt but local submission persistence failed: ${error instanceof Error ? error.message : String(error)}`), { code: "comfy_submission_uncertain", cause: error });
       }
       const history = await waitHistory(value, promptId, value.token ? { authorization: `Bearer ${value.token}` } : {}, timeoutMs, socket);
-      if (history.status?.status_str === "error") throw Object.assign(new Error(`ComfyUI execution failed for prompt ${promptId}.`), { code: "comfy_execution_failed", promptId });
-      const outputs = outputRefs(history, Array.isArray(snapshot.outputNodeIds) ? snapshot.outputNodeIds : []);
-      if (!outputs.length) throw Object.assign(new Error("ComfyUI completed without an adapted image output reference."), { code: "comfy_output_missing", promptId });
-      return { promptId, submittedAt, completedAt: new Date().toISOString(), outputs };
+      const interpreted = interpretHistory(history, { workflow: snapshot.workflow, outputNodeIds: snapshot.outputNodeIds, promptId });
+      return { promptId, submittedAt, completedAt: new Date().toISOString(), outputs: interpreted.outputs, warnings: interpreted.warnings };
     },
     async generate({ profileId, contentPrompt, chatFolder, filenamePrefix, promptId, timeoutMs = 300000, onSubmitted = null }) {
       const profile = (await profiles([profileId]))[0]; if (!profile) throw Object.assign(httpError(404, "Profile was not found."), { code: "comfy_pre_submit_failure" });
       const assembled = this.assemblePrompt(profile, contentPrompt);
-      const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
       const snapshot = profile.executionSnapshot;
+      // Even this ad-hoc path takes its seed from the frozen range: a random `Math.random()` seed can
+      // exceed the bound node's limit, which ComfyUI accepts and then reports as a successful
+      // execution with no image.
+      const seed = deriveSeed(`ad-hoc:${promptId}`, 1, snapshot.seedRange);
       const payloadDigest = digest({ snapshotId: snapshot.snapshotId, effectiveDigest: snapshot.effectiveDigest, positivePrompt: assembled.positive, negativePrompt: assembled.negative, seed, filenamePrefix, promptId });
       return this.generateFrozen({ snapshot, positivePrompt: assembled.positive, negativePrompt: assembled.negative, chatFolder, filenamePrefix, seed, payloadDigest, promptId, timeoutMs, onSubmitted });
     },
@@ -283,21 +333,17 @@ export function createComfyUiService({ rootDirectory, cardDirectory, featureModu
       const profile = (await profiles([profileId]))[0]; if (!profile) throw httpError(404, "Profile was not found.");
       const value = await connection(profile.connectionId, true);
       const history = await waitHistory(value, promptId, value.token ? { authorization: `Bearer ${value.token}` } : {}, timeoutMs);
-      if (history.status?.status_str === "error") throw Object.assign(new Error(`ComfyUI execution failed for prompt ${promptId}.`), { code: "comfy_execution_failed", promptId });
-      const outputs = outputRefs(history, Array.isArray(profile.output?.nodeIds) ? profile.output.nodeIds : []);
-      if (!outputs.length) throw Object.assign(new Error("ComfyUI completed without an adapted image output reference."), { code: "comfy_output_missing", promptId });
-      return { promptId, completedAt: new Date().toISOString(), outputs };
+      const interpreted = interpretHistory(history, { workflow: profile.workflow, outputNodeIds: profile.output?.nodeIds || [], promptId });
+      return { promptId, completedAt: new Date().toISOString(), outputs: interpreted.outputs, warnings: interpreted.warnings };
     },
-    async resumeRender({ connectionId, connectionBaseUrl, promptId, outputNodeIds = [], timeoutMs = 300000 }) {
+    async resumeRender({ connectionId, connectionBaseUrl, promptId, outputNodeIds = [], workflow = null, timeoutMs = 300000 }) {
       const current = await connection(connectionId, true);
       const frozenUrl = new URL(connectionBaseUrl);
       if (!["http:", "https:"].includes(frozenUrl.protocol) || frozenUrl.username || frozenUrl.password || frozenUrl.search || frozenUrl.hash || frozenUrl.pathname !== "/") throw httpError(400, "Frozen ComfyUI connection URL is invalid.");
       const value = { ...current, baseUrl: frozenUrl.origin };
       const history = await waitHistory(value, promptId, value.token ? { authorization: `Bearer ${value.token}` } : {}, timeoutMs);
-      if (history.status?.status_str === "error") throw Object.assign(new Error(`ComfyUI execution failed for prompt ${promptId}.`), { code: "comfy_execution_failed", promptId });
-      const outputs = outputRefs(history, Array.isArray(outputNodeIds) ? outputNodeIds : []);
-      if (!outputs.length) throw Object.assign(new Error("ComfyUI completed without an adapted image output reference."), { code: "comfy_output_missing", promptId });
-      return { promptId, completedAt: new Date().toISOString(), outputs };
+      const interpreted = interpretHistory(history, { workflow, outputNodeIds, promptId });
+      return { promptId, completedAt: new Date().toISOString(), outputs: interpreted.outputs, warnings: interpreted.warnings };
     },
     async view({ connectionId, output, preview = null }) {
       const value = await connection(connectionId, true);

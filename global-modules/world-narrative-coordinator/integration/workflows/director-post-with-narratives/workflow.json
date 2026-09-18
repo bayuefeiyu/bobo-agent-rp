@@ -26,14 +26,14 @@
       "outputs": { "candidate-set": { "path": "candidate-set", "format": "candidate-dispatch-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
       "workspaceHandoff": { "include": [{ "output": "candidate-set" }] }, "moduleAccess": [],
       "workflowCalls": ["world-narrative-coordinator/materialize-guidance", "local-scene-narrative/create-story-candidate"], "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "local" }
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "local", "triggerInputs": ["turn-context"] }
     },
     {
       "id": "dispatch-world", "type": "code", "dependsOn": ["post-director"],
       "outputs": { "candidate-set": { "path": "candidate-set", "format": "candidate-dispatch-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
       "workspaceHandoff": { "include": [{ "output": "candidate-set" }] }, "moduleAccess": [],
       "workflowCalls": ["world-narrative-coordinator/materialize-guidance", "world-scope-narrative/create-story-candidate"], "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "world" }
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/dispatch-story-candidate.mjs", "storyKind": "world", "triggerInputs": ["turn-context"] }
     },
     {
       "id": "review-candidates", "type": "code", "dependsOn": ["dispatch-local", "dispatch-world"],
@@ -43,7 +43,7 @@
       },
       "workspaceHandoff": { "include": [{ "output": "reviewed-local", "as": "reviewed-local" }, { "output": "reviewed-world", "as": "reviewed-world" }] }, "moduleAccess": [],
       "workflowCalls": ["world-narrative-coordinator/review-story-candidates"], "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-story-review.mjs" }
+      "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-story-review.mjs", "triggerInputs": ["turn-context"] }
     },
     {
       "id": "publish-local", "type": "code", "dependsOn": ["review-candidates"], "outputs": {}, "moduleAccess": [],

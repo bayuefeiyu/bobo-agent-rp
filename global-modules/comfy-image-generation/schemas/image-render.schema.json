@@ -18,6 +18,7 @@
     "negativePrompt": { "type": "string" },
     "workflowDigest": { "type": "string" },
     "outputNodeIds": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "object" } },
     "seed": { "type": ["integer", "null"], "minimum": 0 },
     "filenamePrefix": { "type": ["string", "null"] },
     "payloadDigest": { "type": ["string", "null"] },

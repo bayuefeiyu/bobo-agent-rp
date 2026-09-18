@@ -1,4 +1,32 @@
 import { createHash } from "node:crypto";
+import { access } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/**
+ * The seed contract lives beside the Web bridge that freezes and submits the same profiles, so the
+ * derivation cannot drift between the two copies. Its location differs between the repository source
+ * tree (`global-modules/<module>/runtime/`), an installed card (`<play>/cards/<card>/features/<module>/
+ * runtime/` with `<play>/.pi/lib` beside `cards/`), and the skill asset tree, so the search walks up
+ * from this module copy instead of hardcoding one depth per layout. A hardcoded depth silently missed
+ * the installed card, and every in-card generation failed with a 500 before it reached ComfyUI.
+ */
+async function loadSeedContract() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [];
+  let directory = here;
+  for (let depth = 0; depth < 6; depth += 1) {
+    candidates.push(resolve(directory, ".pi", "lib", "rp-comfyui-seed.mjs"));
+    candidates.push(resolve(directory, ".agents", "skills", "st-card-to-pi-rp", "assets", "pi-rp-runtime", ".pi", "lib", "rp-comfyui-seed.mjs"));
+    directory = resolve(directory, "..");
+  }
+  for (const candidate of candidates) {
+    if (await access(candidate).then(() => true, () => false)) return import(pathToFileURL(candidate).href);
+  }
+  throw new Error(`The ComfyUI seed contract (rp-comfyui-seed.mjs) is not reachable from this module copy (${here}).`);
+}
+
+const { deriveSeed, effectiveSeedRange } = await loadSeedContract();
 
 const MODULE_ID = "comfy-image-generation";
 const CONFIRMED_FAILURES = new Set(["comfy_execution_failed", "comfy_queue_rejected", "comfy_output_missing", "comfy_pre_submit_failure"]);
@@ -104,6 +132,10 @@ function profileSnapshot(profile) {
     prompt: structuredClone(profile.prompt || { separator: ", ", positivePrefix: "", positiveSuffix: "", negative: "" }),
     guide: String(profile.guide || ""),
     outputNodeIds: [...(profile.output?.nodeIds || profile.outputNodeIds || [])],
+    // The seed range is part of the frozen execution contract: it changes the seed this render
+    // submits, so it has to be inside the digest rather than read live at submit time.
+    seedRange: effectiveSeedRange(profile),
+    seedRangeVerified: profile.seedRange !== undefined && profile.seedRange !== null,
   };
   snapshot.effectiveDigest = profile.effectiveDigest || fingerprint(snapshot);
   snapshot.snapshotId = `${snapshot.id}@${snapshot.effectiveDigest}`;
@@ -369,12 +401,14 @@ function attemptPromptId(renderId, attemptNumber) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function attemptSeed(renderId, attemptNumber) {
-  return Number.parseInt(createHash("sha256").update(`${renderId}:seed:${attemptNumber}`).digest("hex").slice(0, 13), 16);
+function attemptSeed(renderId, attemptNumber, range) {
+  // Delegated so both copies of the runtime derivation — this module and the Web bridge — always
+  // produce the same seed for the same render and attempt.
+  return deriveSeed(renderId, attemptNumber, range);
 }
 
 function renderExecutionParameters(record, value, snapshot, attemptNumber, promptId) {
-  const seed = attemptSeed(record.id, attemptNumber);
+  const seed = attemptSeed(record.id, attemptNumber, snapshot?.seedRange);
   const filenamePrefix = `${String(value.ordinal).padStart(4, "0")}-r${String(value.renderOrdinal).padStart(2, "0")}-${value.profileId}-final`;
   const payloadDigest = fingerprint({
     snapshotId: snapshot.snapshotId,
@@ -406,7 +440,10 @@ export async function executeImageOperation({ data, services, requestId, renders
       let result;
       if ((value.state === "submitting" || value.state === "submitted") && value.promptId) {
         phase = "recovery";
-        result = await services.comfy.resumeRender({ connectionId: value.connectionId, connectionBaseUrl: value.connectionBaseUrl, promptId: value.promptId, outputNodeIds: value.outputNodeIds });
+        // The frozen workflow is passed along so a resumed history is read with the same node
+        // lineage the original submission used.
+        const recoverySnapshot = snapshots.get(value.profileSnapshotId) || null;
+        result = await services.comfy.resumeRender({ connectionId: value.connectionId, connectionBaseUrl: value.connectionBaseUrl, promptId: value.promptId, outputNodeIds: value.outputNodeIds, workflow: recoverySnapshot?.workflow || null });
       } else {
         const snapshot = snapshots.get(value.profileSnapshotId);
         if (!snapshot) throw Object.assign(new Error(`Image render ${record.id} has no recoverable frozen profile snapshot.`), { code: "comfy_pre_submit_failure" });
@@ -436,8 +473,8 @@ export async function executeImageOperation({ data, services, requestId, renders
           },
         });
       }
-      record = await transition(data, record, "completed", { outputs: result.outputs, completedAt: result.completedAt, error: null, errorKind: null, lastCheckedAt: new Date().toISOString() });
-      outcomes.push({ renderId: record.id, state: "completed", outputs: result.outputs });
+      record = await transition(data, record, "completed", { outputs: result.outputs, completedAt: result.completedAt, error: null, errorKind: null, lastCheckedAt: new Date().toISOString(), warnings: Array.isArray(result.warnings) ? result.warnings : [] });
+      outcomes.push({ renderId: record.id, state: "completed", outputs: result.outputs, warnings: Array.isArray(result.warnings) ? result.warnings : [] });
     } catch (error) {
       record = await getRender(data, record.id);
       value = renderValue(record);

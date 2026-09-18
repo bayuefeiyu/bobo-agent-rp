@@ -1,8 +1,71 @@
 # PROJECT STATUS
 
+## 2026-09-17 实卡缺陷项目级修复（P-01～P-09）
+
+已完成实卡取证，本轮据 `local-development-records/docs/REAL-CARD-TEST-2026-09-17.md` 的九条复现证据实施项目级修复：**已完成实卡取证、项目修复已落地、关键全链路已在真实 Pi + 真实模型 + 真实 ComfyUI 上跑通并取证**。第三轮实机跨 9 个后台窗口完成开场→3 个回合→回合后链路→自动归档→深度推演→卡内出图与读图，共发现并修复 8 项「只有真实链路才会暴露」的缺陷（详见修复记录 §13）；仍未跑完的项已在文末逐条列出。此前的"全部测试通过"只代表单元与静态回归，不代表实卡可用；本段之后的历史记录保留为历史。
+
+修复内容（逐项对应 RC 编号）：
+
+| 项 | 修复 |
+| --- | --- |
+| P-01 / RC-01 | 近场叙事 Skill 补齐 YAML frontmatter；Skill 头部契约抽为 `rp-skill-contract.mjs`，运行时与卡包校验器共用同一组正反例，校验检查头部而非仅文件存在。 |
+| P-02 / RC-02 | `rp_data_query`/`rp_data_get` 参数根改为真实 object schema（`rp-data-tool-schemas.mjs`），并把所有注册工具的 `parameters` 纳入回归编译检查；无文本时保留 provider 的 `stopReason`/`errorMessage`，工具 schema 被拒判为配置故障（`tool_schema_invalid`，不自动换模型）。 |
+| P-03 / RC-03 | 工作流解析统一按 `ownerModuleId + workflowId`（`getModuleWorkflow`/`resolveOwnedWorkflow`）；面板重试与"保存为默认"按所有者写入 profile 或卡内模块覆盖层，不再把模块工作流复制成顶层工作流；恢复、重试、默认保存共用同一解析逻辑。 |
+| P-04 / RC-04 | 近期故事导出改为单 operator 索引条件 + 返回记录过滤上界 + 完整分页；两份模块副本经同步脚本生成，回归使用真实 `RpDataStore` 与模块契约。 |
+| P-05 / RC-05 | 冻结触发文档统一投递到消费节点工作区内的 `trigger/<documentId>`，call/code/Agent 读到同一受控副本；每次尝试重新校验投递哈希，被改写的副本与被篡改的基线都报错；上游删除后仍可读取。 |
+| P-06 / RC-06 | 深度包装按实际启用的后置集成图映射 `story-context`，并新增 `metadata.storyContextSource`（`trigger` 必失败、`history` 仅开场/手动）；校验器逐条检查 `trigger.documents` 的 `fromNode`/`output`/作用域与 `triggerInputs` 映射；运行时投递失败时点名缺失产物。 |
+| P-07 / RC-07 | profile 新增 `seedRange`（含来源说明），随快照冻结并纳入 digest；种子仍在 `renderId`+`attemptNumber` 上确定性派生，但映射进冻结范围；范围校验在入队前完成，越界种子直接 `comfy_pre_submit_failure`；历史中的 `node_errors` 按输出分支归属区分失败与警告。 |
+| P-08 / RC-08 | 深度身份拆分为稳定 `operationId`（按触发回合派生）、外层 wrapper runId 与子 `currentChildRunId`；重启后重新接入原 invocation；共享 data-read-view 以全部活跃消费者为生命周期依据（`rp-data-read-view-lifecycle.mjs`），从持久状态重建引用图。 |
+| P-09 / RC-09 | 深度 plan 只回复 JSON，由确定性 `materialize-report` 节点校验并落盘 `deep-report.json`，再经 handoff 交给 commit；commit 重新校验同一契约函数；报告 schema、`basisTurn` 与题材规则共用 `deep-report.mjs`。 |
+
+同批诊断与失败处理：终结节点不再读取未产出的 narrative（点名源节点状态）；`requiredCalls` 让工作流显式声明必须取得的调用，缺失即失败并保留调用失败原因；`compose-memory` 按记录类型解析 `broad` 查询的合法状态，避免把模型合法输出判死；`rp-resource-catalog.test.mjs` 在源码与安装两种布局下都能解析模块路径。
+
+新增/更新的运行时与模块文件：`rp-skill-contract.mjs`、`rp-data-tool-schemas.mjs`、`rp-model-failures.mjs`、`rp-comfyui-seed.mjs`、`rp-comfyui-diagnostics.mjs`、`rp-data-read-view-lifecycle.mjs`、`deep-operation-identity.mjs`、`deep-report.mjs`、`materialize-deep-report.mjs` 及其回归测试。
+
+本轮验证：运行时库 `248 pass / 1 fail`（唯一失败是 `rp-team-runtime.test.mjs` 自带管道子进程的用例，属已知沙箱限制）、全局模块 `71/71`、Web `6/6`、真实资产自校验全部通过（含新增 6 项触发文档检查与 5 项 Skill 头部检查）、校验器单元 `15/15`、Skill 合约 `4/4`、46 个工作流定义归一化通过、故事机制同步检查通过、扩展 esbuild 转译通过。`check_release_manifest.mjs` 与 `test_validate_card_pack.py` 原生运行仍受沙箱限制（见「已知边界」）。此前快照中的旧计数保留为历史记录。
+
+隔离实机验证（真实 Pi + `deepseek/deepseek-v4-flash-vision-exp` + 真实 ComfyUI 0.34.0）已完成：Bridge 打开、开场导演初始化、turn 1 正文 `completed` 且落盘 627 字符、模块所有节点重试返回 202、卡内 `trigger/turn-context` 真实投递、重启后 3 个共享读视图被保留、以及「越界种子静默不出图 / 范围内种子产出并读取真实 PNG」的对照。实机还暴露并已修复三项旧缺陷：JSON 模式 Agent 回复只接受「以 JSON 开头」（开场导演因此每次尝试都失败）、重试的模块导出路径冲突、两份深度包装模板未声明脚本实际调用的 `begin-deep-operation`——最后一项此前会让回合后深度接入在任何模型调用前失败。**未完成**：回合后近场/广域候选→审核→发布→来源捕获→自动归档的完整链路、真实深度报告落盘与 team 深度中断恢复、卡内图片读取端点。原因是本环境单次前台命令上限 10 分钟（已实测），而单次模型调用常需 8–13 分钟，每 10 分钟必然打断一次调用；`Start-Process` 派生独立进程与 `child_process` 管道在本沙箱均不可用。逐项记录、绕行尝试与剩余限制见 `local-development-records/docs/PROJECT-REAL-CARD-REPAIR-RECORD-2026-09-17.md`。
+
+**实卡可用性**：本条写于第三轮实机之前，其结论已被第三轮取代——回合后近场/广域链路、自动记忆归档、下一轮读取、真实深度推演与中断恢复、卡内出图与图片读取端点均已在真实环境上跑通并留有持久证据（见下方「第三轮补充」与修复记录 §14）。仍**未**跑完的是 team 模式真实深度运行、旧引擎遗留僵尸记录的清理，以及面板偏好保存端点（404）；在这些项完成前不应把该卡视为「全部路径均已验收」。
+
+### 第二轮补充
+
+整备隔离环境刷新卡内集成模板时，校验器当场拦下一次「看似刷新成功、实际深度接入已断」的安装：`director-post-with-narratives` 的 `post-director` 不再声明 `story-context`，深度包装的触发器仍指向它。校验器报 `trigger.documents.story-context.output must reference an output declared by director-post-with-narratives/post-director`——这正是 P-06 新增检查的目标。补声明属**转卡动作**（只有启用近场/广域编排的卡需要），已在 `IMPORT.md` 写明并加入施工工具，补完后同一张卡重新校验为 `0 warning(s)`。静态回归在本轮结束时保持全绿（运行时库 `255/1`、模块 `71/71`、Web `6/6`、真实资产自校验全部通过、校验器单元 `15/15`、Skill 合约 `4/4`、同步与 `git diff --check` 通过）。
+
+### 第三轮补充（第二次实机运行）
+
+整备后重跑开场链路，真实模型在**深度推演**上又暴露两项缺陷，均已修并回归：
+
+- **深度报告契约强制模型自带 `schemaVersion`**：`plan` 节点的真实回复正好是文档约定的九个字段（正文 3468 字、1 个 active + 2 个 backup 题材），但没有 `schemaVersion`；旧契约要求它必须为 1，于是 `materialize-report` 判死、`commit` 变 `skipped`、子运行失败。`schemaVersion` 与 `basisTurn` 本就是运行时自己的标记，现改为「缺省即补写、显式矛盾才拒绝」。用**这次实机失败的真实回复**直接验证修复后的契约（accepted，`contentChars=3468`）并把归一化报告落盘取证。
+- **失败处理读的是「视图投影」，让「记录失败」这一步自己失败**：失败补丁是 `{...value}` 展开的，而 `value` 来自 `deep-status` **视图**——该视图恰好不含 `lastTriggerWorldTime`/`lastCompletedWorldTime`（schema 必填）。`update` 携带整条记录数据，缺字段即被 schema 拒绝，`deep-state-current` 永远停在 `running`、操作清单不关闭——此后每一轮 wrapper 都判 `already-running`，深度推演再也不会启动，**失败记录变成永久卡死**。修正分两处：失败补丁改用完整视图 `deep-director` 读取（并保留「非持有者不得覆盖」判断），两份深度包装模板的 `deep-workbench` 访问补上 `deep-director` 视图——模块内所有写入节点本来都用完整视图，只有集成包装在用只读投影写记录。回归三层：测试夹具按模块自己的 `data-contract.json` **渲染视图**并按真实 schema 校验提交（夹具返回整条记录就会与缺陷一起「通过」），断言失败补丁必须保留世界时间的**真实值**；校验器新增通用规则「持有写能力的节点必须至少有一个视图覆盖该记录类型的全部必填字段」，`test_real_asset_validation.py` 补两份模板的正反例。两处都做了突变验证：改回窄视图时测试 7 pass/1 fail、校验器报 3 条 error，恢复即全绿。
+
+同时订正一条此前记录的错误结论：**10 分钟上限只作用于前台命令，后台作业没有该上限**（本轮实测后台驱动连续运行 23 分钟并被主动终止，另有 14 分钟作业正常跑完）。「每 10 分钟必然打断一次调用」不是环境必然，完整链路应作为**后台作业**启动，Runbook 已按此改写。
+
+第三轮实机还暴露第三项缺陷（回合后近场/广域链路）：`director-post-with-narratives` 的 `dispatch-local` 在真实回合后失败，`create-story-candidate` 报 `ENOENT … dispatch-local/trigger/turn-context`，近场/广域候选与发布全部未发生。根因是 P-05 修复的漏网——触发文档现在只投递给**声明过** `metadata.triggerInputs` 的节点，而 `dispatch-story-candidate.mjs`/`run-story-review.mjs` 硬编码读取 `trigger/turn-context`，其所在节点却从未声明它（只有 `post-director` 声明了）。已给两个 dispatch 节点与 `review-candidates` 补声明，并新增通用校验规则「脚本里出现的 `trigger/<id>` 必须在 `metadata.triggerInputs` 中声明」（上线即精确命中这三个节点，修完全库为 0），`test_real_asset_validation.py` 补正反例，另加只读排查工具 `scan-trigger-inputs.mjs`。注意引擎在会话打开时缓存卡内工作流定义，**改定义后必须重启 Pi 才生效**，因此该修复在新一轮上验证。
+
+第四项缺陷（自动记忆归档）：`narrative-memory-archive` 的 `commit-archive` 报 `narrative-memory time adapter is not configured for this card.`，归档停在 `lastArchivedTurn=0 / never`。根因是**转卡半配置**：本卡的 `config/time-system.json` 已完整写明时间规则（`day-N-since-rescue-v1`、`day-a/b` 定宽排序、含示例），但实现它的 `runtime/time-adapter.mjs` 仍是模块自带的抛错占位；静态检查与开场/正文链路都不报错，直到第一个 `memory.event` 需要派生 `sortValue` 时才在确定性 code 节点失败，模型看不到也无法修。已在验收卡内按卡自己的规格补实现，并新增校验规则「声明已配置时适配器不得仍是占位、两者 `timeRuleVersion` 必须一致」（对模块源模板的自洽未配置状态保持通过），`test_real_asset_validation.py` 补四个正反例，模块 `skill/references/time-openings-and-sources.md` 补上「声明与实现必须一起完成」及后果说明。
+
+第五项缺陷（单模式深度清单泄漏）：turn 2 的深度链路全程成功后，`deep-report-current` 前进到 rev 2、`deep-state-current` 释放为 `idle`，但 `deep-operation-turn-2` 仍是 `running`——团队模式的提交会在同一原子批次里关闭清单，单模式的 `commit-deep-report` 只释放状态，而单模式包装从不调用 `finish-deep-operation`，该节点又拒绝关闭「状态已不再指向」的清单，于是**每次成功都会留下永久 `running` 的清单**（不阻塞后续回合，但工作台长期显示进行中，且无正常路径可关闭）。已让单模式提交在**同一批次**内追加清单关闭操作（仅当清单仍属本操作且为 `running`，重试不重写终态清单），回归断言第三个操作、终态与必填字段；`release-stuck-deep-operation.mjs` 同步扩展出「状态已不指向、清单仍 running」的收尾分支（按该回合是否已完成推导终态），本轮用它关闭了 `deep-operation-turn-2`。
+
+第六项缺陷（重启恢复实例键）：一次被中断的子运行（世界频道候选）重启后 `retry` 返回 404、记录永远停在 `running`——宿主恢复时报 `Restored workflow instance key does not match its persisted input`。`multiple` 且无 `dedupeKey` 的工作流其实例键后缀是**随机 UUID**，而 `restore()` 用运行 id 重算，键永远对不上。已改为按持久化键复用后缀（`dedupeKey`/`single` 模式行为不变），回归在 `rp-workflow-engine.test.mjs`（改回旧算法实测转红）。
+
+第七、八项缺陷（卡内图片链路，均为 P-07 的漏网）：① 运行时把 `seedRange`/`seedRangeVerified` 写进请求快照，但模块自己的 `image-request.schema.json` 是 `additionalProperties: false` 且没有这两个属性——**每次卡内图片请求都在到达 ComfyUI 前被自己的 schema 拒绝**；已补两个属性（不进 `required`，老记录仍可读）。② 成功出图后完成写入被子状态机拒绝：完成补丁带 `warnings`（RC-07 诊断产物），而 `render-state.mjs` 的转换白名单没有它，于是**每次成功 render 都停在 `submitted`、图片挂不到记录上**；已把 `warnings` 加入白名单与 render schema，报错改为列出具体越界字段，并新增「执行路径构造的完成补丁必须合法且字段都在 schema 中」的回归（改回旧白名单实测转红）。
+
+第九、十项缺陷（首次真实 team 深度推演暴露）：① 团队协作任务（`baseRetrieval`/`assistants`）的 `timeoutMs` 默认 **120 秒**，而一次真实记忆检索要数分钟——团队定义没声明该值时，**每次真实团队会议都会在必需基础检索上超时**（实机 `Required base retrieval failed: Assistance task timed out after 120000ms.`）；默认改为 600000 毫秒并在模板上显式声明 900000/600000，回归断言默认值可覆盖真实调用、显式值生效、非法值回退。② 检索匹配状态跨族即判死：模型把 `confirmed`（信息族状态）标在 `memory.entity` 匹配上，`compose-memory` 按查询 kind 取词表 → `Invalid match status confirmed for record type memory.entity.` → 整次检索与依赖它的团队会议一起失败，而模型看不到错误（与 RC-13 同类）；改为匹配声明了 `recordType` 时接受两族词表并集、词表外状态仍报错，回归双向覆盖。
+
+**第三轮实机验收结论**：开场、四个回合的正文、记忆检索、近场/广域故事候选→审核→发布（广域还跑出了同系列第 2 篇）、来源捕获、**自动记忆归档**（两次推进到 `lastArchivedTurn=2/3`，事件带卡内适配器派生的 `sortValue`）、**下一轮读取已发布故事**、真实深度推演（single）与中断恢复（含**团队会议的恢复尝试**）、共享读视图跨重启、以及**卡内图片生成与图片读取端点**（`GET /api/image-generation/renders/<id>/images/0` → 200 / `image/png` / 1.3 MB / PNG 魔数，内容与请求一致）均已取证通过。
+**team 链路的启动、身份与会议执行已取证**（`deep-operation-turn-5`、包装完成、`meeting` 节点产出真实发言与 17.6 KB 协调记录），并从中修掉两项真实缺陷（协作任务超时、匹配状态跨族判死）；但**完整跑完被模型账户余额阻塞**：会话记录中 9 次 `402 Insufficient Balance`，直接查询服务商 `/user/balance` 亦为 `is_available: false`、`total_balance: -0.39 CNY`（环境内 key 与 `~/.pi/agent/auth.json` 一致）。按用户决定，本轮不再继续该项；余额可用后重跑一个窗口即可（`plan-team-recover` 的恢复入口与 `set-deep-mode.mjs`/`set-deep-recommendation.mjs` 两个夹具工具已就绪）。此外仍未清理旧引擎遗留的一条僵尸运行记录，且面板偏好保存端点仍返回 404（前端用 PUT，本轮改以 `profileIds` 直接发起）。
+
+工具与闸门更新：新增 `run-node-tests.ps1`（逐文件直接运行，绕开 `node --test` 的管道子进程 `EPERM`）与 `release-stuck-deep-operation.mjs`（在真实数据存储上执行模块**自己的** `finish-deep-operation` 节点实现来解除卡死操作，不手写补丁）；补上 `refresh-acceptance-assets.ps1` 漏同步的 `integration/`（旧脚本会留下旧包装代码，足以把已修缺陷误判为未修）；`deep-director-verify.mjs` 改为按集合自身存储类型读取（`deep-workbench` 是 snapshot 集合，此前只读 record log，永远报「无报告无状态」）。
+
+当前静态回归：Node **43 文件 / 329 pass / 0 fail**（`rp-team-runtime` 需要子进程的那条按环境 `skip` 并注明原因）、隔离卡校验 `0 warning(s)`、故事机制同步无差异、校验器单元与 Skill 合约保持通过。第三轮实机重跑（开场 → 回合 1 → 回合后链路 → 回合 2 读取）正在进行，结果与本轮剩余限制见 `PROJECT-REAL-CARD-REPAIR-RECORD-2026-09-17.md`。
+
+
+本地审查报告、实施记录、诊断工具、测试日志、结果快照和临时夹具已统一归档到被 Git 忽略的 `local-development-records/`，分别位于 `docs/`、`tools/`、`logs/`、`results/` 与 `temp/`。正式发布文档继续保留在仓库根目录。
+
 ## 2026-09-17 复核修复
 
-根据 `local-development-records/REVIEW-PACK-2026-09-16.md` 的独立复核，已修复六项边界缺陷：事务以最后写入的回执作为提交标记，未确认回滚的日志阻止同批次重放；默认前台工作流只从卡内候选解析；终态前台回合保证释放且禁止脱离原回合重试；Agent/模型配置解析失败进入节点确定性失败；每个正文 Agent 都单独校验必需调用；Web 面板不再为终态前台运行提供重试入口。对应协议、运行时说明和回归测试已同步更新。
+根据 `local-development-records/docs/REVIEW-PACK-2026-09-16.md` 的独立复核，已修复六项边界缺陷：事务以最后写入的回执作为提交标记，未确认回滚的日志阻止同批次重放；默认前台工作流只从卡内候选解析；终态前台回合保证释放且禁止脱离原回合重试；Agent/模型配置解析失败进入节点确定性失败；每个正文 Agent 都单独校验必需调用；Web 面板不再为终态前台运行提供重试入口。对应协议、运行时说明和回归测试已同步更新。
 
 本轮验证：运行时库 `211/211`、Web `6/6`、全局模块与组合 `50/50`、ComfyUI 工作流工具 `2/2`、校验器单元测试 `15/15`、Skill 合约 `4/4`、真实资产自校验全部通过；扩展 esbuild 转译、故事机制同步检查、发布清单和差异检查均通过。此前快照中的旧计数保留为历史记录。
 
@@ -216,33 +279,33 @@
 2026-09-16 完成**批次 3** 修复（FIX-006b / FIX-007）：
 
 - 真实资产自校验扩到 **39 项断言**：新增 16 项设计约定/不变量用例（未声明只警告、声明后成错误、随发布资产零额外警告、四类声明自洽负例）与 2 项依赖侧车一致性用例。
-- 校验器单元测试 `14/14` 通过（本轮新增 1 个不变量形状用例，并把导演模块断言改为 warning）。**该套件在本沙箱默认跑不动**——沙箱拒绝在被接管的临时目录内部建目录——因此新增了 `local-development-records/run-validator-unit-tests.py`，把 `TemporaryDirectory` 换成工作区实现后执行原用例，见「已知边界」第 5 条。
+- 校验器单元测试 `14/14` 通过（本轮新增 1 个不变量形状用例，并把导演模块断言改为 warning）。**该套件在本沙箱默认跑不动**——沙箱拒绝在被接管的临时目录内部建目录——因此新增了 `local-development-records/tools/run-validator-unit-tests.py`，把 `TemporaryDirectory` 换成工作区实现后执行原用例，见「已知边界」第 5 条。
 - 运行时库测试 `193/194`（唯一失败为自带管道子进程的用例，属沙箱限制）；模块与组合测试 `50/50`（含导演定向 `18/18`）；Web 测试 `6/6`；`node --check public/app.js`、`sync_story_mechanics.mjs --check`、`git diff --check` 通过。
 - 校验器的三分读法（error / `design:` warning / 声明的不变量）在回归里各有正负例；`validate-module.py` 现在也会打印模块自身的警告。
 - **未执行**：`check_release_manifest.mjs`（沙箱禁止其内部 `git check-ignore`），以及真实卡转换中的端到端验证——即"改名后的前台工作流不再被模板断言误伤"只经实现与用例覆盖，未在真实转换里跑过。
 
-逐项实施记录见被忽略的 `local-development-records/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
+逐项实施记录见被忽略的 `local-development-records/docs/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
 
 2026-09-16 完成**批次 2** 修复（FIX-003 / 004 / 011）并随后修掉批次 1 引入的 FIX-015：
 
 - 运行时库测试 `193/194`（唯一失败为 `rp-team-runtime.test.mjs` 中自带管道子进程的用例，属本沙箱限制，见「已知边界」第 5 条）；其中工作流引擎 `45/45`、工作流状态机 `31/31`。
 - 根目录模块与组合测试 `50/50`；Web 测试 `6/6`；`node --check public/app.js` 通过；`git diff --check` 通过。
-- 「真实模板自校验」扩到 **20 项断言**，新增独立源码树夹具 `.tmp-module-source-validation/`：6 个随项目发布的包在**没有卡清单**的布局下全部通过，并覆盖两类假错误的负例与"卡内缺模块脚本仍须报错"的正例。`validate-module.py` 恢复通过。
+- 「真实模板自校验」扩到 **20 项断言**，新增独立源码树夹具 `local-development-records/temp/module-source-validation/`：6 个随项目发布的包在**没有卡清单**的布局下全部通过，并覆盖两类假错误的负例与“卡内缺模块脚本仍须报错”的正例。`validate-module.py` 恢复通过。
 - 新增回归：终态失败释放回合（前端 `failureKind` 分支）、确定性失败分类（代码节点 / Agent 装配前 / 带码配置错误 / 真实 provider 错误）、派发标记逐次尝试重置、调度器 `onChange` 异常不再终止进程。
 - 本批次**没有**任何端到端验证：真实 Pi 会话、真实模型与浏览器目视均未执行（见「已知边界」第 1 条）。
 
-逐项实施记录见被忽略的 `local-development-records/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
+逐项实施记录见被忽略的 `local-development-records/docs/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
 
 2026-09-16 完成全面审查后的**批次 1** 修复（FIX-001 / 002 / 005 / 006a / 012 / 013 / 014）：
 
-- 新建「真实模板自校验」回归 `scripts/test_real_asset_validation.py`：用真实资产拼装一张完整夹具卡（6 个模块 + 7 个运行时顶层工作流 + 3 个集成模板），在进程内调用校验器 CLI，覆盖各条目的正负例。**首次运行 15 项断言全部通过。**该脚本**随项目发布**，夹具建在仓库根的被忽略目录 `.tmp-card-validation/`（不使用 `tempfile`，见「已知边界」第 5 条）。
+- 新建「真实模板自校验」回归 `scripts/test_real_asset_validation.py`：用真实资产拼装一张完整夹具卡（6 个模块 + 7 个运行时顶层工作流 + 3 个集成模板），在进程内调用校验器 CLI，覆盖各条目的正负例。**首次运行 15 项断言全部通过。**该脚本**随项目发布**，夹具建在被忽略目录 `local-development-records/temp/card-validation/`（不使用 `tempfile`，见「已知边界」第 5 条）。
 - 该回归**首次运行即抓出 FIX-014**——此前无人发现，因为校验器从未与随项目发布的资产一起跑过。
 - 模块测试 `6/6`；运行时库测试 `25/26`（唯一失败为上面那条沙箱限制）。
 - 三个改动文件（`.ts` / `.mjs` / `.py`）语法检查通过；`.pi/workflow` 旧路径零残留引用。
 - 本轮同时发现并修复了两处**只有把校验器与真实资产一起跑才会暴露**的缺陷：FIX-005（绑定字段白名单与前端区域类型落后于协议）与 FIX-014（`director-health-report` 误用写能力）。
 - **该批次自身的回归在批次 2 才被发现**：FIX-002 / FIX-006a 的校验只在"卡"语境下成立，源码树自校验因此报了 12 条假错误（FIX-015）。
 
-逐项实施记录见被忽略的 `local-development-records/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
+逐项实施记录见被忽略的 `local-development-records/docs/PROJECT-REVIEW-FIX-CHECKLIST-2026-09-16.md`。
 
 2026-09-16 完成团队深度导演第二轮复核 S1—S9 的逐项修复与用户确认：
 
@@ -252,7 +315,7 @@
 - `awaiting-child` 持久记录准确子运行并保留父运行锁和 operation；目标子节点换模完成后，进程内及重启恢复均会自动接回原父链，且不创建重复子运行。
 - 历史 S1—S9 缺陷探针在对应旧行为断言处反向失败，证明九项旧缺陷不再复现。
 
-逐项实施记录见被忽略的 `local-development-records/TEAM-DEEP-DIRECTOR-SECOND-REPAIR-PROGRESS-2026-09-16.md`。
+逐项实施记录见被忽略的 `local-development-records/docs/TEAM-DEEP-DIRECTOR-SECOND-REPAIR-PROGRESS-2026-09-16.md`。
 
 2026-09-15 完成团队深度导演修复复核 R1—R9 的修复与重新验收：
 
@@ -262,7 +325,7 @@
 - 补充验证了团队 SDK 会话尝试回退、恢复时输入基线不被重写，以及提交瞬间对来源 revision 的再次校验。
 - 历史缺陷探针的 9 项“缺陷存在”断言现全部失败，逐项证明旧行为不再出现；正式正确性回归全部通过。`git diff --check` 通过。
 
-修复重新验收记录见 `local-development-records/TEAM-DEEP-DIRECTOR-REPAIR-RECHECK-ACCEPTANCE-2026-09-15.md`。
+修复重新验收记录见 `local-development-records/docs/TEAM-DEEP-DIRECTOR-REPAIR-RECHECK-ACCEPTANCE-2026-09-15.md`。
 
 2026-09-15 完成团队深度导演 F01—F14 修复后的当前工作树复核：
 
@@ -291,7 +354,7 @@
 2. **没有旧卡自动迁移。** 项目尚未发布，本轮直接升级根协议和模板。既有卡、安装运行时与 session 不会自动兼容或同步。
 3. **没有真实 ComfyUI 生成验证。** 连接、队列、history、图片代理与 profile 逻辑使用测试替身验证；真实工作流仍需按用户设备适配。
 4. **本机 PATH 中的 `python` 是 Windows Store 占位程序。** 应使用 `.cache/codex-runtimes/...` 下的解释器并加 `-X utf8`；其他机器应改用可用的 Python 3 路径。
-5. **受限 sandbox 下部分验证命令无法运行，且限制分语言。** `node --test` 会因子进程管道被拒（`spawn EPERM`）而失败——须改为逐个直接运行测试文件；但**测试体自身**开子进程的用例即使直接运行也会失败：`adapt-comfyui-workflow/scripts/workflow-tools.test.mjs` 全部 2 条、`rp-team-runtime.test.mjs` 的 `Secretary side failures…` 1 条（`actual: null` 而非预期退出码）。**建目录的限制只出现在 Python 侧**：Python 能在被接管的临时目录里建出顶层目录，但其下任何 `mkdir` 都是 `WinError 5`，因此 `test_validate_card_pack.py`（14 个用例）与 `test_inventory_card.py` 默认整份失败，**且失败原因与断言无关**——不要据此判断被测代码；Node 侧同样的 `mkdtemp` + 嵌套 `mkdir` 完全正常（数据层用例一直用它）。校验器单元测试可用 `local-development-records/run-validator-unit-tests.py` 在本地跑通（把 `TemporaryDirectory` 替换为工作区实现，用例本身不动），批次 3/4 结果均为 `14/14 OK`。`check_release_manifest.mjs` 因内部调用 `git check-ignore` 同样受限；`pi` 离线扩展加载会因在 `~/.pi/` 建锁文件失败（`EPERM`）。扩展的语法检查可用 Pi 自带的 esbuild 直接转译代替（见「常用验证命令」，**必须直接调用平台二进制**，其 `bin` 包装脚本用管道子进程，会被沙箱拒绝）。以上都需在非受限 shell 中重跑才算完整验证。
+5. **受限 sandbox 下部分验证命令无法运行，且限制分语言。** `node --test` 会因子进程管道被拒（`spawn EPERM`）而失败——须改为逐个直接运行测试文件；但**测试体自身**开子进程的用例即使直接运行也会失败：`adapt-comfyui-workflow/scripts/workflow-tools.test.mjs` 全部 2 条、`rp-team-runtime.test.mjs` 的 `Secretary side failures…` 1 条（`actual: null` 而非预期退出码）。**建目录的限制只出现在 Python 侧**：Python 能在被接管的临时目录里建出顶层目录，但其下任何 `mkdir` 都是 `WinError 5`，因此 `test_validate_card_pack.py`（14 个用例）与 `test_inventory_card.py` 默认整份失败，**且失败原因与断言无关**——不要据此判断被测代码；Node 侧同样的 `mkdtemp` + 嵌套 `mkdir` 完全正常（数据层用例一直用它）。校验器单元测试可用 `local-development-records/tools/run-validator-unit-tests.py` 在本地跑通（把 `TemporaryDirectory` 替换为工作区实现，用例本身不动），批次 3/4 结果均为 `14/14 OK`。`check_release_manifest.mjs` 因内部调用 `git check-ignore` 同样受限；`pi` 离线扩展加载会因在 `~/.pi/` 建锁文件失败（`EPERM`）。扩展的语法检查可用 Pi 自带的 esbuild 直接转译代替（见「常用验证命令」，**必须直接调用平台二进制**，其 `bin` 包装脚本用管道子进程，会被沙箱拒绝）。以上都需在非受限 shell 中重跑才算完整验证。
 6. **Skill 快速校验依赖 PyYAML。** 本轮依赖安装在仓库外的临时目录，没有写入项目。
 7. **不要用 PowerShell 文本管道处理本仓库的 UTF-8 文件。** 本机的 Windows PowerShell 会按 ANSI（CP936）读取，前导字节会吞掉后续 ASCII 字符（含换行），造成**不可逆**损毁——本轮已因此重建过一份清单文档。文件读写一律走文件工具。
 
@@ -330,7 +393,7 @@ node .agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs   # 受�
 & $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_skill_contract.py
 & $pythonExe -X utf8 global-modules/narrative-memory/scripts/validate-module.py
 # 校验器单元测试：受限环境用本地 runner（把 TemporaryDirectory 换成工作区实现），非受限环境直接跑原文件
-& $pythonExe -X utf8 local-development-records/run-validator-unit-tests.py
+& $pythonExe -X utf8 local-development-records/tools/run-validator-unit-tests.py
 & $pythonExe -X utf8 .agents/skills/st-card-to-pi-rp/scripts/test_validate_card_pack.py
 # test_inventory_card.py 在受限环境下无法建临时目录，见已知边界 5
 

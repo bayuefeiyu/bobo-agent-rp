@@ -49,11 +49,27 @@ export function createStoryMechanics(options) {
     const count = Number(run.arguments?.recentCompleteTurns);
     if (!Number.isSafeInteger(through) || !Number.isSafeInteger(count) || count < 1 || count > 50) throw new Error("throughTurn and recentCompleteTurns are required.");
     const from = Math.max(0, through - count + 1);
-    const indexItems = await queryAll(data, { ...baseQuery("creative-index"), where: { sourceTurn: { gte: from, lte: through } } });
+    // A range is two bounds, but one index condition carries exactly one operator. Narrow on the
+    // lower bound through the index and apply the upper bound to the returned records, walking every
+    // page so a later page inside the window is never missed. `sourceTurn` is also the sort field,
+    // which keeps pages contiguous over the index this filter uses.
+    const matches = [];
+    const seenCursors = new Set();
+    let cursor = null;
+    do {
+      const page = await data.query({ ...baseQuery("creative-index"), where: { sourceTurn: { gte: from } }, sort: [{ field: "sourceTurn", order: "asc" }], cursor, limit: 200, maxCharacters: 500000 });
+      for (const item of page.items || []) {
+        const sourceTurn = Number(item.value?.sourceTurn);
+        if (Number.isSafeInteger(sourceTurn) && sourceTurn >= from && sourceTurn <= through) matches.push(item);
+      }
+      cursor = page.nextCursor || null;
+      if (cursor && seenCursors.has(cursor)) throw new Error("Recent-story pagination repeated a cursor.");
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
     const root = resolve(workspace, "stories");
     await mkdir(resolve(root, "full"), { recursive: true });
     const entries = [];
-    for (const item of indexItems) {
+    for (const item of matches) {
       const full = await data.get({ moduleId, collectionId, id: item.id, view: "creative-full" });
       const path = `full/${item.id}.json`;
       await writeFile(resolve(root, path), `${JSON.stringify(full, null, 2)}\n`, "utf8");

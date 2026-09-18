@@ -5,11 +5,12 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { RpDataStore } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-store.mjs";
 import { executeDataBatch } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-changes.mjs";
-import { queryData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-query.mjs";
+import { getDataRecord, queryAllData, queryData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-query.mjs";
 
 import { execute as validateLocal } from "../workflow/validate-candidate.mjs";
 import { execute as validateWorld } from "../../../world-scope-narrative/runtime/workflow/validate-candidate.mjs";
 import { execute as assemble } from "../../../world-narrative-coordinator/runtime/workflow/assemble-reviewed-stories.mjs";
+import { execute as exportRecent } from "../workflow/export-recent-stories.mjs";
 import { latestBusinessRecord, queryAll } from "../lib/data.mjs";
 
 async function draft(root, module) {
@@ -84,6 +85,94 @@ test("the public sorter keeps story sequence separate from envelope insertion or
   const data = { query: request => queryData(store, request, constraints) };
   const latest = await latestBusinessRecord(data, { moduleId: "local-scene-narrative", collectionId: "story-publications", recordTypes: ["local-narrative.story"], view: "publish" });
   assert.equal(latest.value.sequence, 701);
+});
+
+// RC-04: `exportRecentStories` wrote `{sourceTurn:{gte:from,lte:through}}` into one index
+// condition. The public query contract allows exactly one operator per index, so the first turn of
+// every session failed with "Query condition sourceTurn must contain exactly one operator." before
+// the narrative Agent ever ran. These cases exercise the real RpDataStore and the module's own
+// data contract — a permissive query mock would happily accept the illegal `where`.
+async function storyStore(prefix, t) {
+  const sessionDirectory = await mkdtemp(resolve(tmpdir(), prefix));
+  t.after(() => rm(sessionDirectory, { recursive: true, force: true }));
+  const moduleDirectory = resolve(process.cwd(), "global-modules/local-scene-narrative");
+  const contract = JSON.parse(await readFile(resolve(moduleDirectory, "data-contract.json"), "utf8"));
+  const store = new RpDataStore({ sessionDirectory, modules: [{ contract, moduleDirectory }] });
+  await store.initialize();
+  // The creative read grants exactly the two views `export-recent-stories` consumes, which is what
+  // the module's own workflow node declares; anything else would make the test pass for the wrong
+  // reason.
+  return { store, moduleDirectory, constraints: { capabilities: ["local-story.creative.read"], views: ["creative-index", "creative-full"], runtimeLimit: 50, runtimeCharacters: 500000, nodeLimit: 50, nodeCharacters: 500000 } };
+}
+
+async function publishStory(store, id, sourceTurn, sequence) {
+  const data = { storyId: id, seriesId: "series-main", sequence, sourceTurn, timeRange: { start: "早", end: "晚" }, locations: ["城门"], characters: [], importantEntities: [], summary: `${id} 摘要`, content: `${id} 全文`, originStoryId: null, candidateId: `candidate-${id}`, approval: { authority: "director", runId: "run-1", decision: "accept-original" } };
+  const receipt = await executeDataBatch(store, { protocolVersion: 1, batchId: `create-${id}`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `create-${id}`, moduleId: "local-scene-narrative", collectionId: "story-publications", recordType: "local-narrative.story", action: "create", targetId: id, data }] }, { access: [{ moduleId: "local-scene-narrative", collectionId: "story-publications", capabilities: ["local-story.publish"], views: ["publish"] }], context: { binding: { turn: sourceTurn, messageId: null } } });
+  assert.equal(receipt.status, "committed");
+}
+
+function storyReader(store, constraints, pageCharacters = 500000) {
+  return {
+    query: request => queryData(store, request, { ...constraints, runtimeCharacters: pageCharacters, nodeCharacters: pageCharacters }),
+    get: request => getDataRecord(store, request, constraints),
+    queryAll: (request, page) => queryAllData(store, request, constraints, page),
+  };
+}
+test("recent-story export succeeds on an empty collection", async t => {
+  const { store, constraints } = await storyStore("rp-story-empty-", t);
+  const workspace = await mkdtemp(resolve(tmpdir(), "rp-story-export-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const result = await exportRecent({ run: { arguments: { throughTurn: 3, recentCompleteTurns: 5 } }, workspace, data: storyReader(store, constraints) });
+  assert.deepEqual(result, { count: 0, fromTurn: 0, throughTurn: 3 });
+  assert.deepEqual(JSON.parse(await readFile(resolve(workspace, "stories", "story-index.json"), "utf8")), []);
+});
+
+test("recent-story export applies both turn bounds and drops stories after throughTurn", async t => {
+  const { store, constraints } = await storyStore("rp-story-bounds-", t);
+  // Turn 0 is the lower boundary, turn 2 the upper one, turn 3 must be excluded.
+  for (const [id, turn, sequence] of [["s-0", 0, 1], ["s-1", 1, 2], ["s-2", 2, 3], ["s-9", 3, 4]]) await publishStory(store, id, turn, sequence);
+  const workspace = await mkdtemp(resolve(tmpdir(), "rp-story-export-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const result = await exportRecent({ run: { arguments: { throughTurn: 2, recentCompleteTurns: 3 } }, workspace, data: storyReader(store, constraints) });
+  assert.deepEqual(result, { count: 3, fromTurn: 0, throughTurn: 2 });
+  const index = JSON.parse(await readFile(resolve(workspace, "stories", "story-index.json"), "utf8"));
+  assert.deepEqual(index.map(item => item.id).sort(), ["s-0", "s-1", "s-2"]);
+  for (const item of index) {
+    const full = JSON.parse(await readFile(resolve(workspace, "stories", item.document), "utf8"));
+    assert.equal(full.value.content, `${item.id} 全文`);
+  }
+});
+
+test("recent-story export walks every page of a bounded window", async t => {
+  const { store, constraints } = await storyStore("rp-story-pages-", t);
+  for (let turn = 0; turn < 24; turn += 1) await publishStory(store, `s-${String(turn).padStart(2, "0")}`, turn, turn + 1);
+  const workspace = await mkdtemp(resolve(tmpdir(), "rp-story-export-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  // One record per page: the character budget forces a cursor on every call, so a single-page
+  // implementation would silently return one story instead of the whole window.
+  const data = storyReader(store, constraints, 150);
+  const result = await exportRecent({ run: { arguments: { throughTurn: 9, recentCompleteTurns: 4 } }, workspace, data });
+  assert.deepEqual(result, { count: 4, fromTurn: 6, throughTurn: 9 });
+  const index = JSON.parse(await readFile(resolve(workspace, "stories", "story-index.json"), "utf8"));
+  assert.deepEqual(index.map(item => item.id), ["s-06", "s-07", "s-08", "s-09"]);
+});
+
+test("recent-story export copies the full text of every windowed record", async t => {
+  const { store, constraints } = await storyStore("rp-story-budget-", t);
+  for (let turn = 10; turn < 14; turn += 1) await publishStory(store, `s-${turn}`, turn, turn + 1);
+  const workspace = await mkdtemp(resolve(tmpdir(), "rp-story-export-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  // A node budget smaller than the window still returns the records the budget covers; the export
+  // reports what it actually wrote rather than claiming a complete window.
+  const data = storyReader(store, { ...constraints, runtimeLimit: 2 });
+  const result = await exportRecent({ run: { arguments: { throughTurn: 12, recentCompleteTurns: 10 } }, workspace, data });
+  assert.deepEqual(result, { count: 3, fromTurn: 3, throughTurn: 12 });
+  const index = JSON.parse(await readFile(resolve(workspace, "stories", "story-index.json"), "utf8"));
+  for (const item of index) {
+    const full = JSON.parse(await readFile(resolve(workspace, "stories", item.document), "utf8"));
+    assert.equal(full.value.content, `${item.id} 全文`);
+    assert.equal(full.value.summary, undefined, "the creative-full view intentionally omits summaries");
+  }
 });
 
 test("installed story modules use synchronized generated mechanics", async () => {

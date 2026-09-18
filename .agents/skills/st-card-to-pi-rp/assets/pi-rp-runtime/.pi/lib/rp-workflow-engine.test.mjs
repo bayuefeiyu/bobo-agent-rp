@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { RpWorkflowEngine } from "./rp-workflow-engine.mjs";
@@ -420,6 +421,35 @@ test("terminal lifecycle finalization runs once for completion and cancellation"
   assert.deepEqual(finalized, [["complete", "completed"], ["cancel", "cancelled"]]);
 });
 
+test("an interrupted multiple-instance run restores with the unique key it was started with", async () => {
+  // `multiple` workflows without a dedupeKey get a random unique suffix at start, so the persisted
+  // instance key is the only record of it. Recomputing the key from the run id made restore throw
+  // "instance key does not match its persisted input": the host skipped the run, left it non-terminal
+  // on disk, and no retry could reach it. Observed with an interrupted near/world story candidate.
+  const workflow = {
+    schemaVersion: 3, id: "restore-multiple", kind: "global-background",
+    instancePolicy: { mode: "multiple", maxConcurrentInstances: 4 },
+    nodes: [{ id: "write", type: "agent" }],
+  };
+  let dispatched = false;
+  const engine = new RpWorkflowEngine({ executor: async () => { dispatched = true; return new Promise(() => {}); } });
+  const started = await engine.start(workflow, { id: "restore-multiple-run" });
+  const interrupted = structuredClone(started);
+  interrupted.nodes.write.status = "running";
+  interrupted.nodes.write.attempts = [{ attempt: 1, status: "running" }];
+  interrupted.status = "running";
+  // A child invocation (`calls.invoke`) computes the key without a unique id, so a multiple-mode
+  // workflow without a dedupeKey gets a random suffix that only the persisted run records.
+  interrupted.instanceKey = `top-level/restore-multiple:${randomUUID()}`;
+
+  const restoredEngine = new RpWorkflowEngine({ executor: async () => new Promise(() => {}) });
+  const restored = await restoredEngine.restore(workflow, interrupted);
+  assert.equal(restored.instanceKey, interrupted.instanceKey, "the persisted unique key is reused, not recomputed from the run id");
+  assert.equal(restored.nodes.write.status, "awaiting-model-choice");
+  assert.equal(restored.nodes.write.error, "interrupted_by_runtime_restart");
+  assert.equal(dispatched, false, "restoring never re-runs a node by itself");
+  restoredEngine.cancel(restored.id, "test cleanup");
+});
 test("a failed terminal finalization is retried after restoring the terminal run", async () => {
   const workflow = { schemaVersion: 3, id: "restore-finalization", kind: "global-background", nodes: [{ id: "task", type: "code" }] };
   const firstEngine = new RpWorkflowEngine({ executor: async () => ({ output: "ok" }), onRunTerminal: async () => { throw new Error("temporary finalizer failure"); } });

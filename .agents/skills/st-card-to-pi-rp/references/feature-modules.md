@@ -1,4 +1,4 @@
-# Card feature modules v5
+# Card feature modules v6
 
 Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md) first. For ownership, retrieval, mutation, and workflow-access decisions, follow the sibling [data-design Skill](../../design-pi-rp-data/SKILL.md). This reference covers only conversion-specific module placement. A module is an authored data owner and capability provider. It may contain multiple collections and record types; it no longer owns a separate storage protocol, retrieval policy, catalog, post-narrative-output engine, or variable transport.
 
@@ -16,6 +16,8 @@ features/<module-id>/
     ├── SKILL.md
     └── references/
 ```
+
+`skill/SKILL.md` must open with YAML frontmatter carrying a one-line `name` and a one-line `description`; the runtime reads that description into every Agent's fixed module routing and refuses to open the card when it is missing. See [validation.md](validation.md#loadable-skill-headers) for the exact contract.
 
 A project-global package may additionally carry `dependencies.json` next to `module.json` when something outside the module drives it; see [global-modules.md](global-modules.md) for that record and the conversion-time choice it exists to disclose. It is a project-global source record, not part of the module v6 contract, and validation never reads it.
 

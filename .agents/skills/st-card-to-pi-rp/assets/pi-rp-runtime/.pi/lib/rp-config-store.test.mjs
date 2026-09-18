@@ -99,6 +99,81 @@ test("prefers a card workflow copy over the global template", async () => {
   assert.equal((await store.getWorkflow("standard")).title, "Card");
 });
 
+// RC-03: panel retry resolved the failed node's workflow through the top-level store only, so a
+// module-owned node answered `Workflow post-director-update was not found in the card or the shared
+// runtime`, and "save as card default" copied the module workflow into the top-level store.
+const moduleWorkflows = {
+  "post-director-update": {
+    schemaVersion: 3,
+    id: "post-director-update",
+    ownerModuleId: "world-narrative-coordinator",
+    kind: "module-external",
+    title: "Post director",
+    interface: { inputs: {}, exports: {} },
+    nodes: [{ id: "review", type: "agent", modelId: "authored-model" }, { id: "return", type: "workflow-return", dependsOn: ["review"], exports: {} }],
+  },
+  "post-director-review": {
+    schemaVersion: 3,
+    id: "post-director-update",
+    ownerModuleId: "narrative-memory",
+    kind: "module-external",
+    title: "Same id, other owner",
+    interface: { inputs: {}, exports: {} },
+    nodes: [{ id: "review", type: "agent", modelId: "other-owner-model" }, { id: "return", type: "workflow-return", dependsOn: ["review"], exports: {} }],
+  },
+};
+
+function testStoreWithModules(root, extra = {}) {
+  return createRpConfigStore(root, resolve(root, "cards", "demo"), {
+    secretCacheDirectory: resolve(root, "system-cache"),
+    resolveModuleWorkflow: async (ownerModuleId, workflowId) => {
+      if (workflowId !== "post-director-update") return null;
+      if (ownerModuleId === "world-narrative-coordinator") return structuredClone(moduleWorkflows["post-director-update"]);
+      if (ownerModuleId === "narrative-memory") return structuredClone(moduleWorkflows["post-director-review"]);
+      return null;
+    },
+    ...extra,
+  });
+}
+
+test("resolves a module workflow through its owner instead of the top-level store", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const store = testStoreWithModules(root);
+  await store.ensure();
+  const workflow = await store.getModuleWorkflow("world-narrative-coordinator", "post-director-update");
+  assert.equal(workflow.id, "post-director-update");
+  assert.equal(workflow.ownerModuleId, "world-narrative-coordinator");
+  // The same workflowId under another owner is a different definition and must not be substituted.
+  const other = await store.getModuleWorkflow("narrative-memory", "post-director-update");
+  assert.equal(other.ownerModuleId, "narrative-memory");
+  assert.equal(other.title, "Same id, other owner");
+  await assert.rejects(() => store.getModuleWorkflow(null, "post-director-update"), /was not found in the card or the shared runtime/);
+  await assert.rejects(() => store.getModuleWorkflow("world-narrative-coordinator", "missing"), /was not found in the loaded card modules/);
+  await assert.rejects(() => store.getModuleWorkflow(null, "post-director-update"), /was not found in the card or the shared runtime/);
+});
+
+test("saving a module workflow default writes an owner-scoped override, never a top-level copy", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const store = testStoreWithModules(root);
+  await store.ensure();
+  const editable = await store.copyWorkflowToCard("post-director-update", "world-narrative-coordinator");
+  editable.nodes.find(node => node.id === "review").modelId = "chosen-model";
+  await store.saveCardWorkflow(editable);
+
+  const overridesPath = resolve(root, "cards", "demo", "module-workflow-overrides.json");
+  const overrides = JSON.parse(await readFile(overridesPath, "utf8"));
+  assert.deepEqual(Object.keys(overrides.workflows), ["world-narrative-coordinator/workflow/post-director-update"]);
+  await assert.rejects(() => readFile(resolve(root, "cards", "demo", "workflows", "post-director-update", "workflow.json"), "utf8"), /ENOENT/);
+
+  const reloaded = await store.getModuleWorkflow("world-narrative-coordinator", "post-director-update");
+  assert.equal(reloaded.nodes.find(node => node.id === "review").modelId, "chosen-model");
+  // The other owner keeps its authored definition.
+  const untouched = await store.getModuleWorkflow("narrative-memory", "post-director-update");
+  assert.equal(untouched.nodes.find(node => node.id === "review").modelId, "other-owner-model");
+  // And the top-level store still reports the module workflow as absent.
+  await assert.rejects(() => store.getWorkflow("post-director-update"), /was not found in the card or the shared runtime/);
+});
+
 test("keeps module workflows out of the top-level workflow store", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
   const store = testStore(root);
@@ -110,7 +185,8 @@ test("keeps module workflows out of the top-level workflow store", async () => {
     kind: "module-external",
     interface: { inputs: {}, exports: {} },
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
-  }), /cannot be saved as top-level/);
+  }), /cannot be resolved: the card has no feature-module registry/);
+  await assert.rejects(() => readFile(resolve(root, "cards", "demo", "workflows", "lookup", "workflow.json"), "utf8"), /ENOENT/);
 });
 
 test("applies an active named profile without rewriting authored Agent and model files", async () => {

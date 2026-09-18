@@ -120,6 +120,51 @@ def require_file(root: Path, value: Any, label: str, errors: list[str]) -> None:
         errors.append(f"{label} does not exist: {value}")
 
 
+# Loadable Skill contract, mirrored from the runtime `rp-skill-contract.mjs`. Both the extension
+# and this validator read the same two facts, so the same positive and negative fixtures in
+# `test_real_asset_validation.py` and `rp-skill-contract.test.mjs` guard against rule drift.
+SKILL_DESCRIPTION_LIMIT = 1024
+SKILL_FRONTMATTER = re.compile(r"^---\r?\n(?P<body>.*?)(?:\r?\n)?^---(?:\r?\n|$)", re.DOTALL | re.MULTILINE)
+
+
+def _skill_scalar(body: str, field: str) -> str | None:
+    match = re.search(rf"^{field}:[ \t]*(.*?)[ \t]*$", body, re.MULTILINE)
+    if match is None:
+        return None
+    raw = match.group(1).strip()
+    if not raw or raw in {"|", ">", "|-", ">-"}:
+        return None
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        raw = raw[1:-1].strip()
+    return raw or None
+
+
+def validate_skill_frontmatter(root: Path, value: Any, label: str, errors: list[str]) -> None:
+    """Require the header that makes a Skill loadable, not merely the presence of the file."""
+    if not safe_relative_path(value):
+        return
+    path = root / value
+    if not path.is_file():
+        return
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as error:
+        errors.append(f"{label} cannot be read: {error}")
+        return
+    match = SKILL_FRONTMATTER.match(text.replace("\r\n", "\n"))
+    if match is None:
+        errors.append(f"{label} must start with YAML frontmatter")
+        return
+    body = match.group("body")
+    if not _skill_scalar(body, "name"):
+        errors.append(f"{label} frontmatter must contain a one-line name")
+    description = _skill_scalar(body, "description")
+    if not description:
+        errors.append(f"{label} frontmatter must contain a one-line description")
+    elif len(description) > SKILL_DESCRIPTION_LIMIT:
+        errors.append(f"{label} frontmatter description must be at most {SKILL_DESCRIPTION_LIMIT} characters")
+
+
 def declared_frontend_module_ids(root: Path, manifest: Any) -> set[str]:
     result: set[str] = set()
     if not isinstance(manifest, dict) or not isinstance(manifest.get("feature_modules"), list):
@@ -536,6 +581,52 @@ def validate_resource_catalog(module_root: Path, catalog: Any, module_id: str, l
             errors.append(f"{label} contains an unlisted resource document: {path}")
 
 
+def validate_time_adapter(module_root: Path, label: str, errors: list[str]) -> None:
+    """The card's documented time rule and the adapter that implements it must agree.
+
+    `narrative-memory` ships `config/time-system.json` unconfigured plus a `runtime/time-adapter.mjs`
+    whose exports throw. A conversion that fills in the JSON — format, granularity, sort algorithm,
+    examples — but leaves the adapter as the stub looks complete and passes every other check, then
+    fails on the *first archived event*: the memory batch validator derives `sortValue` through the
+    adapter and the archive stops with "time adapter is not configured for this card". Comparing the
+    two files catches that mismatch at conversion time instead.
+    """
+    declaration_path = module_root / "config" / "time-system.json"
+    adapter_path = module_root / "runtime" / "time-adapter.mjs"
+    if not declaration_path.is_file() or not adapter_path.is_file():
+        return
+    try:
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8-sig"))
+        adapter_text = adapter_path.read_text(encoding="utf-8-sig")
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"{label} time system could not be read: {error}")
+        return
+    if not isinstance(declaration, dict):
+        errors.append(f"{label} config/time-system.json must be a JSON object")
+        return
+    declared_version = declaration.get("timeRuleVersion")
+    configured = declaration.get("configured") is True
+    exported = re.search(r'timeRuleVersion\s*=\s*"([^"]*)"', adapter_text)
+    exported_version = exported.group(1) if exported else None
+    if configured and (not isinstance(declared_version, str) or not declared_version or declared_version == "unconfigured"):
+        errors.append(f"{label} config/time-system.json declares configured time rules but no timeRuleVersion")
+        return
+    if exported_version is None:
+        errors.append(f"{label} runtime/time-adapter.mjs must export a literal timeRuleVersion")
+        return
+    if configured and exported_version == "unconfigured":
+        errors.append(
+            f"{label} documents time rule {declared_version!r} in config/time-system.json but runtime/time-adapter.mjs is still the unconfigured stub; "
+            "a card that archives an event would fail with 'time adapter is not configured for this card'"
+        )
+        return
+    if configured and exported_version != declared_version:
+        errors.append(f"{label} runtime/time-adapter.mjs exports timeRuleVersion {exported_version!r} but config/time-system.json declares {declared_version!r}")
+        return
+    if not configured and exported_version != "unconfigured":
+        errors.append(f"{label} runtime/time-adapter.mjs implements {exported_version!r} but config/time-system.json is not configured")
+
+
 def validate_feature_modules(root: Path, values: Any, errors: list[str], warnings: list[str] | None = None) -> None:
     warnings = warnings if warnings is not None else []
     if not isinstance(values, list):
@@ -571,6 +662,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
         ids.add(module_id)
         if module.get("basedOn") is not None and (not isinstance(module.get("basedOn"), str) or not safe_id.fullmatch(module["basedOn"])):
             errors.append(f"{label}.basedOn must be null or a safe module ID")
+        validate_time_adapter(module_root, f"{label} ({module_id})", errors)
         if module.get("surface") not in {"frontend", "background"}:
             errors.append(f"{label}.surface is invalid")
         module_kind = module.get("moduleKind")
@@ -591,6 +683,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
             errors.append(f"{label} contextOrder and displayOrder must be integers")
         for field in ("skillFile",):
             require_file(module_root, module.get(field), f"{label}.{field}", errors)
+            validate_skill_frontmatter(module_root, module.get(field), f"{label}.{field}", errors)
         for field in ("dataContractFile", "resourceCatalogFile", "frontendViewFile"):
             if module.get(field) is not None:
                 require_file(module_root, module.get(field), f"{label}.{field}", errors)
@@ -1135,6 +1228,30 @@ def validate_module_call_surface(
                 if any(category not in declared_categories for category in allowed_arguments["categories"]):
                     errors.append(f"{call_label}.allowedArguments.categories contains an undeclared resource category")
 
+        # `requiredCalls` is the card's statement that a turn must not proceed without this material.
+        # The runtime enforces it at node end, so an undeclared target would only fail during play.
+        required_calls = node.get("requiredCalls", [])
+        if not isinstance(required_calls, list):
+            errors.append(f"{node_label}.requiredCalls must be an array")
+        else:
+            if required_calls and node_type not in {"agent", "team"}:
+                errors.append(f"{node_label}.requiredCalls is supported only for agent and team nodes")
+            declared_targets = {
+                binding if isinstance(binding, str) else binding.get("target")
+                for binding in workflow_calls if isinstance(binding, (str, dict))
+            } if isinstance(workflow_calls, list) else set()
+            seen_required: set[str] = set()
+            for required_index, required in enumerate(required_calls):
+                required_label = f"{node_label}.requiredCalls[{required_index}]"
+                if not isinstance(required, str) or not required:
+                    errors.append(f"{required_label} must be a module/workflow reference")
+                    continue
+                if required in seen_required:
+                    errors.append(f"{node_label}.requiredCalls contains duplicate target {required}")
+                seen_required.add(required)
+                if required not in declared_targets:
+                    errors.append(f"{required_label} references undeclared workflowCalls target {required}")
+
 
 def foreground_design_problems(label: str, by_id: dict[str, Any], ancestors_for, checks: dict[str, Any]) -> list[str]:
     """Design-convention findings for one foreground workflow.
@@ -1166,6 +1283,61 @@ def foreground_design_problems(label: str, by_id: dict[str, Any], ancestors_for,
                 if target not in exposed:
                     problems.append(f"{label} narrative Agent must expose {target}; node {node.get('id', '<unknown>')} does not")
     return problems
+
+
+# Actions that change a record's data. A node holding any of them must be able to read the whole
+# record, because the runtime validates the updated record against its schema.
+WRITE_ACTIONS = {"create", "update", "append", "revise", "archive", "restore", "delete"}
+REQUIRED_FIELD_CACHE: dict[str, list[str]] = {}
+# A node script reading a staged trigger document. The runtime stages them at `trigger/<id>`, so the
+# path literal is the declaration the node owes `metadata.triggerInputs`.
+TRIGGER_DOCUMENT_READ = re.compile(r"""["'`]trigger/([A-Za-z0-9._-]+)""")
+
+
+def capability_actions(capabilities: Any, contract_capabilities: Any) -> set[str]:
+    if not isinstance(capabilities, list) or not isinstance(contract_capabilities, dict):
+        return set()
+    return {
+        action
+        for capability_id in capabilities
+        for action in (contract_capabilities.get(capability_id) or {}).get("actions", [])
+        if isinstance(action, str)
+    }
+
+
+def required_record_fields(root: Path, module_id: str, definition: dict[str, Any]) -> set[str]:
+    """The top-level properties a record of this type must carry, from its own schema file."""
+    schema_file = definition.get("schemaFile")
+    if not isinstance(schema_file, str) or not safe_relative_path(schema_file):
+        return set()
+    key = f"{module_id}/{schema_file}"
+    if key not in REQUIRED_FIELD_CACHE:
+        path = root / "features" / module_id / schema_file
+        fields: list[str] = []
+        try:
+            schema = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            schema = None
+        if isinstance(schema, dict) and schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+            fields = sorted(field for field in schema.get("required", []) if isinstance(field, str) and field in schema["properties"])
+        REQUIRED_FIELD_CACHE[key] = fields
+    return set(REQUIRED_FIELD_CACHE[key])
+
+
+def view_covers_record(view: Any, required: set[str]) -> bool:
+    """Whether an object view hands back the whole record, i.e. every required property.
+
+    Coverage is decided by the field *paths*, not their labels: one property may carry several labels
+    (`/data/time/day` is both "day index" and "天数"), and a view may expose the record under a single
+    key (`/data` → "state"). A path that reaches only into a required property (`/data/time/day` for a
+    required `time` object) does not cover it — such a projection cannot be written back as a record.
+    """
+    if not isinstance(view, dict) or not isinstance(view.get("fields"), list):
+        return False
+    paths = {field["path"].rstrip("/") for field in view["fields"] if isinstance(field, dict) and isinstance(field.get("path"), str)}
+    if any(path in {"", "/data"} for path in paths):
+        return True
+    return all(f"/data/{field}" in paths for field in required)
 
 
 def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None = None,
@@ -1425,6 +1597,26 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                     }
                     if any(view not in allowed_views for view in views):
                         errors.append(f"{access_label}.views exceeds its capabilities")
+                    elif capability_actions(capabilities, contract_capabilities) & WRITE_ACTIONS:
+                        # A node that writes a record reads it first, and the runtime renders that read
+                        # through the *view* the node asked for. A projection that omits a required
+                        # field therefore cannot produce a valid update: the batch is rejected by the
+                        # record schema and the failure the node was recording is itself lost. Require
+                        # at least one granted view that exposes every required field.
+                        for record_type, definition in sorted((contracts[module_id]["collections"][collection_id].get("recordTypes") or {}).items()):
+                            if not isinstance(definition, dict) or not (set(definition.get("actions") or []) & WRITE_ACTIONS):
+                                continue
+                            required = required_record_fields(root, module_id, definition)
+                            if not required:
+                                continue
+                            declared_views = definition.get("views") if isinstance(definition.get("views"), dict) else {}
+                            if any(view_covers_record(declared_views.get(view), required) for view in views if view in declared_views):
+                                continue
+                            errors.append(
+                                f"{access_label} writes {module_id}/{collection_id} but none of its views exposes every "
+                                f"required field of {record_type}; a read through a narrower projection cannot produce a "
+                                f"valid update"
+                            )
                     budget = access.get("queryBudget")
                     if budget is not None:
                         if not isinstance(budget, dict) or set(budget) - {"maxRecords", "maxCharacters", "defaultRecords", "defaultCharacters", "parameter"} or any(isinstance(budget.get(field), bool) or not isinstance(budget.get(field), int) or budget[field] < 1 for field in ("maxRecords", "maxCharacters")):
@@ -1581,6 +1773,75 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
             errors.append(
                 f"workflows/{directory.name}/workflow.json.trigger.workflowId must reference a card-local top-level workflow: {target!r}"
             )
+            continue
+        # Trigger documents are resolved against the *source* workflow's declared node outputs at
+        # run time. Checking the reference structurally here is what catches the RC-06 class of
+        # defect: a converted wrapper that keeps `metadata.triggerInputs` after the post-director
+        # integration it was mapped from was replaced by one that produces different outputs. An
+        # unreplaced mapping is syntactically valid and simply fails during play.
+        documents = trigger.get("documents")
+        if documents is None:
+            continue
+        if not isinstance(documents, dict):
+            errors.append(f"workflows/{directory.name}/workflow.json.trigger.documents must be an object")
+            continue
+        source = load_json(workflow_root / target / "workflow.json", {})
+        source_nodes = {
+            node.get("id"): node
+            for node in (source.get("nodes", []) if isinstance(source, dict) and isinstance(source.get("nodes"), list) else [])
+            if isinstance(node, dict) and isinstance(node.get("id"), str)
+        }
+        for input_id, mapping in sorted(documents.items()):
+            mapping_label = f"workflows/{directory.name}/workflow.json.trigger.documents.{input_id}"
+            if not isinstance(mapping, dict) or not isinstance(mapping.get("fromNode"), str) or not isinstance(mapping.get("output"), str):
+                errors.append(f"{mapping_label} must declare fromNode and output")
+                continue
+            source_node = source_nodes.get(mapping["fromNode"])
+            if source_node is None:
+                errors.append(f"{mapping_label}.fromNode must reference a node of {target}: {mapping['fromNode']!r}")
+                continue
+            outputs = source_node.get("outputs") if isinstance(source_node.get("outputs"), dict) else {}
+            output = outputs.get(mapping["output"])
+            if not isinstance(output, dict):
+                errors.append(
+                    f"{mapping_label}.output must reference an output declared by {target}/{mapping['fromNode']}: {mapping['output']!r}"
+                )
+                continue
+            scope = output.get("scope", "workflow")
+            if scope not in {"turn", "session", "public"}:
+                errors.append(f"{mapping_label} must map an output with turn, session, or public scope, not {scope!r}")
+        # A node that reads a trigger input it was not authorized for would fail during play rather
+        # than at conversion; the runtime enforces the same set.
+        for node in (workflow.get("nodes", []) if isinstance(workflow.get("nodes"), list) else []):
+            if not isinstance(node, dict):
+                continue
+            metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+            declared_inputs = metadata.get("triggerInputs", []) if isinstance(metadata.get("triggerInputs"), list) else []
+            for input_id in declared_inputs:
+                if input_id not in documents:
+                    errors.append(
+                        f"workflows/{directory.name}/workflow.json node {node.get('id')} metadata.triggerInputs references undeclared trigger document {input_id}"
+                    )
+            # The runtime delivers a trigger document to `trigger/<id>` in the node workspace only for
+            # the ids the node declares, so a script that reads that path without declaring the input
+            # fails with ENOENT on every run — the shape of the turn-1 dispatch failure. The check is
+            # textual on purpose: it reads the script the node actually executes.
+            entry = metadata.get("entryFile")
+            if not isinstance(entry, str):
+                continue
+            entry_path = root / entry
+            if not safe_relative_path(entry) or not entry_path.is_file():
+                continue
+            try:
+                entry_text = entry_path.read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            for input_id in sorted({match for match in TRIGGER_DOCUMENT_READ.findall(entry_text)}):
+                if input_id in documents and input_id not in declared_inputs:
+                    errors.append(
+                        f"workflows/{directory.name}/workflow.json node {node.get('id')} reads trigger/{input_id} in {entry} "
+                        f"but does not declare metadata.triggerInputs: [{input_id!r}]"
+                    )
     return ids
 
 
@@ -1661,10 +1922,7 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
         errors.append("manifest context_skill is required when Agent message retrieval is enabled")
     if context_skill_path is not None:
         require_file(root, context_skill_path, "context_skill", errors)
-        if safe_relative_path(context_skill_path) and (root / context_skill_path).is_file():
-            skill_text = (root / context_skill_path).read_text(encoding="utf-8-sig")
-            if not re.match(r"^---\r?\n[\s\S]*?^name:\s*\S+[\s\S]*?^description:\s*\S+[\s\S]*?^---", skill_text, re.MULTILINE):
-                errors.append("context_skill must be a skill with name and one-line description frontmatter")
+        validate_skill_frontmatter(root, context_skill_path, "context_skill", errors)
 
     validate_feature_modules(root, manifest.get("feature_modules"), errors, warnings)
     module_ids = declared_module_ids(root, manifest)

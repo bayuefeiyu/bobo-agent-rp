@@ -5,13 +5,22 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { normalizeDataContract } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-contracts.mjs";
-import { executeDataBatch } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-changes.mjs";
-import { queryData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-query.mjs";
-import { validateJsonSchema } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-schema.mjs";
-import { RpDataStore } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-store.mjs";
-import { finalizeNodeData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-node-runtime.mjs";
-import { assertWorkflowCallAllowed, completeWorkflowNode, createWorkflowRun, normalizeWorkflowDefinition, readyWorkflowNodes, startWorkflowNode } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-workflows.mjs";
+import { importRuntimeTestModule } from "./runtime-test-runtime.mjs";
+
+const { normalizeDataContract } = await importRuntimeTestModule("rp-data-contracts.mjs");
+const { executeDataBatch } = await importRuntimeTestModule("rp-data-changes.mjs");
+const { queryData } = await importRuntimeTestModule("rp-data-query.mjs");
+const { validateJsonSchema } = await importRuntimeTestModule("rp-data-schema.mjs");
+const { RpDataStore } = await importRuntimeTestModule("rp-data-store.mjs");
+const { finalizeNodeData } = await importRuntimeTestModule("rp-data-node-runtime.mjs");
+const {
+  assertWorkflowCallAllowed,
+  completeWorkflowNode,
+  createWorkflowRun,
+  normalizeWorkflowDefinition,
+  readyWorkflowNodes,
+  startWorkflowNode,
+} = await importRuntimeTestModule("rp-workflows.mjs");
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const json = async path => JSON.parse(await readFile(path, "utf8"));

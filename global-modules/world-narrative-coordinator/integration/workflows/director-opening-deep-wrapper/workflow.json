@@ -14,11 +14,11 @@
     "outputs": {},
     "moduleAccess": [
       { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.read"], "views": ["director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-status"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
+      { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director", "deep-status"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } },
       { "moduleId": "world-narrative-coordinator", "collectionId": "settings", "capabilities": ["director.settings.read"], "views": ["runtime"], "queryBudget": { "maxRecords": 10, "maxCharacters": 100000 } }
     ],
-    "workflowCalls": ["world-narrative-coordinator/deep-director-planning"],
+    "workflowCalls": ["world-narrative-coordinator/begin-deep-operation", "world-narrative-coordinator/deep-director-planning", "world-narrative-coordinator/finish-deep-operation"],
     "dataCommit": { "onNodeEnd": [] },
-    "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-deep-if-needed.mjs", "historyCompleteTurns": 20 }
+    "metadata": { "entryFile": "features/world-narrative-coordinator/integration/runtime/run-deep-if-needed.mjs", "storyContextSource": "history", "historyCompleteTurns": 20 }
   }]
 }

@@ -9,6 +9,29 @@ const INFORMATION_STATUSES = new Set(["confirmed", "suggested", "possible", "not
 const RECORD_TYPES = new Set(["memory.entity", "memory.relationship", "memory.event", "memory.event-summary", "memory.cognition", "memory.knower-group"]);
 const INFORMATION_RECORD_TYPES = new Set(["memory.event", "memory.event-summary", "memory.cognition"]);
 
+/**
+ * The statuses a match may carry for one query.
+ *
+ * The Agent contract gives `entity` queries `direct/related/possible` and information queries
+ * `confirmed/suggested/possible/not-found`, while `broad` queries are documented to return *records*
+ * of either family. Reading a broad query as an information query alone rejected `related`, which is
+ * a legitimate status for the entity records such a query is supposed to return — the failure landed
+ * on this code node, so the model never saw an error it could correct and the narrative continued
+ * without the memory it had asked for.
+ *
+ * When the match names a record type, both vocabularies are accepted: the record type decides how the
+ * match renders, and the status is only the searcher's confidence label, so an entity match labelled
+ * `confirmed` is still a usable match. Rejecting it killed a real team meeting's required base
+ * retrieval ("Invalid match status confirmed for record type memory.entity.") for a label the module
+ * itself defines elsewhere. A status outside both vocabularies still fails loudly.
+ */
+const MATCH_STATUSES = new Set([...ENTITY_STATUSES, ...INFORMATION_STATUSES]);
+
+function allowedStatuses(kind, recordType) {
+  if (recordType !== undefined && recordType !== null) return MATCH_STATUSES;
+  return kind === "entity" ? ENTITY_STATUSES : INFORMATION_STATUSES;
+}
+
 function enforceSelection(output, budget) {
   const queries = Array.isArray(output?.queries) ? output.queries : [];
   const entityCount = queries.filter(item => item.kind === "entity").length;
@@ -16,11 +39,11 @@ function enforceSelection(output, budget) {
   let informationCount = 0;
   const used = new Set();
   const normalized = queries.map(query => {
-    const allowed = query.kind === "entity" ? ENTITY_STATUSES : INFORMATION_STATUSES;
     let possibleCount = 0;
     const matches = [];
     for (const match of Array.isArray(query.matches) ? query.matches : []) {
-      if (!allowed.has(match.status)) throw new Error(`Invalid match status ${match.status}.`);
+      const allowed = allowedStatuses(query.kind, match.recordType);
+      if (!allowed.has(match.status)) throw new Error(`Invalid match status ${match.status} for record type ${match.recordType || "unspecified"}.`);
       if (match.status === "not-found") continue;
       if (used.has(match.recordId)) continue;
       if (match.status === "possible" && query.kind !== "entity" && ++possibleCount > budget.possiblePerQueryLimit) continue;

@@ -1,3 +1,8 @@
+---
+name: local-scene-narrative
+description: Create one director-assigned local-scene story candidate for the current main location and its surroundings, then let the director review and the deterministic publisher commit it.
+---
+
 # 近场叙事模块
 
 本模块拥有主线当前地点及周边、暂时位于玩家角色视野之外的正式故事。候选不是事实；只有经上层批准并由 `publish-reviewed-story` 成功发布的故事才是世界事实、前端内容和归档来源。

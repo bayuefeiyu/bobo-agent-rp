@@ -206,6 +206,46 @@ test("retrieval composition emits a document set without an implicit full timeli
   assert.match(await readFile(resolve(workspace, "memory-context", "DOCUMENTS.md"), "utf8"), /GENERAL\.md/);
 });
 
+test("a match status from the other family is accepted, an unknown status is not", async t => {
+  // Real team-meeting failure: the searcher labelled an entity match `confirmed` (a status this module
+  // defines for information records) and the whole required base retrieval died on the code node, so
+  // the meeting failed and the model never saw an error it could correct. The record type decides how
+  // a match renders, so a label from the other vocabulary is usable; anything outside both still fails.
+  const entity = { id: "lin", recordType: "memory.entity", revision: 1, value: { name: "林月", aliases: [], entityKind: "character", templateMode: "default", templateId: "entity.character", templateVersion: 1, catalogSummary: "剑修", sections: {}, informationBlocks: [], derivedFacets: {}, summaryOverLimit: false } };
+  const event = { id: "event-1", recordType: "memory.event", revision: 1, value: { name: "抵达港口", status: "completed", time: { displayStart: "第三日", sortValue: "0003" }, locations: [], participants: [] } };
+  const data = {
+    async get(request) {
+      if (request.collectionId === "entities" && request.id === "lin") return entity;
+      if (request.collectionId === "events" && request.id === "event-1") return event;
+      if (request.collectionId === "support" && request.id === "narrative-memory-settings") return { value: { retrieval: settings().retrieval } };
+      return null;
+    },
+    async query(request) { return request.collectionId === "events" ? { items: [event], nextCursor: null } : { items: [], nextCursor: null }; },
+  };
+  const runWith = (status, { query } = {}) => ({
+    arguments: {},
+    nodes: {
+      "prepare-retrieval": { output: { effectiveBudget: { entityQueryLimit: 20, initialInspectLimit: 30, supplementalInspectLimit: 5, informationLimit: 20, elasticInformationLimit: 5, possiblePerQueryLimit: 2 } } },
+      "memory-retrieval": { output: { queries: [query || { query: "林月", kind: "entity", matches: [{ recordId: "lin", recordType: "memory.entity", status }] }], restrictedPerspectives: [] } },
+    },
+  });
+  const accepted = await mkdtemp(join(tmpdir(), "memory-cross-family-status-"));
+  t.after(() => rm(accepted, { recursive: true, force: true }));
+  const result = await composeMemory({ run: runWith("confirmed"), data, workspace: accepted });
+  assert.deepEqual(result.documents, ["general"]);
+  assert.match(await readFile(resolve(accepted, "memory-context", "GENERAL.md"), "utf8"), /林月/);
+
+  // The other direction is the same rule: an entity-family label on an information record is kept.
+  const otherDirection = await mkdtemp(join(tmpdir(), "memory-cross-family-status-"));
+  t.after(() => rm(otherDirection, { recursive: true, force: true }));
+  await composeMemory({ run: runWith(null, { query: { query: "抵达港口", kind: "information", matches: [{ recordId: "event-1", recordType: "memory.event", status: "related" }] } }), data, workspace: otherDirection });
+  assert.match(await readFile(resolve(otherDirection, "memory-context", "GENERAL.md"), "utf8"), /抵达港口/);
+
+  const rejected = await mkdtemp(join(tmpdir(), "memory-unknown-status-"));
+  t.after(() => rm(rejected, { recursive: true, force: true }));
+  await assert.rejects(() => composeMemory({ run: runWith("maybe"), data, workspace: rejected }), /Invalid match status maybe/);
+});
+
 test("source capture accepts a stable caller ID and skips an existing capture on retry", async () => {
   const submitted = [];
   let existing = false;

@@ -28,6 +28,21 @@
 
 不要同时启用精简版和近场/广域统筹版后置流程。
 
+### 两种后置集成图的深度交接
+
+`director-deep-wrapper` 的触发器从后置工作流的一个节点输出取得深度材料，因此**它必须按实际采用的后置集成图逐条重新映射**，不能只替换 workflowId：
+
+| 采用的后置工作流 | `story-context` 的来源 | 说明 |
+| --- | --- | --- |
+| `director-post-turn`（精简版） | `review` / `story-context` | 该节点把已冻结的 `trigger/turn-context` 声明成 `turn` 作用域输出并列入 `workspaceHandoff`。 |
+| `director-post-with-narratives`（近场/广域版） | 由卡片自行补一个确定性转交 | 该图的 `post-director` 只导出 `delegations`，**不提供 story context**；直接沿用精简版的映射会得到一个永不解析的引用。转换时必须在该节点上补声明 `story-context`（指向它已收到的 `trigger/turn-context`、`scope=turn`、`retain=turn`）并列入 `workspaceHandoff`，或改用另一个真实存在的输出。 |
+
+补声明是**转卡动作的一部分**，不是模板默认：只有启用了近场/广域编排的卡才需要它，而那正是深度包装的映射目标。校验器会逐条核对，漏掉即报错。
+
+深度包装的 `start-if-needed` 必须声明 `metadata.triggerInputs` 且以 `metadata.storyContextSource: "trigger"` 要求上游转交；此时缺少 `trigger/story-context` 会直接失败，不会退回对话历史，因为把当前对话当作"已冻结剧情"会让深度报告看起来成功却基于不同材料。开场与手动入口没有上游可转交，使用 `director-opening-deep-wrapper`，其 `storyContextSource: "history"` 明确允许历史回退。
+
+校验器会逐个检查 `trigger.documents` 的 `fromNode` 与 `output` 是否真的存在于所引用的源工作流、输出作用域是否为 `turn`/`session`/`public`，以及每个节点的 `metadata.triggerInputs` 是否有对应映射；四类问题都是错误而非警告。
+
 前置与后置不会同时执行，可以锁定同一 `private-state`。旧版单 Agent 深度导演仍在运行期间锁定 `deep-workbench`；团队版只在 begin、commit、finish 三个短事务中锁相应目录，长时间讨论不占写入通道，并可与日常导演并行。旧模块未声明 `writeLocks` 时，模块内部写工作流默认锁整个模块，保持原有排他行为。
 
 导演归档交接由卡片现有通用 `narrative-memory-source-capture` 接入：只查询 `archive-outbox` 的 ready 条目和 `archive-source` 视图，成功捕获后由顶层确定性节点用回执更新 `status=captured` 与 `sourceCaptureId`。`contentVersion` 由确定性代码根据业务内容变化维护，Agent 不填写或决定该值；捕获身份绑定来源记录与该版本。近场、广域已发布故事也走同一来源捕获协议，并由叙事记忆中各自的预定义说明指导归档；不要创建模块专属归档 Agent。

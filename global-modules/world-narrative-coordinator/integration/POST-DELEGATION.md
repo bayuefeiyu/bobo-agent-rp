@@ -13,4 +13,14 @@
 - 统审只处理硬性冲突和明显逻辑硬伤，优先级默认是既有事实与正文 > 广域 > 近场；修改必须返回完整稿，不能返回模糊修订指令。
 - 通过审核后由各模块的无Agent发布工作流并行写入；此后即为事实，后续节点失败不会自动回滚。
 
-该节点仍属于阻塞型 `director-post-turn`，因此其必要委托完成前不会接受下一轮玩家输入。
+该节点仍属于阻塞型后置流程，因此其必要委托完成前不会接受下一轮玩家输入。
+
+## 深度包装的输入转交
+
+深度包装读取的是**后置工作流某个节点声明的输出**，不是后置导演 Agent 的回复，也不是上游工作区现场：
+
+- 精简版 `director-post-turn` 的 `review` 节点声明 `story-context`（指向它已经收到的 `trigger/turn-context` 的本地投递副本），并列入 `workspaceHandoff`，因此深度包装可以直接映射到它。
+- 近场/广域版 `director-post-with-narratives` 的 `post-director` 节点只导出 `delegations`。改接这张图时必须**另外补一个确定性转交节点**（或改映射到真实存在的输出），不能只替换 `trigger.workflowId`：那样得到的引用语法合法但永远解析不到。
+- 深度包装必须声明 `metadata.triggerInputs` 与 `metadata.storyContextSource: "trigger"`。缺少 `trigger/story-context` 时启动节点直接失败；历史回退只保留给开场与手动入口。
+
+转换校验器逐条核对 `fromNode`/`output` 是否存在于源工作流、作用域是否为 `turn`/`session`/`public`，以及 `triggerInputs` 是否都有映射。运行时投递的地址固定为消费节点工作区内的 `trigger/<documentId>`：call 节点的 `documents`、code 节点硬编码路径与 Agent 文档索引读到的都是这一份受控副本，节点自己的改写不会影响其他节点或恢复基线。

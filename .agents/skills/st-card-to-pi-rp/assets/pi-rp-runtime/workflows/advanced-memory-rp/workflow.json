@@ -121,6 +121,7 @@
         { "target": "world-narrative-coordinator/pre-director-update", "documentSnapshotInput": "context", "maxCalls": 1 },
         { "target": "world-narrative-coordinator/materialize-guidance", "fixedArguments": { "publicationId": "publication-narrative", "channel": "narrative" }, "maxCalls": 1 }
       ],
+      "requiredCalls": ["narrative-memory/narrative-memory-retrieve"],
       "dataCommit": { "onNodeEnd": [] },
       "narrativeSource": { "layer": "story" },
       "metadata": {

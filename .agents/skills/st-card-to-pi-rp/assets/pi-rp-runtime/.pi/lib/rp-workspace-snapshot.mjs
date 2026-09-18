@@ -53,6 +53,10 @@ async function inventoryEntry(path, relativePath = "", depth = 0) {
   return files;
 }
 
+function filesDigest(files) {
+  return createHash("sha256").update(JSON.stringify(files.map(file => ({ path: file.path, sha256: file.sha256 })))).digest("hex");
+}
+
 function enforceInventoryLimits(files) {
   if (files.length > SNAPSHOT_LIMITS.maxFiles) throw new Error(`Document workspace snapshot exceeds ${SNAPSHOT_LIMITS.maxFiles} files.`);
   const total = files.reduce((sum, file) => sum + file.bytes, 0);
@@ -71,9 +75,10 @@ export async function createDocumentWorkspaceSnapshot({ nodeWorkspace, outputPat
   const entries = [];
   const allFiles = [];
   for (const [index, document] of [...documents, ...dynamicOutputs].entries()) {
-    const source = document.frozenTriggerInput === true
-      ? safeChild(resolve(nodeWorkspace, ".."), document.path.replace(/^\.\.\//, ""), `Frozen snapshot source ${document.id}`)
-      : safeChild(nodeWorkspace, document.path, `Snapshot source ${document.id}`);
+    // Every registered document resolves inside the node workspace. Frozen trigger inputs are
+    // delivered to `trigger/<id>` there rather than read from the run-level baseline, so nothing
+    // here needs to step outside its own workspace.
+    const source = safeChild(nodeWorkspace, document.path, `Snapshot source ${document.id}`);
     const stat = await lstat(source);
     if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error(`Snapshot source ${document.id} is not a regular file or directory.`);
     const files = await inventoryEntry(source);
@@ -131,6 +136,19 @@ export async function createDocumentWorkspaceSnapshot({ nodeWorkspace, outputPat
   return { root, manifest };
 }
 
+/**
+ * Deliver the trigger documents a node is authorized for at the stable address the card authored.
+ *
+ * The trigger contract is `trigger/<documentId>` in the consuming node's own workspace, and call
+ * nodes, code nodes and Agent document indexes all read it from there. The frozen authority under
+ * `_trigger-inputs/` stays the recovery baseline and is never handed to a node directly: each node
+ * receives its own controlled copy, so nothing the node writes can alter another node's material or
+ * the baseline a restart replays.
+ *
+ * The copy is verified on every attempt, including retries and restarts. A copy whose content no
+ * longer matches the frozen digest is rejected rather than silently reused, and a trigger source
+ * that was deleted upstream does not matter because the copy already exists.
+ */
 export async function stageTriggeredDocuments({ sessionDirectory, workflow, run, node }) {
   const documents = run.payload?.triggerDocuments;
   if (!documents || typeof documents !== "object" || Array.isArray(documents)) return [];
@@ -139,34 +157,77 @@ export async function stageTriggeredDocuments({ sessionDirectory, workflow, run,
   await mkdir(nodeWorkspace, { recursive: true });
   const staged = [];
   for (const [id, source] of Object.entries(documents)) {
+    // Only what the node's own metadata authorizes; an unauthorized node must not be able to reach
+    // the material at all, not merely be told not to read it.
     if (!permitted.has(id)) continue;
     if (!source || typeof source !== "object" || typeof source.path !== "string") throw new Error(`Triggered document ${id} is invalid.`);
+    const frozen = source.frozenForRunId === run.id;
     const sourcePath = safeChild(sessionDirectory, source.path, `Triggered document ${id}`);
-    if (source.frozenForRunId === run.id) {
+    const targetRelative = `trigger/${safeSegment(id)}`;
+    if (frozen) {
       const runRoot = safeChild(sessionDirectory, `workspace/private/${workflow.id}/${run.id}`, `Triggered document ${id} run root`);
       const relation = relative(runRoot, sourcePath).replaceAll("\\", "/");
       if (!relation.startsWith("_trigger-inputs/")) throw new Error(`Frozen triggered document ${id} is outside its consumer run.`);
-      await lstat(sourcePath);
+      // The frozen digest was recorded when the input was frozen; re-deriving it from the files
+      // catches a baseline that was altered in place before this attempt ever read it.
+      const frozenDigest = filesDigest(await inventoryEntry(sourcePath));
+      const expected = typeof source.sha256 === "string" && source.sha256 ? source.sha256 : frozenDigest;
+      if (expected !== frozenDigest) throw new Error(`Frozen triggered document ${id} no longer matches the digest recorded for this run.`);
+      const files = await deliverTriggerDocument({ id, sourcePath, nodeWorkspace, targetRelative, expected });
       staged.push({
         id,
         workflowRunId: source.sourceArtifact?.workflowRunId || run.id,
         nodeId: source.sourceArtifact?.nodeId || "trigger",
-        stagedPath: relative(nodeWorkspace, sourcePath).replaceAll("\\", "/"),
+        stagedPath: targetRelative,
         kind: source.kind,
         format: source.format || null,
         narrativeSource: source.narrativeSource || null,
         sourceReferences: source.sourceReferences || [],
-        sha256: source.sha256 || null,
+        sha256: expected,
+        files,
         frozenTriggerInput: true,
       });
       continue;
     }
-    const targetRelative = `trigger/${safeSegment(id)}`;
-    const target = resolve(nodeWorkspace, targetRelative);
-    const result = await copyWorkspaceEntry(sourcePath, target, `triggered document ${id}`);
-    staged.push({ id, nodeId: "trigger", stagedPath: targetRelative, kind: result.kind, format: source.format || null, narrativeSource: source.narrativeSource || null });
+    const stat = await lstat(sourcePath);
+    if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error(`Triggered document ${id} is not a regular file or directory.`);
+    const expected = filesDigest(await inventoryEntry(sourcePath));
+    const files = await deliverTriggerDocument({ id, sourcePath, nodeWorkspace, targetRelative, expected });
+    staged.push({
+      id,
+      nodeId: "trigger",
+      stagedPath: targetRelative,
+      kind: stat.isDirectory() ? "directory" : "file",
+      format: source.format || null,
+      narrativeSource: source.narrativeSource || null,
+      sha256: expected,
+      files,
+    });
   }
   return staged;
+}
+
+/**
+ * Place one verified copy at `trigger/<id>` in the node workspace.
+ *
+ * A copy left by an earlier attempt is reused only when its bytes still match; anything else is an
+ * edited delivery, and quietly reading it would hand the node different material than the run froze.
+ */
+async function deliverTriggerDocument({ id, sourcePath, nodeWorkspace, targetRelative, expected }) {
+  const target = safeChild(nodeWorkspace, targetRelative, `Triggered document ${id} delivery`);
+  const existing = await lstat(target).catch(error => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  if (existing) {
+    if (existing.isSymbolicLink() || (!existing.isFile() && !existing.isDirectory())) throw new Error(`Triggered document ${id} delivery is not a regular file or directory.`);
+    const delivered = await inventoryEntry(target);
+    if (filesDigest(delivered) !== expected) throw new Error(`Triggered document ${id} delivery was modified after it was staged; restart the workflow run instead of reusing it.`);
+    return delivered;
+  }
+  await rm(target, { recursive: true, force: true });
+  await copyWorkspaceEntry(sourcePath, target, `triggered document ${id}`);
+  return inventoryEntry(target);
 }
 
 export async function freezeTriggeredDocuments({ sessionDirectory, workflow, runId, triggerDocuments }) {

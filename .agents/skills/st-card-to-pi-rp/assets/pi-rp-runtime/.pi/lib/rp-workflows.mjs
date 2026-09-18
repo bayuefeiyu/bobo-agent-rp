@@ -51,6 +51,14 @@ function uniqueIds(value, label) {
   return result;
 }
 
+function uniqueWorkflowRefs(value, label) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+  const result = value.map((item, index) => assertWorkflowRef(item, `${label}[${index}]`));
+  if (new Set(result).size !== result.length) throw new Error(`${label} must not contain duplicate workflow references.`);
+  return result;
+}
+
 function assertWorkflowRef(value, label) {
   if (typeof value !== "string") throw new Error(`${label} must be a module/workflow reference.`);
   const parts = value.split("/");
@@ -406,6 +414,18 @@ export function normalizeWorkflowDefinition(value) {
     if (rawNode.blockNextTurn !== undefined) throw new Error(`node ${rawNode.id}.blockNextTurn was replaced by trigger.blockNextTurnUntilReady.`);
     const workflowCalls = normalizeWorkflowCallBindings(rawNode.workflowCalls, `node ${rawNode.id}.workflowCalls`);
     if (workflowCalls.length && !["agent", "team", "code"].includes(type)) throw new Error(`node ${rawNode.id}.workflowCalls is supported only for agent, team, and code nodes.`);
+    // `requiredCalls` is how a node author says "this turn must not proceed without this material".
+    // It has to be stated by the workflow, because whether a missing retrieval is a degradation or a
+    // hard stop is a design decision: modules cannot see the caller, and the runtime must not assume
+    // it. A target that is not declared in `workflowCalls` is a card error, not a runtime one.
+    const requiredCalls = uniqueWorkflowRefs(rawNode.requiredCalls, `node ${rawNode.id}.requiredCalls`);
+    if (requiredCalls.length && !["agent", "team"].includes(type)) throw new Error(`node ${rawNode.id}.requiredCalls is supported only for agent and team nodes.`);
+    const declaredCallTargets = new Set(workflowCalls.map(binding => binding.target));
+    for (const required of requiredCalls) {
+      if (!declaredCallTargets.has(required)) throw new Error(`node ${rawNode.id}.requiredCalls references undeclared workflowCalls target ${required}.`);
+      const binding = workflowCalls.find(candidate => candidate.target === required);
+      if (binding.maxCalls !== null && binding.maxCalls < 1) throw new Error(`node ${rawNode.id}.requiredCalls target ${required} cannot be required with maxCalls 0.`);
+    }
     const runtimeServices = uniqueIds(rawNode.runtimeServices, `node ${rawNode.id}.runtimeServices`);
     if (runtimeServices.length && type !== "code") throw new Error(`node ${rawNode.id}.runtimeServices is supported only for code nodes.`);
     const unsupportedServices = runtimeServices.filter(service => !RUNTIME_SERVICES.has(service));
@@ -458,6 +478,7 @@ export function normalizeWorkflowDefinition(value) {
       workspaceHandoff,
       moduleAccess: normalizeModuleAccess(rawNode.moduleAccess, rawNode.id),
       workflowCalls,
+      requiredCalls,
       runtimeServices,
       target,
       arguments: callArguments,

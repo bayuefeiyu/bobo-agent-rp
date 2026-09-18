@@ -72,7 +72,11 @@ function ability(value, label, { required = false } = {}) {
     documents: input.documents === undefined ? {} : structuredClone(object(input.documents, `${label}.documents`)),
     exports: Array.isArray(input.exports) ? input.exports.map((entry, index) => id(entry, `${label}.exports[${index}]`)) : [],
     publicDescription: publicDescription(input.publicDescription || { title: input.id }, `${label}.publicDescription`),
-    timeoutMs: positiveInteger(input.timeoutMs, 120000, 3600000),
+    // Assistance tasks call real workflows and agents, so their budget must cover a real model call:
+    // the previous 120 s default timed out every required base retrieval in a real team meeting
+    // ("Required base retrieval failed: Assistance task timed out after 120000ms.") while a single
+    // memory retrieval takes minutes. A team can still declare a smaller or larger value per ability.
+    timeoutMs: positiveInteger(input.timeoutMs, 600000, 3600000),
   };
   if (kind === "workflow") {
     if (typeof input.target !== "string" || input.target.split("/").length !== 2) throw new Error(`${label}.target must be a module/workflow reference.`);
