@@ -80,30 +80,30 @@ export function createStoryMechanics(options) {
     return { count: entries.length, fromTurn: from, throughTurn: through };
   }
 
-  async function prepareStoryContext({ run, module, workspace, data }) {
+  async function prepareStoryContext({ run, module, workspace, data, services }) {
     const assignment = run.arguments?.assignment || {};
     const directory = resolve(workspace, "story-context");
     await mkdir(directory, { recursive: true });
     const documents = [];
     for (const entry of module.resourceCatalog?.documents || []) {
-      const content = await readFile(resolve(module.directory, entry.path), "utf8");
+      const content = services.cardText.render(await readFile(resolve(module.directory, entry.path), "utf8"), `${module.id}/${entry.path}`);
       const path = `creative/${entry.id}.md`;
       await mkdir(resolve(directory, "creative"), { recursive: true });
       await writeFile(resolve(directory, path), content, "utf8");
-      documents.push({ id: entry.id, path, description: entry.summary || entry.title });
+      documents.push({ id: entry.id, path, description: services.cardText.render(entry.summary || entry.title, `${module.id}/${entry.id} description`) });
     }
     const query = baseQuery("creative-index");
     if (assignment.seriesId) query.where = { seriesId: { eq: assignment.seriesId } };
     const indexItems = assignment.seriesId ? await queryAll(data, query) : (await data.query({ ...query, sort: [{ field: "storySequence", order: "desc" }], limit: 100, maxCharacters: 500000 })).items || [];
     await writeFile(resolve(directory, "story-index.json"), `${JSON.stringify(indexItems, null, 2)}\n`, "utf8");
-    documents.push({ id: "story-index", path: "story-index.json", description: assignment.seriesId ? seriesIndexDescription : recentIndexDescription });
+    documents.push({ id: "story-index", path: "story-index.json", description: services.cardText.render(assignment.seriesId ? seriesIndexDescription : recentIndexDescription, `${module.id} story-index description`) });
     const last = assignment.seriesId ? await latestBusinessRecord(data, { ...query, maxCharacters: 50000 }) : indexItems[0];
     if (last) {
       const full = await data.get({ moduleId, collectionId, id: last.id, view: "creative-full" });
       await writeFile(resolve(directory, "previous-story.json"), `${JSON.stringify(full, null, 2)}\n`, "utf8");
       documents.push({ id: "previous-story", path: "previous-story.json", description: "Full previous installment for direct continuation." });
     }
-    await writeFile(resolve(directory, "DOCUMENTS.md"), [`# ${contextTitle}`, "", contextGuidance, "", ...documents.flatMap(item => [`## ${item.id}`, "", `- path: \`${item.path}\``, "- readPolicy: `required`", "- authority: `binding`", "- appliesAt: `planning-writing-checking`", `- description: ${item.description}`, ""])].join("\n"), "utf8");
+    await writeFile(resolve(directory, "DOCUMENTS.md"), [`# ${services.cardText.render(contextTitle, `${module.id} context title`)}`, "", services.cardText.render(contextGuidance, `${module.id} context guidance`), "", ...documents.flatMap(item => [`## ${item.id}`, "", `- path: \`${item.path}\``, "- readPolicy: `required`", "- authority: `binding`", "- appliesAt: `planning-writing-checking`", `- description: ${item.description}`, ""])].join("\n"), "utf8");
     return { prepared: true, documents: documents.length };
   }
 

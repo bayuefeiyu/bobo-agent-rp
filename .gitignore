@@ -35,6 +35,7 @@
 !/.agents/skills/audit-and-upgrade-pi-rp-card/
 !/.agents/skills/adapt-comfyui-workflow/
 !/.agents/skills/manage-pi-rp-config-ui/
+!/.agents/skills/debug-pi-rp-play/
 
 # Local-only documents, diagnostic tools, logs, results, and temporary fixtures.
 /local-development-records/

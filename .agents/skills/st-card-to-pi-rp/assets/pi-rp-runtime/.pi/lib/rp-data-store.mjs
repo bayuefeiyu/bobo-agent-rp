@@ -3,6 +3,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildDataIndex, buildIdentityEntries, extractRecordIndexes } from "./rp-data-index.mjs";
+import { withDataCommitLock } from "./rp-data-changes.mjs";
+import { renderCardText, renderCardTextValues } from "./rp-card-text.mjs";
 import { parseDataRecordLines, toDataRecordLines, validateDataRecord } from "./rp-data-records.mjs";
 import { validateJsonSchema } from "./rp-data-schema.mjs";
 import { commitDataFiles, recoverDataTransactions } from "./rp-data-transactions.mjs";
@@ -93,10 +95,11 @@ function partitionName(record, contract, collectionId) {
 }
 
 export class RpDataStore {
-  constructor({ sessionDirectory, modules, initialOverrides = {} }) {
+  constructor({ sessionDirectory, modules, initialOverrides = {}, playerName = null }) {
     this.sessionDirectory = resolve(sessionDirectory);
     this.modules = new Map(modules.map(module => [module.contract.moduleId, module]));
     this.initialOverrides = initialOverrides && typeof initialOverrides === "object" && !Array.isArray(initialOverrides) ? structuredClone(initialOverrides) : {};
+    this.playerName = playerName;
     this.processorCache = new Map();
     this.schemaCache = new Map();
   }
@@ -143,6 +146,29 @@ export class RpDataStore {
     return safeResolve(this.sessionDirectory, "modules", moduleId, "collections", collectionId);
   }
 
+  renderSeedRecord(record, label) {
+    if (!this.playerName) {
+      if (["{{user}}", "{{char}}", "<user>", "<char>", "<bot>"].some(macro => JSON.stringify(record).includes(macro))) {
+        throw new Error(`${label} contains a name macro but this data store has no session player name.`);
+      }
+      return record;
+    }
+    for (const [key, value] of Object.entries(record)) {
+      if (key === "data" || key === "note") continue;
+      if (typeof value === "string" && ["{{user}}", "{{char}}", "<user>", "<char>", "<bot>"].some(macro => value.includes(macro))) {
+        throw new Error(`${label}.${key} contains a macro in a structural field.`);
+      }
+    }
+    return { ...record, data: renderCardTextValues(record.data, this.playerName, `${label}.data`), note: typeof record.note === "string" ? renderCardText(record.note, this.playerName, `${label}.note`) : record.note };
+  }
+
+  async resolveSessionPlayerName() {
+    if (this.playerName) return this.playerName;
+    const metadata = await json(safeResolve(this.sessionDirectory, "session.json"), null);
+    if (typeof metadata?.playerName === "string" && metadata.playerName.trim()) this.playerName = metadata.playerName;
+    return this.playerName;
+  }
+
   async initialize() {
     await recoverDataTransactions(this.sessionDirectory);
     for (const module of this.modules.values()) {
@@ -156,15 +182,15 @@ export class RpDataStore {
         if (collection.storage.initialRecordsFile) {
           const value = await json(safeResolve(module.moduleDirectory, collection.storage.initialRecordsFile), []);
           if (!Array.isArray(value)) throw new Error(`${module.contract.moduleId}/${collectionId} initial records must be an array.`);
-          initialRecords = value.map(record => validateDataRecord(record, module.contract));
+          initialRecords = value.map((record, index) => validateDataRecord(this.renderSeedRecord(record, `${module.contract.moduleId}/${collectionId}/initialRecords[${index}]`), module.contract));
           for (const record of initialRecords) await this.validateRecordData(record);
         }
         let initialSnapshot = [];
         if (collection.storage.initialSnapshotFile) {
           const value = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
-          initialSnapshot = (Array.isArray(value) ? value : [value]).map(record => validateDataRecord(record, module.contract));
+          initialSnapshot = (Array.isArray(value) ? value : [value]).map((record, index) => validateDataRecord(this.renderSeedRecord(record, `${module.contract.moduleId}/${collectionId}/initialSnapshot[${index}]`), module.contract));
           const override = collectionId === "settings" ? this.initialOverrides[module.contract.moduleId] : null;
-          if (override && initialSnapshot.length) initialSnapshot[0] = { ...initialSnapshot[0], data: mergeDefined(initialSnapshot[0].data, override) };
+          if (override && initialSnapshot.length) initialSnapshot[0] = { ...initialSnapshot[0], data: mergeDefined(initialSnapshot[0].data, this.playerName ? renderCardTextValues(override, this.playerName, `${module.contract.moduleId}/settings/override`) : override) };
           for (const record of initialSnapshot) await this.validateRecordData(record);
         }
         const files = this.stateFiles(module.contract.moduleId, collectionId, { history: initialRecords, records: initialSnapshot.length ? initialSnapshot : latestRecords(initialRecords) });
@@ -188,6 +214,7 @@ export class RpDataStore {
   }
 
   async readCollection(moduleId, collectionId) {
+    await this.resolveSessionPlayerName();
     const module = this.module(moduleId);
     const collection = module.contract.collections[collectionId];
     if (!collection) throw new Error(`Unknown collection ${moduleId}/${collectionId}.`);
@@ -195,9 +222,9 @@ export class RpDataStore {
     let history = collection.storage.kind === "snapshot" ? [] : await this.#readHistory(root, module.contract);
     if (collection.storage.kind === "hybrid" && collection.storage.initialSnapshotFile) {
       const initial = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
-      const seeded = (Array.isArray(initial) ? initial : [initial]).map(record => validateDataRecord(record, module.contract));
+      const seeded = (Array.isArray(initial) ? initial : [initial]).map((record, index) => validateDataRecord(this.renderSeedRecord(record, `${moduleId}/${collectionId}/initialSnapshot[${index}]`), module.contract));
       const override = collectionId === "settings" ? this.initialOverrides[moduleId] : null;
-      if (override && seeded.length) seeded[0] = { ...seeded[0], data: mergeDefined(seeded[0].data, override) };
+      if (override && seeded.length) seeded[0] = { ...seeded[0], data: mergeDefined(seeded[0].data, this.playerName ? renderCardTextValues(override, this.playerName, `${moduleId}/settings/override`) : override) };
       const identities = new Set(history.map(record => `${record.id}:${record.revision}`));
       history = [...seeded.filter(record => !identities.has(`${record.id}:${record.revision}`)), ...history];
     }
@@ -317,24 +344,28 @@ export class RpDataStore {
   async pruneByMessageIds(messageIds) {
     const removed = new Set(messageIds || []);
     if (!removed.size) return null;
-    const states = new Map();
-    for (const module of this.modules.values()) {
-      for (const collectionId of Object.keys(module.contract.collections)) {
-        const state = await this.readCollection(module.contract.moduleId, collectionId);
-        const history = state.history.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
-        // Prune whichever source is authoritative for this collection, exactly as reading does. A
-        // hybrid collection's authority is its snapshot, so deriving `records` from history would
-        // write back every record that a lifecycle `delete` had already removed from the snapshot.
-        const records = module.contract.collections[collectionId].storage.kind === "record-log"
-          ? latestRecords(history)
-          : state.records.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
-        if (history.length !== state.history.length || records.length !== state.records.length) {
-          states.set(`${module.contract.moduleId}/${collectionId}`, { moduleId: module.contract.moduleId, collectionId, history, records });
+    // Read-modify-write of every collection must hold the same commit lock a batch takes, otherwise a
+    // concurrent agent submit can be overwritten by a prune that read the collections before it landed.
+    return withDataCommitLock(this.sessionDirectory, async () => {
+      const states = new Map();
+      for (const module of this.modules.values()) {
+        for (const collectionId of Object.keys(module.contract.collections)) {
+          const state = await this.readCollection(module.contract.moduleId, collectionId);
+          const history = state.history.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
+          // Prune whichever source is authoritative for this collection, exactly as reading does. A
+          // hybrid collection's authority is its snapshot, so deriving `records` from history would
+          // write back every record that a lifecycle `delete` had already removed from the snapshot.
+          const records = module.contract.collections[collectionId].storage.kind === "record-log"
+            ? latestRecords(history)
+            : state.records.filter(record => !record.binding.messageId || !removed.has(record.binding.messageId));
+          if (history.length !== state.history.length || records.length !== state.records.length) {
+            states.set(`${module.contract.moduleId}/${collectionId}`, { moduleId: module.contract.moduleId, collectionId, history, records });
+          }
         }
       }
-    }
-    if (!states.size) return null;
-    const batchId = `prune-${Date.now()}-${randomUUID()}`;
-    return this.commit(batchId, states, { schemaVersion: 1, batchId, status: "committed", committedAt: new Date().toISOString(), reason: "message_suffix_prune", results: [] });
+      if (!states.size) return null;
+      const batchId = `prune-${Date.now()}-${randomUUID()}`;
+      return this.commit(batchId, states, { schemaVersion: 1, batchId, status: "committed", committedAt: new Date().toISOString(), reason: "message_suffix_prune", results: [] });
+    });
   }
 }

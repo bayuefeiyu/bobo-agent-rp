@@ -70,7 +70,7 @@ test("team workflow assistants require an exact node call authorization", () => 
   assert.equal(normalizeWorkflowDefinition(definition).nodes[0].workflowCalls[0].target, "memory/lookup");
 });
 
-test("document-workspace agents require read and explicit input declarations", () => {
+test("document-workspace agents receive read by default and require explicit input declarations", () => {
   const definition = {
     schemaVersion: 3,
     id: "document-task",
@@ -84,7 +84,7 @@ test("document-workspace agents require read and explicit input declarations", (
   };
   const workflow = normalizeWorkflowDefinition(definition);
   assert.doesNotThrow(() => assertDocumentWorkspaceAgentTools(workflow.nodes[0], { id: "reader", tools: ["read"] }));
-  assert.throws(() => assertDocumentWorkspaceAgentTools(workflow.nodes[0], { id: "reader", tools: [] }), /must enable the read tool/);
+  assert.doesNotThrow(() => assertDocumentWorkspaceAgentTools(workflow.nodes[0], { id: "reader", tools: [] }));
   assert.throws(() => normalizeWorkflowDefinition({
     ...definition,
     nodes: definition.nodes.map(node => node.id === "work" ? { ...node, metadata: { documentWorkspace: true, callInputs: ["missing"] } } : node),

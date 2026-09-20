@@ -45,9 +45,9 @@ test("places the model head after Pi system text and leaves the call-time tail o
 test("moves one transient model tail to the end before every model call", () => {
   const initial = [{ role: "user", content: "CONTEXT", timestamp: 1 }];
   const firstCall = moveModelTailToEnd(initial, "  TAIL  ", 2);
-  assert.deepEqual(firstCall.map(message => message.content), ["CONTEXT", "TAIL"]);
-  assert.equal(firstCall.at(-1).customType, MODEL_TAIL_MESSAGE_TYPE);
-  assert.equal(firstCall.at(-1).display, false);
+  assert.equal(firstCall.length, 1);
+  assert.deepEqual(firstCall[0].content, [{ type: "text", text: "CONTEXT" }, { type: "text", text: "\n\nTAIL" }]);
+  assert.equal(initial[0].content, "CONTEXT");
 
   const secondContext = [
     ...firstCall,

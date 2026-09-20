@@ -4,7 +4,18 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "./rp-workspace-snapshot.mjs";
+import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, replaceDocumentWorkspaceSnapshot, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "./rp-workspace-snapshot.mjs";
+
+test("Agent retry refreshes a generated snapshot without losing the last good version", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "rp-snapshot-retry-"));
+  try {
+    await replaceDocumentWorkspaceSnapshot({ nodeWorkspace: root, outputPath: "snapshot", documents: [], narrative: "first" });
+    await replaceDocumentWorkspaceSnapshot({ nodeWorkspace: root, outputPath: "snapshot", documents: [], narrative: "revised" });
+    assert.equal(await readFile(resolve(root, "snapshot", "published-narrative.md"), "utf8"), "revised\n");
+    await assert.rejects(replaceDocumentWorkspaceSnapshot({ nodeWorkspace: root, outputPath: "snapshot", documents: [{ id: "missing", path: "missing.md" }], narrative: "failed" }));
+    assert.equal(await readFile(resolve(root, "snapshot", "published-narrative.md"), "utf8"), "revised\n");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("freezes only declared documents with hashes, limits, narrative inputs, and retry reuse", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "rp-snapshot-"));

@@ -76,8 +76,8 @@
       "agentId": "narrative-memory-retriever",
       "dependsOn": ["prepare-reference-snapshot", "materialize-retrieval-task"],
       "context": { "mode": "previous-output", "fromNodes": ["prepare-reference-snapshot", "materialize-retrieval-task"] },
-      "prompt": "读取WORKSPACE-DOCUMENTS.md及目录快照，把调用方的自然语言Markdown查询清单解析为内部结构，并完成候选匹配。不要回答需要调用方自行推理的结论。最终严格按Agent约定输出JSON。",
-      "outputs": {},
+      "prompt": "读取WORKSPACE-DOCUMENTS.md及目录快照，把调用方的自然语言Markdown查询清单解析为内部结构，并完成候选匹配。不要回答需要调用方自行推理的结论。将符合Agent约定的JSON写入工作文件并交付。",
+      "outputs": {"result": {"path": "retrieval.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["queries"], "properties": {"queries": {"type": "array"}, "restrictedPerspectives": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [
         { "moduleId": "narrative-memory", "collectionId": "entities", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
         { "moduleId": "narrative-memory", "collectionId": "relationships", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },

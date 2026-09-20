@@ -88,23 +88,36 @@ export async function queryData(store, request, access = {}) {
   const offset = cursorOffset(request.cursor);
   const items = [];
   let usedCharacters = 0;
+  // How far the cursor moves, and whether a matching record had to be left behind.
   let consumed = 0;
-  for (const entry of entries.slice(offset)) {
+  let truncatedByBudget = false;
+  // Each record is measured and then either delivered or left for the next page. A record that does
+  // not fit must NOT advance the cursor past itself without being delivered: doing that silently
+  // dropped it from the result, and delivering it despite the budget made `maxCharacters` meaningless
+  // (the first record used to bypass the check entirely, so a 500-character budget could return 9480
+  // characters with `truncated: false`). Instead the cursor stops on the record that did not fit, it
+  // is reported as truncation, and a later caller with a larger budget still reaches it.
+  for (const [index, entry] of entries.slice(offset).entries()) {
     if (items.length >= limit) break;
     const record = records.get(entry.id);
     const rendered = renderDataRecordView(record, module.contract, view);
     const size = typeof rendered === "string" ? rendered.length : JSON.stringify(rendered).length;
-    if (items.length && usedCharacters + size > maxCharacters) break;
+    if (usedCharacters + size > maxCharacters) { truncatedByBudget = true; break; }
     items.push({ id: entry.id, recordType: entry.recordType, revision: record.revision, value: rendered });
     usedCharacters += size;
-    consumed += 1;
+    consumed = index + 1;
   }
   const nextOffset = offset + consumed;
+  const advanced = nextOffset > offset;
+  // An empty page must never hand back a cursor equal to the caller's own position: `exportRecentStories`
+  // treats a repeated cursor as a hard failure and every other caller would loop for ever. When the
+  // budget cannot fit even one record there is nothing to resume from, so the page ends and reports the
+  // truncation instead of a cursor.
   return {
     matched: entries.length,
     returned: items.length,
-    truncated: nextOffset < entries.length,
-    nextCursor: nextOffset < entries.length ? `offset:${nextOffset}` : null,
+    truncated: truncatedByBudget || nextOffset < entries.length,
+    nextCursor: advanced && nextOffset < entries.length ? `offset:${nextOffset}` : null,
     view,
     items,
   };
@@ -173,18 +186,21 @@ export async function queryDataStable(store, request, access = {}) {
   });
   const items = [];
   let usedCharacters = 0;
+  let budgetExceeded = false;
   for (const entry of entries) {
     if (items.length >= limit) break;
     const record = records.get(entry.id);
     const rendered = renderDataRecordView(record, module.contract, view);
     const size = typeof rendered === "string" ? rendered.length : JSON.stringify(rendered).length;
-    if (items.length && usedCharacters + size > maxCharacters) break;
+    // Same budget rule as `queryDataStable`: every record counts, including the first. A record that
+    // does not fit is left for the next page instead of being delivered over budget.
+    if (usedCharacters + size > maxCharacters) { budgetExceeded = true; break; }
     items.push({ id: entry.id, recordType: entry.recordType, revision: record.revision, status: record.status, turn: record.binding.turn, value: rendered });
     usedCharacters += size;
   }
   const last = items.at(-1);
   const more = last ? entries.some(entry => descending ? entry.sequence < records.get(last.id).sequence || (entry.sequence === records.get(last.id).sequence && entry.id < last.id) : entry.sequence > records.get(last.id).sequence || (entry.sequence === records.get(last.id).sequence && entry.id > last.id)) : false;
-  return { returned: items.length, truncated: more, nextCursor: more ? encodeCursor({ schemaVersion: 1, signature, sequence: records.get(last.id).sequence, id: last.id }) : null, view, items };
+  return { returned: items.length, truncated: more || budgetExceeded, nextCursor: more ? encodeCursor({ schemaVersion: 1, signature, sequence: records.get(last.id).sequence, id: last.id }) : null, view, items };
 }
 
 export async function getDataRecordHistory(store, request, access = {}) {

@@ -28,7 +28,7 @@ async function prepareFallbackStoryContext({ run, node, conversation, workspace 
  */
 function storyContextSource(node) {
   const declared = node.metadata?.storyContextSource;
-  if (declared === undefined || declared === null) return "history";
+  if (declared === undefined || declared === null) throw new Error(`Node ${node.id} metadata.storyContextSource must be explicitly declared as "trigger" or "history".`);
   if (!["trigger", "history"].includes(declared)) throw new Error(`Node ${node.id} metadata.storyContextSource must be "trigger" or "history".`);
   return declared;
 }
@@ -40,6 +40,7 @@ export async function execute({ run, node, conversation, data, calls, workspace 
   const brief = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "private-state", id: "turn-brief-current", view: "director" });
   const recommendation = brief?.value?.deepRecommendation || brief?.value?.data?.deepRecommendation;
   if (!recommendation?.shouldStart) return { started: false, reason: "not-recommended" };
+  const source = storyContextSource(node);
   // The operation identity is derived from the trigger turn, never from this wrapper's own run id:
   // a restart hands the wrapper a new run id, and treating that as a new operation is what made the
   // wrapper finish itself while its own child was still working.
@@ -79,13 +80,13 @@ export async function execute({ run, node, conversation, data, calls, workspace 
     }
     const inherited = "trigger/story-context";
     const hasInherited = await exists(resolve(workspace, inherited, "DOCUMENTS.md"));
-    if (!hasInherited && storyContextSource(node) === "trigger") {
+    if (!hasInherited && source === "trigger") {
       // Failing here is the point: the upstream integration did not hand over a story context, and
       // pretending that conversation history is the frozen context would make the deep report look
       // successful while being based on different material.
       throw new Error(`Node ${node.id} requires the frozen story context from its trigger, but this run received no trigger/story-context. Re-map the trigger document in ${run.workflowId || "the wrapper"} to an output the source workflow really declares.`);
     }
-    const storyContext = hasInherited ? inherited : await prepareFallbackStoryContext({ run, node, conversation, workspace });
+    const storyContext = source === "trigger" ? inherited : await prepareFallbackStoryContext({ run, node, conversation, workspace });
     // Both modes register the operation the same way. `begin-deep-operation` is idempotent for the
     // operation that already owns the state, so a restarted or retried wrapper resumes instead of
     // creating a second operation, and a closed operation blocks a new attempt explicitly.

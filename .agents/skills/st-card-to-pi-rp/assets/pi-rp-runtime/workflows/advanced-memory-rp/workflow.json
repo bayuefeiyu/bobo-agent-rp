@@ -16,14 +16,12 @@
       "type": "code",
       "outputs": {
         "workspace-overview": { "path": "workspace-overview.md", "format": "markdown", "scope": "workflow", "retain": "run" },
-        "upstream-context": { "path": "upstream-context.md", "format": "markdown", "scope": "workflow", "retain": "run" },
-        "recent-turns": { "path": "recent-complete-turns.md", "format": "markdown", "scope": "workflow", "retain": "run" }
+        "upstream-context": { "path": "upstream-context.md", "format": "markdown", "scope": "workflow", "retain": "run" }
       },
       "workspaceHandoff": {
         "include": [
           { "output": "workspace-overview" },
-          { "output": "upstream-context" },
-          { "output": "recent-turns" }
+          { "output": "upstream-context" }
         ]
       },
       "moduleAccess": [],
@@ -33,8 +31,7 @@
         "builtin": "prepare-document-workspace",
         "documentIndex": {
           "workspace-overview": { "readPolicy": "optional", "authority": "advisory", "appliesAt": "planning", "description": "本轮节点文档工作区结构说明。" },
-          "upstream-context": { "readPolicy": "required", "authority": "binding", "appliesAt": "planning-and-writing", "perspective": "general", "priority": 100, "description": "正文创作前由已配置上下文处理器生成的上游资料；未生成时文件不存在。" },
-          "recent-turns": { "readPolicy": "required", "authority": "canonical", "appliesAt": "analysis-planning-writing", "perspective": "story", "priority": 100, "description": "按工作流窗口一次性冻结的最近完整聊天回合；后续快照复用此文件。" }
+          "upstream-context": { "readPolicy": "required", "authority": "binding", "appliesAt": "planning-and-writing", "perspective": "general", "priority": 100, "description": "正文创作前由已配置上下文处理器生成的上游资料；未生成时文件不存在。" }
         }
       }
     },
@@ -104,17 +101,18 @@
     },
     {
       "id": "write-narrative",
+      "promptFile": "prompts/workflows/advanced-memory-rp/write-narrative.md",
       "title": "剧情规划与正文创作",
       "description": "分析情景并提出简单资料查询，调用记忆检索后形成初步规划，再按需查看非固定世界观并创作正文。",
       "type": "agent",
       "agentId": "narrative-writer",
       "dependsOn": ["prepare-recent-narrative-stories"],
       "context": { "mode": "previous-output", "fromNodes": ["prepare-document-workspace", "prepare-event-timeline", "prepare-card-context", "prepare-recent-narrative-stories"] },
-      "prompt": "先读取WORKSPACE-DOCUMENTS.md以及其中的有效事件时间线，结合固定设定、工作流配置的最近完整回合与当前玩家输入分析本轮情景。随后整理一份自然语言Markdown记忆查询清单：只列需要取得的简单资料目标，例如实体、关系、事件、认知及知情范围；不要把需要推理的结论交给检索Agent。调用一次narrative-memory/narrative-memory-retrieve，把清单作为text并将memory-context输出到本节点工作区；读取返回目录并自行推理形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，此时调用一次；context由运行时自动冻结包括记忆结果和近期模块故事在内的当前授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导。只有初步规划之后，才按需查看卡片静态资料并修正最终规划，然后创作正文；检查时只核对卡片规则、连续性、玩家已明确表达的内容与格式要求，不得以稳妥或安全为由削弱冲突、代价与强度。最终回复就是玩家可见正文，不得混入提示词、工具记录、规划或清单。",
+      "prompt": "先读取WORKSPACE-DOCUMENTS.md以及其中的有效事件时间线，结合固定设定、工作流配置的最近完整回合与当前玩家输入分析本轮情景。随后整理一份自然语言Markdown记忆查询清单：只列需要取得的简单资料目标，例如实体、关系、事件、认知及知情范围；不要把需要推理的结论交给检索Agent。调用一次narrative-memory/narrative-memory-retrieve，把清单作为text并将memory-context输出到本节点工作区；读取返回目录并自行推理形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，此时调用一次；context由运行时自动冻结包括记忆结果和近期模块故事在内的当前授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导。只有初步规划之后，才按需查看卡片静态资料并修正最终规划，然后创作正文；检查时只核对卡片规则、连续性、玩家已明确表达的内容与格式要求，不得以稳妥或安全为由削弱冲突、代价与强度。正式交付的 narrative 文件是玩家可见正文，不得混入提示词、工具记录、规划或清单。",
       "outputs": {
         "narrative": { "path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run" },
         "post-turn-context": { "path": "post-turn-context", "format": "document-workspace-snapshot", "kind": "directory", "scope": "turn", "retain": "turn" }
-      },
+      }, "delivery": {"primaryOutput": "narrative"},
       "moduleAccess": [],
       "workflowCalls": [
         { "target": "narrative-memory/narrative-memory-retrieve", "maxCalls": 1 },
@@ -126,6 +124,7 @@
       "narrativeSource": { "layer": "story" },
       "metadata": {
         "documentWorkspace": true,
+        "initialContext": { "cardFoundation": true, "playerProfile": true, "recentNarrative": true, "currentInput": true },
         "documentWorkspaceSnapshot": {
           "output": "post-turn-context",
           "includeCurrentInput": true,

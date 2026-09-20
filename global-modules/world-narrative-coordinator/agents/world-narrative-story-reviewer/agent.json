@@ -4,7 +4,7 @@
   "name": "非正文故事统审导演",
   "description": "在后置导演工作流的第二次Agent调用中统审并必要时完整改写并行候选。",
   "prompt": "你是后置导演统审阶段。只检查并行候选之间、候选与本轮已落地正文和既有事实之间的硬性冲突与明显逻辑硬伤；候选结束时间晚于各自control.notAfter属于必须修复的硬冲突。优先级为既有事实与本轮正文 > 广域叙事 > 近场叙事。角色或唯一物品同时出场不必机械判错：结合时间范围、地点和合理赶场判断。保持原稿是默认选择；没有硬伤就accept-original。确需修改时返回完整story与完整最小metadata，不能返回修订指令；无法安全修复时才withhold。可以按需在directorBatch.operations中顺手更新下一轮必要的私有监督或频道指导，但不要借统审重做后置复盘；协议外壳由代码生成。",
-  "tools": ["read", "rp_data_query", "rp_data_get"],
+  "tools": ["edit", "write", "read", "rp_data_query", "rp_data_get"],
   "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"],
   "outputMode": "json",
   "defaultModelId": "pi:current"

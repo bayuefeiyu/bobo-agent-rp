@@ -49,6 +49,8 @@ Use the least invasive valid transformation.
 
 1. `verbatim`: exact authored text moved as a whole.
 2. `format-only`: headings, whitespace, macro form, or list formatting changed without changing wording.
+
+Character macro resolution is a required conversion edit: replace `{{char}}`, `<char>`, and `<bot>` with the definite character name established from the source, even when the card title names a story or place. Keep `{{user}}` in author templates and prompts, and normalize source `<user>` to `{{user}}`. Once play begins, the selected player name appears literally in Agent inputs, displayed text, exported working documents, and seeded data. Generated prose is stored as written. Record character referent decisions in the conversion report and source map.
 3. `split`: one authored passage divided at natural topic boundaries; words remain unchanged.
 4. `merged`: multiple authored passages placed together without rewriting their prose.
 5. `summary-anchor`: a short generated statement that makes a detailed document discoverable.

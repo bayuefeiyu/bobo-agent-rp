@@ -247,6 +247,17 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
   }
   const batchHash = createHash("sha256").update(JSON.stringify(batch)).digest("hex");
   const existing = await readDataReceipt(store.sessionDirectory, batch.batchId);
+  // A committed/partial receipt is the commit marker and is authoritative even when stale transaction
+  // files could not be cleaned up (`rp-data-transactions.mjs` says exactly that when it swallows the
+  // cleanup error). Consulting the unresolved-journal guard first inverted that: a leftover `staged`
+  // journal — which a Windows file lock, an antivirus scanner or a sync client is enough to cause —
+  // made a batch that had already been committed answer `commit_outcome_unknown`, so the agent saw a
+  // failure, retried, failed again, and believed nothing had been written while the data was on disk.
+  // Only a batch with no durable outcome yet is protected from re-execution by the journal.
+  if (existing && existing.status !== "failed") {
+    if (existing.batchHash === batchHash) return { ...existing, idempotentReplay: true };
+    return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
+  }
   // A transaction whose rollback is incomplete has an unknown durable result. Do not execute its
   // batch again: create/append may have no target ID or revision guard and could duplicate data.
   const transaction = await readDataTransaction(store.sessionDirectory, batch.batchId);
@@ -258,12 +269,8 @@ async function executeDataBatchUnlocked(store, value, { access = {}, context = {
     };
   }
   // Failed validation/application receipts are retryable because no commit was attempted. Outcomes
-  // that reached the transaction service are either represented by a committed/partial receipt or
-  // protected by the unresolved journal check above.
-  if (existing && existing.status !== "failed") {
-    if (existing.batchHash === batchHash) return { ...existing, idempotentReplay: true };
-    return { schemaVersion: 1, batchId: batch.batchId, batchHash, status: "failed", committedAt: null, results: [{ operationId: null, status: "failed", code: "idempotency_conflict", error: "The batch ID was already committed with different content." }], ...receiptContext, runtimeReceiptId: randomUUID(), idempotentReplay: false };
-  }
+  // that reached the transaction service are represented by a committed/partial receipt (handled
+  // above) or protected by the unresolved journal check just below.
   let states = new Map();
   const results = [];
   if (batch.commitPolicy === "atomic") {

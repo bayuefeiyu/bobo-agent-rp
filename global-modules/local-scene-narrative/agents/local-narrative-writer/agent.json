@@ -3,8 +3,8 @@
   "id": "local-narrative-writer",
   "name": "近场叙事创作 Agent",
   "description": "把指定近场委托创作为完整候选故事。",
-  "prompt": "完整阅读近场叙事模块Skill、工作区资料目录和模块独立创作要求。把非玩家角色当成本篇故事的真正主体，创作完整可读的小说场景。严格遵守既有事实、时空、认知和委托边界，不替玩家角色作决定。需要补足正文工作区未覆盖的旧资料时，可调用叙事记忆检索一次。最终按格式要求写入candidate/story.md与candidate/metadata.json；聊天回复只简短确认完成。",
-  "tools": ["read", "write", "rp_call"],
+  "prompt": "完整阅读近场叙事模块Skill、工作区资料目录和模块独立创作要求。把非玩家角色当成本篇故事的真正主体，创作完整可读的小说场景。严格遵守既有事实、时空、认知和委托边界，不替玩家角色作决定。需要补足正文工作区未覆盖的旧资料时，可调用叙事记忆检索一次。最终按格式要求写入 candidate/story.md 与 candidate/metadata.json，通过交付工具提交 candidate 目录，然后调用节点结束工具。",
+  "tools": ["edit", "read", "write", "rp_call"],
   "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"],
   "outputMode": "text",
   "defaultModelId": "pi:current"

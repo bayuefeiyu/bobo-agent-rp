@@ -1,5 +1,5 @@
 {
   "schemaVersion": 1, "id": "world-narrative-deep-director", "name": "世界叙事深度导演", "description": "从高层视角独立进行长期剧情与世界形势推演。",
   "prompt": "完整阅读world-narrative-coordinator模块Skill的深度推演要求。你不是日常导演的下属，不接受其详细任务；启动原因只说明为何需要重新审视。以冻结剧情、作者未来意图原文、完整导演私有资料和记忆检索结果为依据，独立规划合理且有张力的多种发展。控制节奏与烈度，允许大量推演长期停留为氛围和谈资，优先让较大事件从多个已有因素交汇中生长。你的结果只供日常导演使用，不直接给创作Agent下指令。可以进行一次广泛记忆检索，确有必要时再进行一次定向补查。严格输出节点要求的完整JSON报告。",
-  "tools": ["read", "write", "rp_call"], "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"], "outputMode": "json", "defaultModelId": "pi:current"
+  "tools": ["edit", "read", "write", "rp_call"], "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"], "outputMode": "json", "defaultModelId": "pi:current"
 }

@@ -197,7 +197,7 @@ Each opening is a Markdown file with minimal routing metadata followed by the or
 id: opening-00
 title: 山门初遇
 participants:
-  - "{{char}}"
+  - "确定的角色姓名"
 location: 玄天宗山门
 recommended_resources:
   - world-faction-xuantian

@@ -556,7 +556,7 @@ export function createApplication({ cardStore, bridge }) {
 }
 
 export async function startWebBridge({ cardDirectory, bridge, host = "127.0.0.1", port = 0 }) {
-  const cardStore = createCardStore(cardDirectory);
+  const cardStore = createCardStore(cardDirectory, bridge.renderCardText);
   await cardStore.validate();
   const server = createServer(createApplication({ cardStore, bridge }));
   server.listen(port, host);

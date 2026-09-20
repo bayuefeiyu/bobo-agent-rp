@@ -135,14 +135,6 @@ export function recordTeamUsage(state, usage, { attemptId = null, status = null,
   return changed;
 }
 
-export function releaseTeamBudget(state, executionId) {
-  const reservation = state.reservations?.[executionId];
-  if (!reservation || reservation.status !== "reserved") return;
-  state.budgets[reservation.pool].reserved = Math.max(0, state.budgets[reservation.pool].reserved - 1);
-  reservation.status = "released";
-  reservation.releasedAt = new Date().toISOString();
-}
-
 export class TeamStateStore {
   constructor(root) {
     this.root = resolve(root);

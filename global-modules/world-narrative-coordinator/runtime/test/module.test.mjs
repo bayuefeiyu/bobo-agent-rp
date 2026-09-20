@@ -5,14 +5,16 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { normalizeFeatureModuleManifest } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-feature-modules.mjs";
-import { normalizeDataContract } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-contracts.mjs";
-import { RpDataStore } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-store.mjs";
-import { executeDataBatch } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-changes.mjs";
-import { readDataReceipt } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-transactions.mjs";
-import { getDataRecord, queryData } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-query.mjs";
-import { createDataReadView, readDataReadViewCollection } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-read-view.mjs";
-import { normalizeWorkflowDefinition } from "../../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-workflows.mjs";
+import { importRuntimeTestModule } from "./runtime-test-runtime.mjs";
+
+const { normalizeFeatureModuleManifest } = await importRuntimeTestModule("rp-feature-modules.mjs");
+const { normalizeDataContract } = await importRuntimeTestModule("rp-data-contracts.mjs");
+const { RpDataStore } = await importRuntimeTestModule("rp-data-store.mjs");
+const { executeDataBatch } = await importRuntimeTestModule("rp-data-changes.mjs");
+const { readDataReceipt } = await importRuntimeTestModule("rp-data-transactions.mjs");
+const { getDataRecord, queryData } = await importRuntimeTestModule("rp-data-query.mjs");
+const { createDataReadView, readDataReadViewCollection } = await importRuntimeTestModule("rp-data-read-view.mjs");
+const { normalizeWorkflowDefinition } = await importRuntimeTestModule("rp-workflows.mjs");
 import { execute as materialize } from "../workflow/materialize-guidance.mjs";
 import { execute as preparePrivate } from "../workflow/prepare-private-context.mjs";
 import { execute as beginDeepOperation } from "../workflow/begin-deep-operation.mjs";
@@ -323,7 +325,7 @@ test("a recovery-required team child retains the deep operation ownership", asyn
     throw new Error(`Unexpected call: ${request.workflow}`);
   } };
   const run = { id: "wrapper-recovery", turn: 1 };
-  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_recovery_required");
+  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: { storyContextSource: "history" } }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_recovery_required");
   // Awaiting recovery is not a failure: the operation stays open and owned by this turn.
   assert.deepEqual(state, { status: "running", currentRunId: "deep-operation-turn-1" });
 });
@@ -347,7 +349,7 @@ test("a model-choice child wait retains the deep operation ownership", async () 
     throw new Error(`Unexpected call: ${request.workflow}`);
   } };
   const run = { id: "wrapper-model-choice", turn: 1 };
-  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_child_waiting");
+  await assert.rejects(runDeepIfNeeded({ run, node: { metadata: { storyContextSource: "history" } }, conversation: { messages: [] }, data, calls, workspace }), error => error.code === "workflow_child_waiting");
   assert.equal(finishCalls, 0, "waiting for a model choice must not finish the operation");
   assert.deepEqual(state, { status: "running", currentRunId: "deep-operation-turn-1" });
 });
@@ -358,7 +360,7 @@ test("deep wrapper routes single and team modes through their intended call sequ
   await writeFile(resolve(workspace, "trigger/story-context/DOCUMENTS.md"), "# Frozen story context\n", "utf8");
   const conversation = { messages: [{ id: "message-1", binding: { turn: 7 }, data: { role: "assistant", content: "正文" } }] };
   const run = { id: "wrapper-run", turn: 7 };
-  const node = { metadata: { historyCompleteTurns: 20 } };
+  const node = { metadata: { storyContextSource: "trigger", historyCompleteTurns: 20 } };
   for (const mode of ["single", "team"]) {
     const callsMade = [];
     const data = { async get(request) {
@@ -414,7 +416,7 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
     if (request.workflow.endsWith("deep-director-team-planning")) return { callId: "existing-team-child", outputs: { report: "team-deep-report.json", references: "team-deep-references.json" } };
     return { callId: `${request.workflow}-call`, outputs: {} };
   } };
-  const result = await runDeepIfNeeded({ run, node: { metadata: {} }, conversation: { messages: [] }, data, calls, workspace });
+  const result = await runDeepIfNeeded({ run, node: { metadata: { storyContextSource: "trigger" } }, conversation: { messages: [] }, data, calls, workspace });
   // The wrapper recognises the operation as its own and reattaches to the child that is already in
   // flight instead of abandoning it or starting a second one.
   assert.equal(result.resumed, true);

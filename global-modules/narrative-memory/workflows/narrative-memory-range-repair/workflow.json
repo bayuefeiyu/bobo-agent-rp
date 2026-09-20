@@ -189,8 +189,8 @@
           "materialize-range-task"
         ]
       },
-      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料和完整目录。repair表示复核当前正文与既有记录是否矛盾或遗漏；supplement表示不预设既有记录错误，重新审视并补充。仍只输出客观Markdown清单，不解释、不分析、不输出JSON。",
-      "outputs": { "checklist": { "path": "range-checklist.md", "format": "markdown", "kind": "file", "scope": "workflow", "retain": "run" } },
+      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料和完整目录。repair表示复核当前正文与既有记录是否矛盾或遗漏；supplement表示不预设既有记录错误，重新审视并补充。仍只写客观Markdown清单并交付，不解释、不分析、不输出JSON。",
+      "outputs": { "checklist": { "path": "range-checklist.md", "format": "markdown", "kind": "file", "scope": "workflow", "retain": "run" } }, "delivery": {"primaryOutput": "checklist"},
       "workspaceHandoff": { "include": [{ "output": "checklist" }] },
       "moduleAccess": [
         {
@@ -291,7 +291,7 @@
         ]
       },
       "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料、完整目录和一级清单，只处理其中给出的回合范围和用户要求，不扩大到未指定历史。允许在确认现有记忆已经充分准确时输出operations为空的atomic unified-change-batch；覆盖确认由后续代码记录。",
-      "outputs": {},
+      "outputs": {"result": {"path": "range-change-batch.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["operations"], "properties": {"operations": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [
         {
           "moduleId": "narrative-memory",

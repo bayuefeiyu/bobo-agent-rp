@@ -35,6 +35,8 @@ Read only the references required by the current design:
 
 ## Design sequence
 
+When one numbered discussion item has several paths, label them `A`, `B`, `C` and so on, place a justified recommendation at `A` when practical, and state whether paths can be combined. Accept replies such as `1A+C`; keep earlier decisions and relabel changed choices before asking again. Do not force a recommendation or add questions for formatting.
+
 1. Classify each item as static authored context, user/profile settings, card initial data, session authority, transient workflow artifact, derived data, or presentation. Do not create module data merely because content is structured.
 2. Assign one authoritative owner. Define module, collection, and record-type boundaries around coherent lifecycle and access needs.
 3. Define fields, constraints, initial records, identity, binding, storage kind, partitioning, and history semantics.

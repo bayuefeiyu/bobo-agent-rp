@@ -149,8 +149,10 @@ test("recent-story export walks every page of a bounded window", async t => {
   const workspace = await mkdtemp(resolve(tmpdir(), "rp-story-export-"));
   t.after(() => rm(workspace, { recursive: true, force: true }));
   // One record per page: the character budget forces a cursor on every call, so a single-page
-  // implementation would silently return one story instead of the whole window.
-  const data = storyReader(store, constraints, 150);
+  // implementation would silently return one story instead of the whole window. The budget must still
+  // be at least one record's worth of characters — a budget no record fits in is a hard bound now, so
+  // the query reports `truncated` and returns nothing rather than delivering over budget.
+  const data = storyReader(store, constraints, 200);
   const result = await exportRecent({ run: { arguments: { throughTurn: 9, recentCompleteTurns: 4 } }, workspace, data });
   assert.deepEqual(result, { count: 4, fromTurn: 6, throughTurn: 9 });
   const index = JSON.parse(await readFile(resolve(workspace, "stories", "story-index.json"), "utf8"));

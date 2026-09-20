@@ -18,7 +18,7 @@
     }
   },
   "revision": "1",
-  "terminalFinalizer": { "target": "world-narrative-coordinator/finish-deep-operation", "statuses": ["failed", "cancelled", "skipped"], "forwardArguments": ["operationId"] },
+  "terminalFinalizer": { "target": "world-narrative-coordinator/finish-deep-operation", "statuses": ["failed", "cancelled", "skipped"], "forwardArguments": ["operationId", "terminalStatus", "terminalError"] },
   "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 2, "dedupeKey": "$.operationId" },
   "nodes": [
     {

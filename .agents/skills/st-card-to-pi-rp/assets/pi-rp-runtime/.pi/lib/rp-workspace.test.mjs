@@ -49,12 +49,15 @@ test("writes a user-only node process record with the last Agent exchange", asyn
     const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(root, "story", "run-1", "turn-background"));
     const path = await writeWorkflowProcessRecord(paths.workflowProcessRecords, {
       workflowId: "story", runId: "run-1", nodeId: "draft", nodeType: "agent", agentId: "writer", modelId: "pi:current",
-      exchange: { received: { role: "user", content: "写下一段" }, sent: { role: "assistant", content: "故事正文" } },
+      exchange: { received: { role: "user", content: "写下一段" }, sent: { role: "assistant", content: "调用结束工具" }, deliveries: [{ output: "narrative", path: "narrative.md", version: "v1" }], artifact: { role: "artifact", content: "故事正文" } },
     });
     const document = await readFile(path, "utf8");
     assert.match(document, /Agent 最后接收的内容/);
     assert.match(document, /写下一段/);
     assert.match(document, /Agent 最后发送的内容/);
+    assert.match(document, /正式交付回执/);
+    assert.match(document, /narrative.md/);
+    assert.match(document, /故事正文/);
     assert.match(document, /不会加入 Agent 上下文/);
   } finally {
     await rm(root, { recursive: true, force: true });

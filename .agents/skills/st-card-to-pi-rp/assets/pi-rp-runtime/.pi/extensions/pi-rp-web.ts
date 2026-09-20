@@ -28,12 +28,17 @@ import { createRpConfigStore, resolveActiveForegroundWorkflow } from "../lib/rp-
 import { createConfigProfileStore } from "../lib/rp-config-profiles.mjs";
 import { RpWorkflowEngine } from "../lib/rp-workflow-engine.mjs";
 import { withTerminalForegroundRelease } from "../lib/rp-workflow-host.mjs";
-import { composeNodePrompt, composeWorkflowNodeDynamicContext, moveModelTailToEnd, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
+import { composeWorkflowNodeDynamicContext, moveModelTailToEnd, resolveNodeProfiles } from "../lib/rp-model-config.mjs";
+import { assembleInitialContext, conciseWorkspaceIndex, currentTaskMessage, promptSourcePathAllowed, recentNarrativeMessages, seededPiMessage } from "../lib/rp-node-context.mjs";
+import { playPromptSources } from "../lib/rp-author-prompts.mjs";
+import { renderCardText, renderCardTextValues, renderTeamAuthorText } from "../lib/rp-card-text.mjs";
+import { materializeAuthorSkill } from "../lib/rp-card-text-files.mjs";
 import { assertDocumentWorkspaceAgentTools, canonicalWorkflowRef, normalizeWorkflowDefinition, resolveCodeNodeRoute, resolveNodeQueryBudget, workflowTriggerMatches } from "../lib/rp-workflows.mjs";
 import { normalizeFeatureModuleManifest } from "../lib/rp-feature-modules.mjs";
 import { assertLoadableSkill } from "../lib/rp-skill-contract.mjs";
 import { describeTurnFailureReason, narrativeOutputUnavailableError, noTextOutputError } from "../lib/rp-model-failures.mjs";
-import { parseAgentJson } from "../lib/rp-agent-output.mjs";
+import { createAgentDelivery, deliveryPrompt, runAgentDeliverySession } from "../lib/rp-agent-delivery.mjs";
+import { registerAgentDeliveryTools } from "../lib/rp-agent-delivery-tools.mjs";
 import { DATA_GET_PARAMETERS, DATA_GET_REQUIRED, DATA_QUERY_PARAMETERS, DATA_QUERY_REQUIRED } from "../lib/rp-data-tool-schemas.mjs";
 import { normalizeResourceCatalog } from "../lib/rp-resource-catalog.mjs";
 import { copyDocumentSet, copyWorkspaceEntry, writeCollisionSafeFile } from "../lib/rp-document-sets.mjs";
@@ -54,7 +59,7 @@ import { createRpRandomService } from "../lib/rp-random.mjs";
 import { artifactSourceReference, messageSourceReference, narrativeSourceLabel, normalizeNarrativeSource } from "../lib/rp-narrative-source.mjs";
 import { applyFrontendSettingsValues, frontendRegion, normalizeModuleFrontendView, validateFrontendWorkflowPayload } from "../lib/rp-module-frontend.mjs";
 import { stageWorkflowCallInputs, stageWorkspaceHandoffs } from "../lib/rp-workspace-handoff.mjs";
-import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "../lib/rp-workspace-snapshot.mjs";
+import { cleanupFrozenTriggerInputs, createDocumentWorkspaceSnapshot, freezeTriggeredDocuments, replaceDocumentWorkspaceSnapshot, stageTriggeredDocuments, workspaceDocumentFromArtifact } from "../lib/rp-workspace-snapshot.mjs";
 import { runTeamMeeting } from "../lib/rp-team-runtime.mjs";
 import { readAuthorizedTeamMaterial, readDeclaredTeamDocuments } from "../lib/rp-team-access.mjs";
 import { checkpointTeamSessionAttempt, rollbackTeamSessionAttempt } from "../lib/rp-team-session.mjs";
@@ -298,10 +303,14 @@ function playerProfileContext(playerName: string, description: string) {
   ].join("\n\n");
 }
 
+function playerProfileMessage(playerName: string, description: string) {
+  return `玩家角色：\n姓名：${playerName}${description.trim() ? `\n描述：${description.trim()}` : ""}`;
+}
+
 async function fixedRpContext(active: ActiveBridge) {
   const sections = [
     "# Fixed card context",
-    active.stableCardContext,
+    renderCardText(active.stableCardContext, active.playerName, "fixed_context"),
     playerProfileContext(active.playerName, active.playerDescription),
   ];
   return sections.filter(Boolean).join("\n\n");
@@ -313,8 +322,8 @@ function featureModuleFixedContext(active: ActiveBridge) {
     "# Card feature-module routing",
     ...active.featureModules.map(module => {
       return [
-        `## ${module.title} (${module.id})`,
-        module.skillDescription,
+        `## ${renderCardText(module.title, active.playerName, `${module.id} title`)} (${module.id})`,
+        renderCardText(module.skillDescription, active.playerName, `${module.id} skill description`),
         `Module skill: ${relative(active.context.cwd, module.skillPath).replaceAll("\\", "/")}`,
         module.contract
           ? `Collections: ${Object.keys(module.contract.collections).join(", ")}. Use rp_data_query/rp_data_get only within the current workflow node's granted capabilities.`
@@ -329,7 +338,7 @@ function messageRetrievalFixedContext(active: ActiveBridge) {
   return [
     "# Card message-record retrieval skill",
     `Skill: ${relative(active.context.cwd, active.messageSkillPath).replaceAll("\\", "/")}`,
-    active.messageSkillDescription,
+    renderCardText(active.messageSkillDescription, active.playerName, "message retrieval skill description"),
     "Read this skill before using rp_message_query.",
   ].join("\n");
 }
@@ -838,7 +847,21 @@ export default function (pi: ExtensionAPI) {
       sessionDirectory: target.sessionDirectory,
       modules: dataModuleBindings(target.featureModules),
       initialOverrides: profile?.moduleOverrides || {},
+      playerName: target.playerName,
     }).initialize();
+    const skillsRoot = resolve(target.sessionDirectory, "workspace", "author-skills");
+    for (const module of target.featureModules) {
+      const destination = resolve(skillsRoot, module.id);
+      if (!module.skillPath.startsWith(`${destination}${sep}`)) {
+        module.skillPath = await materializeAuthorSkill(module.skillPath, destination, target.playerName);
+      }
+    }
+    if (target.messageSkillPath) {
+      const destination = resolve(skillsRoot, "message-retrieval");
+      if (!target.messageSkillPath.startsWith(`${destination}${sep}`)) {
+        target.messageSkillPath = await materializeAuthorSkill(target.messageSkillPath, destination, target.playerName);
+      }
+    }
   }
 
   async function ensureActiveRecord() {
@@ -982,7 +1005,7 @@ export default function (pi: ExtensionAPI) {
         const content = [];
         for (const fragment of included) {
           const source = await readFile(fragment.path, "utf8");
-          content.push(`## ${fragment.title}\n${source.trim()}`);
+          content.push(`## ${renderCardText(fragment.title, target.playerName, fragment.path)}\n${renderCardText(source.trim(), target.playerName, fragment.path)}`);
         }
         sections.push([
           `# Dynamic card context: ${processor.id}`,
@@ -1157,15 +1180,16 @@ export default function (pi: ExtensionAPI) {
         `Workflow: ${workflow.id}; run: ${run.id}; turn: ${run.turn ?? "unknown"}`,
         "The full authorized input catalog is at shared/INPUTS.json. Paths in that catalog are relative to the team node workspace; use the team read tool to inspect them.",
         typeof run.payload?.currentInput === "string" && run.payload.currentInput.trim() ? `Current input:\n${run.payload.currentInput.trim()}` : "",
-        node.prompt || node.description || "",
+        renderCardText(node.prompt || node.description || "", active.playerName, `team node ${node.id}`),
       ].filter(Boolean).join("\n\n");
       const invokeTeamTool = async (request: any) => {
         if (request?.adapter !== "declared-document-read-v1") throw new Error(`Unsupported team tool adapter: ${request?.adapter || "missing"}`);
         const documents = await readDeclaredTeamDocuments({ documents: request.documents, nodeWorkspace, maxCharacters: request.arguments?.maxCharacters });
         return { output: { adapter: request.adapter, request: String(request.text || ""), documents }, usage: null };
       };
+      const teamConfig = renderTeamAuthorText(node.team, active.playerName, `team ${node.id}`);
       const deliverables = await runTeamMeeting({
-        config: node.team,
+        config: teamConfig,
         workspace: nodeWorkspace,
         runId: run.id,
         nodeId: node.id,
@@ -1365,9 +1389,14 @@ export default function (pi: ExtensionAPI) {
           const access = accessFor(request.moduleId, request.collectionId);
           return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views, ...workflowDataReadAccess(run, store, dataReadBatchIds) });
         },
+        // `getCurrent` reads exactly like `get`: the same frozen view and the same inherited batches.
+        // It used to omit the boundary entirely, so any code node could read a record committed after
+        // its own run started — the one documented exception ("an exact record in an already-granted
+        // collection, such as an operation lease or an expected-revision check") was never enforced,
+        // and a card could use it to look past its own frozen inputs.
         getCurrent: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
-          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views });
+          return getDataRecord(store, request, { capabilities: access.capabilities, views: access.views, ...workflowDataReadAccess(run, store, dataReadBatchIds) });
         },
         resolve: async (value: string) => (await resolveWorkflowIdentity(run, store, value, dataReadBatchIds)).filter((entry: any) => {
           const access = node.moduleAccess?.find((item: any) => item.moduleId === entry.moduleId && item.collectionId === entry.collectionId);
@@ -1396,7 +1425,10 @@ export default function (pi: ExtensionAPI) {
           },
         })),
       });
-      const services: Record<string, any> = { comfy: active.comfyUi };
+      const services: Record<string, any> = {
+        comfy: active.comfyUi,
+        cardText: Object.freeze({ render: (value: string, source: string) => renderCardText(value, active!.playerName, source) }),
+      };
       if (node.runtimeServices?.includes("random")) {
         services.random = createRpRandomService({
           sessionDirectory: active.sessionDirectory,
@@ -1420,7 +1452,7 @@ export default function (pi: ExtensionAPI) {
         conversation: {
           messages: structuredClone(active.messages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? active!.turn))),
           player: { name: active.playerName, description: active.playerDescription },
-          fixedContext: active.stableCardContext,
+          fixedContext: renderCardText(active.stableCardContext, active.playerName, "fixed_context"),
           primaryCharacters: "",
         },
         workspace: nodeWorkspace,
@@ -1541,29 +1573,19 @@ export default function (pi: ExtensionAPI) {
       if (typeof result !== "string") throw new Error(`Workflow context processor ${node.context.processor} must return a string.`);
       customContext = result;
     }
-    const prompt = composeNodePrompt({
-      piSystemPrompt: active.context.getSystemPrompt(),
-      modelHead: profile?.headPrompt,
-      agentPrompt: agent?.prompt,
-      fixedContext: node.metadata?.fixedContext === "none" ? "" : await fixedRpContext(active),
-      dynamicContext: composeWorkflowNodeDynamicContext({
-        workflowKind: workflow.kind,
-        turn: run.turn,
-        recentCompleteTurns: workflow.turnContext?.recentCompleteTurns,
-        recentContext: workflow.kind === "foreground" && node.metadata?.documentWorkspace !== true && Number.isSafeInteger(run.turn) ? recentCompletedTurnContext(active, run.turn, workflow.turnContext.recentCompleteTurns) : "",
-        callContext: run.callContext,
-        documentWorkspace: node.metadata?.documentWorkspace === true,
-        handoffMirrorRoots,
-        customContext,
-      }),
-      upstreamArtifacts: node.metadata?.documentWorkspace === true
-        ? ""
-        : upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "",
-      currentInput: typeof run.payload?.currentInput === "string"
-        ? run.payload.currentInput
-        : typeof run.textInput === "string" ? run.textInput : "",
-      nodePrompt: node.prompt || node.description,
+    const legacyDynamicContext = composeWorkflowNodeDynamicContext({
+      workflowKind: workflow.kind,
+      turn: run.turn,
+      recentCompleteTurns: workflow.turnContext?.recentCompleteTurns,
+      recentContext: workflow.kind === "foreground" && node.metadata?.documentWorkspace !== true && node.metadata?.initialContext?.recentNarrative !== true && Number.isSafeInteger(run.turn) ? recentCompletedTurnContext(active, run.turn, workflow.turnContext.recentCompleteTurns) : "",
+      callContext: run.callContext,
+      documentWorkspace: node.metadata?.documentWorkspace === true,
+      handoffMirrorRoots,
+      customContext,
     });
+    const legacyUpstreamArtifacts = node.metadata?.documentWorkspace === true
+      ? ""
+      : upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "";
     const sdk: any = await import("@earendil-works/pi-coding-agent");
     const dataStore = new RpDataStore({ sessionDirectory: active.sessionDirectory, modules: dataModuleBindings(active.featureModules) });
     let teamControl: any = null;
@@ -1573,10 +1595,20 @@ export default function (pi: ExtensionAPI) {
     const requiredCalls: string[] = Array.isArray(node.requiredCalls) ? node.requiredCalls : [];
     const calledTargets = new Set<string>();
     const failedTargets = new Map<string, string>();
+    let workerSession: any = null;
+    const delivery = node.metadata?.teamMember === true ? null : await createAgentDelivery({
+      workspace: nodeWorkspace, node, agent,
+      inputPaths: [...workspaceDocuments.map(document => document.path), ...upstreamHandoffs.map((artifact: any) => artifact.stagedPath)],
+      beforeComplete: async () => {
+        const missing = requiredCalls.filter(target => !calledTargets.has(target));
+        if (missing.length) throw Object.assign(new Error(`Required workflow calls have not succeeded: ${missing.join(", ")}.`), { code: "required_call_missing" });
+      },
+    });
     const nodeToolFactory = {
       name: "rp-node-tools",
       hidden: true,
       factory(workerPi: any) {
+        if (delivery) registerAgentDeliveryTools(workerPi, delivery, { currentMessages: () => workerSession?.messages || [] }, Type);
         if (node.metadata?.teamMember === true) {
           const teamRoot = resolve(node.metadata.teamSharedRoot);
           const teamNodeRoot = dirname(teamRoot);
@@ -1665,6 +1697,7 @@ export default function (pi: ExtensionAPI) {
             const request = structuredClone(parameters);
             const callBinding = node.workflowCalls.find((item: any) => item.target === request.workflow);
             try {
+              if (delivery) for (const path of Object.values(request.outputPaths || {})) await delivery.assertCallOutputPath(path);
               if (callBinding?.documentSnapshotInput) {
                 request.documents ||= {};
                 if (request.documents[callBinding.documentSnapshotInput]) throw new Error(`Document input ${callBinding.documentSnapshotInput} is supplied automatically and cannot be overridden.`);
@@ -1687,6 +1720,7 @@ export default function (pi: ExtensionAPI) {
               calledTargets.add(request.workflow);
               for (const [id, path] of Object.entries(result.outputs || {})) {
                 if (typeof path !== "string") continue;
+                if (delivery) await delivery.protect(path);
                 dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: `Declared output ${id} from ${request.workflow}.` });
               }
               return { content: [{ type: "text", text: JSON.stringify(result.outputs, null, 2) }], details: result };
@@ -1759,32 +1793,12 @@ export default function (pi: ExtensionAPI) {
         }
       },
     };
-    const loader = new sdk.DefaultResourceLoader({
-      cwd: nodeWorkspace,
-      agentDir: sdk.getAgentDir(),
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-      systemPrompt: prompt.systemPrompt,
-      extensionFactories: [nodeToolFactory, ...(profile?.tailPrompt ? [{
-        name: "rp-model-tail",
-        hidden: true,
-        factory(workerPi: any) {
-          workerPi.on("context", (event: any) => ({
-            messages: moveModelTailToEnd(event.messages, profile.tailPrompt),
-          }));
-        },
-      }] : [])],
-    });
-    await loader.reload();
-    const permittedBuiltins = new Set(["read", "write", "edit", "bash", "grep", "find", "ls", "powershell"]);
+    const permittedBuiltins = new Set(["read", "write", "edit", "bash"]);
     const permittedDataTools = new Set(["rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"]);
     const permittedRuntimeTools = new Set(["rp_roll"]);
     const tools = node.metadata?.teamMember === true
       ? ["rp_team_read", ...(task.teamMember?.member?.role === "leader" && task.teamMember?.phase === "discussion" ? ["rp_team_control"] : [])]
-      : (agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)));
+      : [...new Set(["read", "write", "edit", "rp_files", "rp_deliver", "rp_node_complete", ...(agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)))])];
     const hasResolvedWorkflowCall = node.workflowCalls?.some((binding: any) => {
       const [moduleId] = binding.target.split("/");
       return active.featureModules.find(module => module.id === moduleId)?.workflows.some(candidate => canonicalWorkflowRef(candidate) === binding.target);
@@ -1806,6 +1820,72 @@ export default function (pi: ExtensionAPI) {
         { code: "workflow_configuration_invalid" },
       );
     }
+    const promptSources = await playPromptSources(active, profile, agent, node, nodeWorkspace, tools);
+    const contextSelection = node.metadata?.initialContext || {};
+    const cardMessages = contextSelection.cardFoundation === true && active.stableCardContext.trim()
+      ? [{ role: contextSelection.cardFoundationRole || promptSources.roles.cardFoundationRole || "user", content: `以下为本世界设定的概述和基本信息，涉及具体细节时应查看对应资料。\n\n${renderCardText(active.stableCardContext, active.playerName, "fixed_context")}` }]
+      : [];
+    const playerMessages = contextSelection.playerProfile === true
+      ? [{ role: contextSelection.playerProfileRole || promptSources.roles.playerProfileRole || "user", content: playerProfileMessage(active.playerName, active.playerDescription) }]
+      : [];
+    const historyMessages = contextSelection.recentNarrative === true && Number.isSafeInteger(run.turn)
+      ? recentNarrativeMessages(active.messages, run.turn, workflow.turnContext?.recentCompleteTurns || 5, "【前情截断】更早的对话未直接提供；需要时按当前任务允许的方式查询。")
+      : [];
+    const input = contextSelection.currentInput === true
+      ? (typeof run.payload?.currentInput === "string" ? run.payload.currentInput : typeof run.textInput === "string" ? run.textInput : "")
+      : null;
+    const additional = [
+      run.callContext ? "模块调用输入见 `CALL-INPUTS.md`。" : "",
+      customContext,
+      node.metadata?.documentWorkspace === true ? "" : [legacyDynamicContext, legacyUpstreamArtifacts].filter(Boolean).join("\n\n"),
+    ].filter(Boolean).join("\n\n");
+    const current = currentTaskMessage({ input, task: promptSources.nodeText, index: conciseWorkspaceIndex(workspaceDocuments, node.metadata?.documentWorkspace === true), additional });
+    const tailAtStart = promptSources.tailMode === "on-start" ? promptSources.tail : [];
+    const assembled = assembleInitialContext({
+      baseSystem: promptSources.baseSystem,
+      prefix: promptSources.prefix,
+      agent: promptSources.agent,
+      card: cardMessages,
+      player: playerMessages,
+      history: historyMessages,
+      current,
+      tail: tailAtStart,
+    });
+    if (assembled.messages.at(-1)?.role !== "user") throw new Error(`Node ${node.id} ends in an assistant message; assistant prefill is not verified for this Pi/model path.`);
+    const finalUserMessage = assembled.messages.at(-1).content;
+    const seededMessages = assembled.messages.slice(0, -1);
+    const everyCallTail = promptSources.tailMode === "every-call" ? promptSources.tail : [];
+    if (everyCallTail.some((message: any) => message.role !== "user")) throw new Error(`Node ${node.id} has an every-call tail that cannot be represented by this Pi request path.`);
+    const loader = new sdk.DefaultResourceLoader({
+      cwd: nodeWorkspace,
+      agentDir: sdk.getAgentDir(),
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      systemPrompt: [assembled.systemPrompt, delivery ? deliveryPrompt(delivery.contract) : ""].filter(Boolean).join("\n\n"),
+      extensionFactories: [nodeToolFactory, {
+        name: "rp-workspace-file-boundary",
+        hidden: true,
+        factory(workerPi: any) {
+          workerPi.on("tool_call", async (event: any) => {
+            if (!["read", "write", "edit"].includes(event.toolName)) return;
+            if (await promptSourcePathAllowed(nodeWorkspace, event.input?.path, [resolve(active.context.cwd, "prompts"), resolve(active.cardDirectory, "prompts"), resolve(nodeWorkspace, ".rp-delivery")])) return;
+            return { block: true, reason: "Prompt source files are not available to this Agent node." };
+          });
+        },
+      }, ...(everyCallTail.length ? [{
+        name: "rp-model-tail",
+        hidden: true,
+        factory(workerPi: any) {
+          workerPi.on("context", (event: any) => ({
+            messages: moveModelTailToEnd(event.messages, everyCallTail.map((message: any) => message.content).join("\n\n")),
+          }));
+        },
+      }] : [])],
+    });
+    await loader.reload();
     const teamSessionDirectory = node.metadata?.teamMember === true ? resolve(nodeWorkspace, ".session") : null;
     if (teamSessionDirectory) await mkdir(teamSessionDirectory, { recursive: true });
     const teamSessionPointer = teamSessionDirectory ? resolve(teamSessionDirectory, "CURRENT.txt") : null;
@@ -1816,6 +1896,11 @@ export default function (pi: ExtensionAPI) {
     const sessionManager = previousTeamSession
       ? sdk.SessionManager.open(previousTeamSession, teamSessionDirectory)
       : teamSessionDirectory ? sdk.SessionManager.create(nodeWorkspace, teamSessionDirectory) : sdk.SessionManager.inMemory(nodeWorkspace);
+    if (!previousTeamSession) {
+      for (const message of seededMessages) sessionManager.appendMessage(seededPiMessage(message, model));
+    }
+    const settingsManager = sdk.SettingsManager.create(nodeWorkspace, sdk.getAgentDir());
+    settingsManager.applyOverrides({ compaction: { enabled: false } });
     const { session } = await sdk.createAgentSession({
       cwd: nodeWorkspace,
       modelRuntime: (active.context.modelRegistry as any).runtime,
@@ -1824,21 +1909,24 @@ export default function (pi: ExtensionAPI) {
       ...(tools.length ? { tools } : { noTools: "all" }),
       resourceLoader: loader,
       sessionManager,
+      settingsManager,
     });
+    workerSession = session;
     const usageMessageStart = session.messages.length;
     const teamSessionCheckpoint = teamSessionDirectory ? checkpointTeamSessionAttempt(sessionManager) : null;
     try {
-      const userPrompt = prompt.contextMessages.join("\n\n") || "Execute this workflow node and return its result.";
+      const userPrompt = finalUserMessage;
       // From here on a failure may be the model's, so the runtime must stop calling it deterministic.
       task.markModelDispatched?.();
-      await session.prompt(userPrompt, { expandPromptTemplates: false, source: "extension" });
+      if (delivery) await runAgentDeliverySession({ session, prompt: userPrompt, delivery });
+      else await session.prompt(userPrompt, { expandPromptTemplates: false, source: "extension" });
       if (teamSessionPointer) {
         const persistedSession = session.sessionFile || session.sessionManager?.getSessionFile?.() || null;
         if (persistedSession) await writeFile(teamSessionPointer, `${persistedSession}\n`, "utf8");
       }
       const assistant = [...session.messages].reverse().find((message: any) => message.role === "assistant");
       const content = messageText(assistant);
-      if (!content) throw noTextOutputError({ message: assistant, label: `Workflow agent ${agent?.id || node.id}` });
+      if (!delivery && !content) throw noTextOutputError({ message: assistant, label: `Workflow agent ${agent?.id || node.id}` });
       // A workflow that declared a call as required has already decided that continuing without it
       // is worse than failing the turn. Whether a missing retrieval is a degradation or a hard stop
       // is the card's decision, so the runtime enforces the declaration rather than guessing.
@@ -1860,47 +1948,18 @@ export default function (pi: ExtensionAPI) {
           throw rejected;
         }
       }
-      let output: any = content;
-      if (agent?.outputMode === "json") {
-        // A JSON-mode reply may carry prose around the document. The runtime locates the JSON
-        // (whole reply, fenced block, then first balanced value) instead of demanding that the reply
-        // start with it; a real failure quotes what arrived so the retry and the panel carry evidence.
-        const parsed = parseAgentJson(content);
-        if (!parsed.ok) {
-          throw Object.assign(
-            new Error(`Workflow Agent ${agent.id} must return valid JSON (${parsed.reason}); received ${parsed.characters} characters starting: ${parsed.preview}${parsed.characters > 400 ? "…" : ""}`),
-            { code: "agent_output_not_json", output: { characters: parsed.characters, preview: parsed.preview } },
-          );
-        }
-        output = parsed.value;
-      }
-      for (const definition of Object.values(node.outputs || {}) as any[]) {
-        if (definition.format !== "narrative") continue;
-        const outputPath = resolve(nodeWorkspace, definition.path);
-        const outputRelative = relative(nodeWorkspace, outputPath);
-        if (!outputRelative || outputRelative.startsWith("..") || outputRelative.includes(`..${sep}`)) throw new Error(`Narrative output path for node ${node.id} escapes its workspace.`);
-        await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, content, "utf8");
-      }
-      if (node.metadata?.textOutput) {
-        const definition = node.outputs?.[node.metadata.textOutput];
-        const outputPath = resolve(nodeWorkspace, definition.path);
-        const outputRelative = relative(nodeWorkspace, outputPath);
-        if (!outputRelative || outputRelative.startsWith("..") || outputRelative.includes(`..${sep}`)) throw new Error(`Text output path for node ${node.id} escapes its workspace.`);
-        await mkdir(dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, `${content.trim()}\n`, "utf8");
-      }
+      const output: any = delivery ? await delivery.result() : content;
       const snapshotDeclaration = node.metadata?.documentWorkspaceSnapshot;
       if (snapshotDeclaration) {
         const definition = node.outputs?.[snapshotDeclaration.output];
         if (!definition || definition.format !== "document-workspace-snapshot" || definition.kind !== "directory") throw new Error(`Node ${node.id} documentWorkspaceSnapshot must reference a declared directory output with format document-workspace-snapshot.`);
-        await createDocumentWorkspaceSnapshot({
+        await replaceDocumentWorkspaceSnapshot({
           nodeWorkspace,
           outputPath: definition.path,
           documents: workspaceDocuments,
           dynamicOutputs: dynamicCallOutputs,
           currentInput: typeof run.payload?.currentInput === "string" ? run.payload.currentInput : "",
-          narrative: content,
+          narrative: typeof output === "string" ? output : "",
           turnContext: workflow.turnContext,
         });
       }
@@ -1909,7 +1968,7 @@ export default function (pi: ExtensionAPI) {
         ...(node.metadata?.teamMember === true ? { content, control: teamControl } : {}),
         assistantMessageId: rpRun?.assistantMessageId || null,
         usage: tokenUsageFromMessages(session.messages.slice(usageMessageStart)),
-        processRecord: lastAgentExchange(session.messages),
+        processRecord: delivery ? { ...lastAgentExchange(session.messages), deliveries: delivery.receipts, artifact: { role: "artifact", content: typeof output === "string" ? output : JSON.stringify(output, null, 2) } } : lastAgentExchange(session.messages),
         context: {
           mode: node.context.mode,
           nodePrompt: node.prompt || node.description || null,
@@ -1918,6 +1977,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error));
+      if (delivery?.completed) (wrapped as any).code = "agent_delivery_finalize_failed";
       (wrapped as any).usage = tokenUsageFromMessages(session.messages.slice(usageMessageStart));
       if (teamSessionCheckpoint) {
         try {
@@ -2311,7 +2371,25 @@ export default function (pi: ExtensionAPI) {
           await active.workflowEngine.restore(workflow, run);
           readViewRegistry.register({ ...run, terminalFinalized: undefined });
         } catch (error) {
-          context.ui.notify(`Workflow run ${run.id} could not be restored: ${(error as Error).message}`, "warning");
+          // A run that cannot be restored stayed non-terminal in `runs.jsonl`, so every later load
+          // retried the same failing restore and `blockingTurnRuns()` kept counting it — the session was
+          // blocked for ever by a run that could never make progress. Record it as terminally failed,
+          // with the reason, so it stops blocking and the panel has something to show.
+          const failedRun = {
+            ...run,
+            status: "failed",
+            error: `Could not be restored: ${(error as Error).message}`,
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            changeFailures: [...(Array.isArray(run.changeFailures) ? run.changeFailures : []), { at: new Date().toISOString(), hook: "restore", message: (error as Error).message }].slice(-5),
+          };
+          try {
+            const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(active.sessionDirectory, run.workflowId, run.id, run.kind ?? workflow.kind));
+            await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, failedRun));
+          } catch (writeError) {
+            console.warn(`Could not persist the failed restore of workflow run ${run.id}: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+          }
+          context.ui.notify(`Workflow run ${run.id} could not be restored and was marked failed so it no longer blocks this chat: ${(error as Error).message}`, "warning");
         }
       }
     };
@@ -2348,6 +2426,7 @@ export default function (pi: ExtensionAPI) {
       bridge = await webModule.startWebBridge({
         cardDirectory,
         bridge: {
+          renderCardText,
           getState: async () => webSnapshot(),
           getSettings: async () => ({
             common: active?.commonSettings || defaultCommonSettings,
@@ -2378,6 +2457,7 @@ export default function (pi: ExtensionAPI) {
             const listing = await configProfiles.list();
             if (active && listing.activeProfileId === saved.id) {
               active.featureModules = applyModuleProfile(await readFeatureModules(cardDirectory, manifest.feature_modules), await configProfiles.getActive());
+              await ensureFeatureModuleRecords(active);
               active.workflowEngine.policy = await configStore.getRuntimePolicy();
             }
             return saved;
@@ -2392,6 +2472,7 @@ export default function (pi: ExtensionAPI) {
             const result = await configProfiles.activate(profileId);
             if (active) {
               active.featureModules = applyModuleProfile(await readFeatureModules(cardDirectory, manifest.feature_modules), await configProfiles.getActive());
+              await ensureFeatureModuleRecords(active);
               active.workflowEngine.policy = await configStore.getRuntimePolicy();
             }
             return { ...result, appliesToExistingModuleData: false, workflowInstancesKeepStartSnapshot: true };
@@ -2826,12 +2907,12 @@ export default function (pi: ExtensionAPI) {
               }
               modules.push({
                 id: module.id,
-                title: module.title,
-                description: module.description,
+                title: renderCardText(module.title, active.playerName, `${module.id} title`),
+                description: renderCardText(module.description, active.playerName, `${module.id} description`),
                 displayOrder: module.displayOrder,
                 available,
                 error: dataError,
-                view: module.view,
+                view: renderCardTextValues(module.view, active.playerName, `${module.id} frontend view`),
                 data,
               });
             }
@@ -3321,6 +3402,9 @@ export default function (pi: ExtensionAPI) {
           },
           updateUserSettings: async ({ playerName, description }: { playerName: string; description: string }) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
+            if (active.openingId && playerName !== active.playerName) {
+              throw httpError(409, "本会话的玩家名已固定；如需改名，请停止游玩后在项目根目录使用维护流程处理会话资料。");
+            }
             active.playerName = playerName;
             active.playerDescription = description;
             active.commonSettings.user.playerName = playerName;
@@ -3338,6 +3422,9 @@ export default function (pi: ExtensionAPI) {
           },
           deleteUserProfile: async (playerName: string) => {
             if (!active) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
+            if (active.openingId && playerName === active.playerName) {
+              throw httpError(409, "游玩中不能删除当前会话的玩家档案；请停止游玩后在项目根目录使用维护流程处理。");
+            }
             const { settings, removed, activeChanged } = removeSavedUserProfile(active.commonSettings, playerName);
             active.commonSettings = settings;
             if (activeChanged) {

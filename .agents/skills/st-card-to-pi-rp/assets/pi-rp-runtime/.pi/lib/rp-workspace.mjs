@@ -70,6 +70,7 @@ export async function writeWorkflowProcessRecord(processRecordsRoot, record) {
     exchange
       ? processRecordSection("Agent 最后发送的内容", exchange.sent)
       : "## Agent 最后发送的内容\n\n此节点未调用 Agent，没有 Agent 输出。",
+    ...(exchange?.deliveries ? ["", processRecordSection("正式交付回执（仅形式检查）", { role: "runtime", content: JSON.stringify(exchange.deliveries, null, 2) }), "", processRecordSection("正式交付结果", exchange.artifact)] : []),
     "",
     "> 此文件仅用于用户查看与调试，不会加入 Agent 上下文。",
     "",

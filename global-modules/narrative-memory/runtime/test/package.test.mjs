@@ -146,8 +146,9 @@ test("the public data store initializes, commits, indexes, and renders complete 
     view: "frontend",
     limit: 10,
   }, { capabilities: ["memory.frontend.read"], views: ["frontend"], runtimeLimit: 20, runtimeCharacters: 20000 });
-  assert.equal(result.returned, 1);
-  assert.deepEqual(result.items[0].value, entity);
+  const created = result.items.find(item => item.id === "lin");
+  assert.ok(created, "the newly created entity remains queryable when the module already has seeded characters");
+  assert.deepEqual(created.value, entity);
 
   const coverage = {
     startTurn: 1,

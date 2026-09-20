@@ -1,0 +1,18 @@
+{
+  "read": "Read task files and images.",
+  "write": "Create or overwrite an authorized workspace file.",
+  "edit": "Replace exact text in an authorized workspace file.",
+  "bash": "Run a shell command; commands may change files.",
+  "powershell": "Run a PowerShell command; commands may change files.",
+  "grep": "Search text in authorized workspace files.",
+  "find": "Find authorized workspace files by pattern.",
+  "ls": "List an authorized workspace directory.",
+  "rp_call": "Invoke a module workflow available to this node; read returned documents when needed.",
+  "rp_roll": "Roll dice; the same key and arguments replay one logical roll.",
+  "rp_data_query": "Query authorized indexed RP data through a named view.",
+  "rp_data_get": "Read one authorized RP data record through a named view.",
+  "rp_data_resolve": "Resolve a name or alias in authorized RP data collections.",
+  "rp_data_submit": "Submit a declared data-change output.",
+  "rp_team_read": "Read authorized team material.",
+  "rp_team_control": "Control the current team discussion phase."
+}

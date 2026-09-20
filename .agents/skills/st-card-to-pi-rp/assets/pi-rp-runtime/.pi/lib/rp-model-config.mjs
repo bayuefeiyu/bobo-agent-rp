@@ -36,6 +36,8 @@ export function normalizeModelProfile(value) {
     maxConcurrency: positive(input.maxConcurrency, 10, 10),
     headPrompt: typeof input.headPrompt === "string" && input.headPrompt.trim() ? input.headPrompt.trim() : null,
     tailPrompt: typeof input.tailPrompt === "string" && input.tailPrompt.trim() ? input.tailPrompt.trim() : null,
+    headPromptFile: typeof input.headPromptFile === "string" && input.headPromptFile.trim() ? input.headPromptFile.trim() : null,
+    tailPromptFile: typeof input.tailPromptFile === "string" && input.tailPromptFile.trim() ? input.tailPromptFile.trim() : null,
     parameters: input.parameters && typeof input.parameters === "object" && !Array.isArray(input.parameters) ? input.parameters : {},
   };
 }
@@ -54,6 +56,7 @@ export function normalizeAgentProfile(value) {
     name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : agentId,
     description: typeof input.description === "string" ? input.description.trim() : "",
     prompt: typeof input.prompt === "string" && input.prompt.trim() ? input.prompt.trim() : null,
+    promptFile: typeof input.promptFile === "string" && input.promptFile.trim() ? input.promptFile.trim() : null,
     tools,
     contextPermissions: permissions,
     outputMode: input.outputMode === "json" ? "json" : "text",
@@ -80,6 +83,11 @@ export function moveModelTailToEnd(messages, modelTail, timestamp = Date.now()) 
     ? messages.filter(message => message?.role !== "custom" || message.customType !== MODEL_TAIL_MESSAGE_TYPE)
     : [];
   if (typeof modelTail !== "string" || !modelTail.trim()) return context;
+  if (context.at(-1)?.role === "user") {
+    const last = context.at(-1);
+    const content = typeof last.content === "string" ? [{ type: "text", text: last.content }] : last.content;
+    return [...context.slice(0, -1), { ...last, content: [...content, { type: "text", text: `\n\n${modelTail.trim()}` }] }];
+  }
   return [...context, {
     role: "custom",
     customType: MODEL_TAIL_MESSAGE_TYPE,

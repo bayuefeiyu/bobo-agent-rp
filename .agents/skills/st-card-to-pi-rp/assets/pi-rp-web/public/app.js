@@ -1288,15 +1288,21 @@ function applySnapshot(snapshot) {
   elements.chooseChatButton.disabled = previewMode || snapshot.busy || state.switching;
   const blockingWorkflows = snapshot.blockingWorkflows || [];
   const turnFailure = previewMode ? null : snapshot.lastTurnFailure || null;
+  // A blocking workflow whose host hooks keep failing never advances, so "waiting" alone leaves the
+  // player with no idea whether to keep waiting. Surface the recorded reason instead.
+  const stuckBlocking = blockingWorkflows.find(item => (item.changeFailures || []).length);
+  const stuckDetail = stuckBlocking ? stuckBlocking.changeFailures.at(-1)?.message || "" : "";
   elements.connectionStatus.textContent = previewMode
     ? "开发预览 · 未载入角色卡和聊天"
     : turnFailure
     ? `该回合未成功产出正文${turnFailure.detail ? `：${shortenDetail(turnFailure.detail)}` : ""}`
+    : stuckBlocking
+    ? `后台工作流 ${stuckBlocking.workflowTitle || stuckBlocking.workflowId} 已卡住${stuckDetail ? `：${shortenDetail(stuckDetail)}` : ""}`
     : blockingWorkflows.length
     ? `等待后台工作流：${blockingWorkflows.map(item => item.workflowTitle || item.workflowId).join("、")}`
     : snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
-  elements.connectionStatus.classList.toggle("turn-failure", Boolean(turnFailure));
-  elements.connectionStatus.title = turnFailure?.detail || "";
+  elements.connectionStatus.classList.toggle("turn-failure", Boolean(turnFailure || stuckBlocking));
+  elements.connectionStatus.title = turnFailure?.detail || stuckDetail || "";
   elements.input.disabled = previewMode || snapshot.busy;
   elements.input.placeholder = previewMode ? "根目录预览模式不发送消息" : "输入你的行动或对话……";
   elements.sendButton.disabled = previewMode || snapshot.busy || state.sending;
@@ -1308,6 +1314,7 @@ function applySnapshot(snapshot) {
     return !previous || previous.sequence !== message.sequence || previous.content !== message.content || previous.editedAt !== message.editedAt;
   });
   const playerNameChanged = snapshot.playerName !== previousPlayerName;
+  if (!started && state.card?.openings && playerNameChanged) renderOpeningChoices();
   if (started && (messagesChanged || playerNameChanged || previewMode)) renderMessages(snapshot.messages, messagesChanged);
   for (const action of document.querySelectorAll(".message-action")) action.disabled = snapshot.busy;
 }
@@ -1329,14 +1336,15 @@ async function selectOpening(openingId, button) {
 
 function renderOpeningChoices() {
   const fragment = document.createDocumentFragment();
+  const playerName = elements.playerName.value.trim() || state.snapshot?.playerName || "玩家";
   for (const opening of state.card.openings) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "opening-card";
     const title = document.createElement("h3");
-    title.textContent = opening.title;
+    title.textContent = opening.title.replaceAll("{{user}}", () => playerName);
     const preview = document.createElement("p");
-    preview.textContent = opening.content;
+    preview.textContent = opening.content.replaceAll("{{user}}", () => playerName);
     button.append(title, preview);
     button.addEventListener("click", () => selectOpening(opening.id, button));
     fragment.append(button);
@@ -1761,6 +1769,7 @@ function loadModelForm() {
 }
 
 function modelFormValue() {
+  const saved = state.models.find(item => item.id === elements.modelId.value.trim() && !item.virtual);
   return {
     schemaVersion: 1,
     id: elements.modelId.value.trim(),
@@ -1776,6 +1785,8 @@ function modelFormValue() {
     maxConcurrency: Number(elements.modelMaxConcurrency.value),
     headPrompt: elements.modelHeadPrompt.value.trim(),
     tailPrompt: elements.modelTailPrompt.value.trim(),
+    headPromptFile: saved?.headPromptFile || null,
+    tailPromptFile: saved?.tailPromptFile || null,
   };
 }
 
@@ -1843,7 +1854,7 @@ function loadAgentForm() {
   elements.restoreAgent.disabled = !item.overridden;
 }
 function agentFormValue() {
-  return { schemaVersion: 1, id: elements.agentSelect.value, name: elements.agentName.value.trim(), description: elements.agentDescription.value.trim(), defaultModelId: elements.agentDefaultModel.value, tools: elements.agentTools.value.split(",").map(x => x.trim()).filter(Boolean), contextPermissions: elements.agentContextPermissions.value.split(",").map(x => x.trim()).filter(Boolean), outputMode: elements.agentOutputMode.value, prompt: elements.agentPrompt.value.trim() };
+  return { schemaVersion: 1, id: elements.agentSelect.value, name: elements.agentName.value.trim(), description: elements.agentDescription.value.trim(), defaultModelId: elements.agentDefaultModel.value, tools: elements.agentTools.value.split(",").map(x => x.trim()).filter(Boolean), contextPermissions: elements.agentContextPermissions.value.split(",").map(x => x.trim()).filter(Boolean), outputMode: elements.agentOutputMode.value, prompt: elements.agentPrompt.value.trim(), promptFile: currentAgentLayer()?.effective.promptFile || null };
 }
 async function saveAgent(scope) {
   elements.agentStatus.textContent = scope === "global" ? "覆盖全局配置中……" : "保存当前卡覆盖中……";
@@ -2208,6 +2219,7 @@ elements.input.addEventListener("keydown", event => {
 
 elements.playerName.addEventListener("input", () => {
   state.playerNameDirty = true;
+  if (!state.snapshot?.openingId && state.card?.openings) renderOpeningChoices();
   elements.userSettingsStatus.textContent = "";
   renderPlayerAvatarPreview();
 });

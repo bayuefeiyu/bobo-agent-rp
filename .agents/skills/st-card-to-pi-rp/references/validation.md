@@ -114,6 +114,8 @@ For context processors, test each branch boundary, declared input isolation, kno
 
 - `error`: lost source content, invented canon, unsafe/missing target, invalid contract, unauthorized disclosure/write, conflicting ownership, auxiliary output left in chat prose, or unsupported executable behavior claimed as converted.
 - `warning`: ambiguity, preserved contradiction, unknown macro, external dependency, unusually large context/query budget, or a generated anchor needing review.
+
+The card validator rejects unresolved `{{char}}`, `<char>`, and `<bot>` in runtime Markdown and JSON, source `<user>` left unnormalized, and player macros in JSON keys or structural fields. Source archives, provenance quotations, and conversion notes are exempt from this runtime-material rule. Test a new session with a chosen player name: the opening, Agent prompts, exported documents, and initial records must contain the literal name. Existing sessions require explicit maintenance for name changes.
 - `note`: intentional metadata exclusion, exact duplicate, or optional refinement.
 
 Do not claim completion while an error remains. List accepted warnings in `conversion-report.md`.

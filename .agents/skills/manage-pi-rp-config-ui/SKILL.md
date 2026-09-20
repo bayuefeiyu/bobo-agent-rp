@@ -21,4 +21,6 @@ Treat **配置方案** as the sole user-facing editor for models, Agents, workfl
 
 Global profiles are local overlays for development and future explicitly confirmed card conversion. Existing installed cards never update implicitly. API keys and other credentials stay in the project-isolated operating-system cache and never enter profile exports.
 
+When a user-facing discussion item has several viable paths, number the item and label its paths `A`, `B`, `C` and so on. Put a justified recommendation at `A` when practical, say whether paths can be combined, and accept concise replies such as `1A+C`. Preserve earlier decisions and relabel changed paths before asking again. Do not add questions merely for this format.
+
 Read [references/config-profile-v1.md](references/config-profile-v1.md) when changing profile storage, import/export, scope conversion, or credential handling. Read [references/configurable-fields-v1.md](references/configurable-fields-v1.md) when adding a configurable Agent, workflow, or module field.

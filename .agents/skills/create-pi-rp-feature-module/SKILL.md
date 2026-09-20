@@ -5,6 +5,8 @@ description: Analyze, propose, and after confirmation create or upgrade a Pi RP 
 
 # Create Pi RP Feature Module
 
+When writing author-facing text for a module, use the card conversion name rules in `st-card-to-pi-rp/references/source-inventory.md`: resolve character macros to a definite name, retain canonical `{{user}}` only in authored text values, and keep IDs, paths, and JSON keys free of name macros. Code nodes that export author documents use the host `services.cardText.render(text, source)` before writing workspace files.
+
 Run this development Skill from the repository root. Package the requested function as module v6 (`data`, `resource`, or `hybrid`) with owned Workflow v3 definitions. Use data-contract v1 only for data/hybrid ownership; never invent a collection for static authored resources.
 
 Always follow the repository development-scope boundary and read [references/module-schema.md](references/module-schema.md). For data/hybrid modules, also read [../design-pi-rp-data/SKILL.md](../design-pi-rp-data/SKILL.md) completely. Read [references/module-workflows.md](references/module-workflows.md) whenever the module owns workflows. For embedded deterministic prompt logic, also read [references/context-processors.md](references/context-processors.md).
@@ -32,6 +34,8 @@ An ordinary create, convert, or upgrade request authorizes analysis and a propos
 Offer to discuss only meaningful choices. Do not edit until the user confirms the complete proposal or explicitly requested direct execution. When a surrounding conversion or card-upgrade Skill already owns a confirmation gate, inherit that gate rather than asking twice. If later discovery materially changes ownership, access, workflow, or UI, pause and reconfirm.
 
 ## Design and packaging rules
+
+When discussing a numbered proposal item with several paths, label them `A`, `B`, `C` and so on; put the recommended path at `A` when practical, explain why, and say whether paths can be combined. Accept concise replies such as `2A+C`, retain earlier decisions, and relabel a changed choice set before asking again. Do not force a recommendation or add a decision merely for formatting.
 
 - Use the data-design Skill's protocol and modeling rules rather than recreating them here. Stable authored lore, rules, guidance, style, format, and references may use a resource catalog; mutable session authority uses collections.
 - Keep all module prompts under `<module>/skill/`. Skills explain semantics and correct tool use but do not grant permission.

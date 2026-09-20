@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 
@@ -134,6 +134,31 @@ export async function createDocumentWorkspaceSnapshot({ nodeWorkspace, outputPat
     ...entries.flatMap(entry => [`## ${entry.id}`, "", `- delivered path: \`${entry.path}\``, ...(entry.entryPath !== entry.path ? [`- reading entry: \`${entry.entryPath}\``] : []), `- kind: \`${entry.kind}\``, `- readPolicy: \`${entry.readPolicy}\``, `- authority: \`${entry.authority}\``, `- appliesAt: \`${entry.appliesAt}\``, `- perspective: \`${entry.perspective}\``, `- priority: \`${entry.priority}\``, `- description: ${entry.description}`, ""]),
   ].join("\n"), "utf8");
   return { root, manifest };
+}
+
+/** Refresh a generated snapshot after an Agent retry, while preserving the previous version if generation fails. */
+export async function replaceDocumentWorkspaceSnapshot(options) {
+  const { nodeWorkspace, outputPath } = options;
+  const root = safeChild(nodeWorkspace, outputPath, "Document workspace snapshot");
+  const temporary = safeChild(nodeWorkspace, `.rp-delivery/snapshot-${randomUUID()}`, "Temporary document workspace snapshot");
+  const backup = safeChild(nodeWorkspace, `.rp-delivery/snapshot-backup-${randomUUID()}`, "Snapshot backup");
+  let hadPrevious = false;
+  let replaced = false;
+  try {
+    const created = await createDocumentWorkspaceSnapshot({ ...options, outputPath: relative(nodeWorkspace, temporary) });
+    await mkdir(dirname(root), { recursive: true });
+    try { await rename(root, backup); hadPrevious = true; }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    try { await rename(temporary, root); replaced = true; }
+    catch (error) {
+      if (hadPrevious) await rename(backup, root);
+      throw error;
+    }
+    return { root, manifest: created.manifest };
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+    if (replaced && hadPrevious) await rm(backup, { recursive: true, force: true });
+  }
 }
 
 /**

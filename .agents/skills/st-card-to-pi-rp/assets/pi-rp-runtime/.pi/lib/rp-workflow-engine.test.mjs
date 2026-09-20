@@ -493,7 +493,7 @@ test("a module terminal finalizer invokes one same-module internal workflow", as
     ownerModuleId: "demo",
     kind: "module-external",
     interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
-    terminalFinalizer: { target: "demo/release-operation", statuses: ["failed"], forwardArguments: ["operationId"] },
+    terminalFinalizer: { target: "demo/release-operation", statuses: ["failed"], forwardArguments: ["operationId", "terminalStatus", "terminalError"] },
     nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   const wrapper = {
@@ -622,6 +622,7 @@ test("reports only unfinished opted-in turn-background nodes as turn blockers", 
       { id: "archive", title: "Archive", status: "pending" },
       { id: "cleanup", title: "Cleanup", status: "pending" },
     ],
+    changeFailures: [],
   }]);
   releaseBlocking();
   while (engine.snapshot()[0].nodes.archive.status !== "completed") await new Promise(resolve => setImmediate(resolve));
@@ -1347,7 +1348,7 @@ test("a node-end commit refused by the card's own declarations is deterministic"
   // Each of these names something the card or module must change — declared access, declared
   // actions, the node's commit policy, or a missing processor. Nothing about them is the model's,
   // and no retry can alter them, so the panel must not offer a model swap or silently retry.
-  for (const code of ["permission_denied", "action_not_allowed", "best_effort_not_allowed", "missing_handler", "invalid_processor_result"]) {
+    for (const code of ["permission_denied", "action_not_allowed", "best_effort_not_allowed", "missing_handler", "invalid_processor_result", "agent_delivery_finalize_failed"]) {
     const workflow = { schemaVersion: 3, id: `commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
     const engine = new RpWorkflowEngine({
       executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },

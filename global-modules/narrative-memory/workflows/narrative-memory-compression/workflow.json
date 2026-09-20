@@ -109,7 +109,7 @@
         "fromNodes": ["materialize-compression-snapshot"]
       },
       "prompt": "根据有效事件目录提出压缩分组。",
-      "outputs": {},
+      "outputs": {"result": {"path": "compression-plan.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["groups"], "properties": {"groups": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []

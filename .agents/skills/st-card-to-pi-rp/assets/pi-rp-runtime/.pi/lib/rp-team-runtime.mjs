@@ -346,7 +346,17 @@ export class TeamMeetingRuntime {
     const prior = state.executions?.[executionId];
     if (prior?.artifact?.relativePath) {
       try {
-        return { content: await this.store.readArtifact(prior.artifact.relativePath, prior.artifact.hash), reused: true };
+        // A reused execution must return the same shape a fresh call does. Returning only
+        // `{content, reused}` dropped `validated`, and every caller that parses this execution's
+        // structured result (`#coordinateRequests`, `#draft`, `#revision`, `#references`) then read
+        // `undefined` — either throwing a TypeError or, for the draft, silently continuing with no
+        // basis at all. The window is ordinary: the artifact is written and saved before the phase
+        // advances, so a crash in between leaves a durable artifact on an unfinished step. Re-running
+        // the supplied validator over the artifact restores the parsed value instead of poisoning the
+        // meeting, which previously failed identically on every restart with no way to recover.
+        const content = await this.store.readArtifact(prior.artifact.relativePath, prior.artifact.hash);
+        const validated = typeof validate === "function" ? validate(content) : null;
+        return { content, reused: true, validated };
       } catch (error) {
         state.status = "awaiting-recovery";
         state.error = error instanceof Error ? error.message : String(error);

@@ -27,10 +27,8 @@ export function workflowInvocationFingerprint(value) {
 }
 
 export function assertDocumentWorkspaceAgentTools(node, agent) {
-  if (node?.type !== "agent" || node?.metadata?.documentWorkspace !== true) return;
-  if (!Array.isArray(agent?.tools) || !agent.tools.includes("read")) {
-    throw new Error(`Agent ${agent?.id || node.agentId || "unknown"} must enable the read tool because node ${node.id || "unknown"} uses a document workspace.`);
-  }
+  // Ordinary Agent nodes receive read/write/edit from the runtime. Keep this exported
+  // compatibility entry point for loaders; a missing read declaration is no longer an error.
 }
 
 function assertObject(value, label) {
@@ -197,8 +195,26 @@ function normalizeOutputs(value, nodeId) {
     if (!RETAIN_POLICIES.has(retain)) throw new Error(`node ${nodeId}.outputs.${id}.retain is unsupported.`);
     if (!OUTPUT_KINDS.has(kind)) throw new Error(`node ${nodeId}.outputs.${id}.kind is unsupported.`);
     if (format === "document-set" && kind !== "directory") throw new Error(`node ${nodeId}.outputs.${id} document-set must use directory kind.`);
-    return [id, { path: safeRelativePath(output.path, `node ${nodeId}.outputs.${id}.path`), scope, retain, format, kind }];
+    const requiredFiles = output.requiredFiles === undefined ? [] : output.requiredFiles;
+    if (!Array.isArray(requiredFiles) || (requiredFiles.length && kind !== "directory")) throw new Error(`node ${nodeId}.outputs.${id}.requiredFiles requires a directory and an array.`);
+    if (output.jsonSchema !== undefined && (kind !== "file" || format !== "json")) throw new Error(`node ${nodeId}.outputs.${id}.jsonSchema requires a JSON file.`);
+    return [id, { path: safeRelativePath(output.path, `node ${nodeId}.outputs.${id}.path`), scope, retain, format, kind,
+      ...(output.required === false ? { required: false } : {}),
+      ...(requiredFiles.length ? { requiredFiles: requiredFiles.map(path => safeRelativePath(path, `node ${nodeId}.outputs.${id}.requiredFiles`)) } : {}),
+      ...(output.jsonSchema !== undefined ? { jsonSchema: structuredClone(assertObject(output.jsonSchema, `node ${nodeId}.outputs.${id}.jsonSchema`)) } : {}),
+    }];
   }));
+}
+
+function normalizeAgentDelivery(value, outputs, nodeId, type) {
+  if (type !== "agent") throw new Error(`node ${nodeId}.delivery is only supported on Agent nodes.`);
+  const declaration = assertObject(value, `node ${nodeId}.delivery`);
+  if (Object.keys(declaration).some(key => !["primaryOutput", "maxReminders"].includes(key))) throw new Error(`node ${nodeId}.delivery contains unsupported fields.`);
+  const primaryOutput = declaration.primaryOutput == null ? null : assertId(declaration.primaryOutput, `node ${nodeId}.delivery.primaryOutput`);
+  if (primaryOutput && (!outputs[primaryOutput] || outputs[primaryOutput].kind !== "file" || outputs[primaryOutput].required === false)) throw new Error(`node ${nodeId}.delivery.primaryOutput must reference a required file output.`);
+  const maxReminders = declaration.maxReminders ?? 2;
+  if (!Number.isSafeInteger(maxReminders) || maxReminders < 0 || maxReminders > 5) throw new Error(`node ${nodeId}.delivery.maxReminders must be an integer from 0 to 5.`);
+  return { primaryOutput, maxReminders };
 }
 
 function normalizeWorkspaceHandoff(value, outputs, nodeId) {
@@ -463,6 +479,7 @@ export function normalizeWorkflowDefinition(value) {
       agentId: typeof rawNode.agentId === "string" && rawNode.agentId.trim() ? rawNode.agentId.trim() : null,
       modelId: typeof rawNode.modelId === "string" && rawNode.modelId.trim() ? rawNode.modelId.trim() : null,
       prompt: typeof rawNode.prompt === "string" && rawNode.prompt.trim() ? rawNode.prompt.trim() : null,
+      promptFile: typeof rawNode.promptFile === "string" && rawNode.promptFile.trim() ? rawNode.promptFile.trim() : null,
       dependsOn,
       conditions: normalizeConditions(rawNode.conditions, knownNodes),
       routeFromOutput,
@@ -475,6 +492,7 @@ export function normalizeWorkflowDefinition(value) {
       narrativeSource,
       join: { mode: joinMode, quorum },
       outputs,
+      ...(rawNode.delivery !== undefined ? { delivery: normalizeAgentDelivery(rawNode.delivery, outputs, rawNode.id, type) } : {}),
       workspaceHandoff,
       moduleAccess: normalizeModuleAccess(rawNode.moduleAccess, rawNode.id),
       workflowCalls,
@@ -707,7 +725,6 @@ export function createWorkflowRun(definition, options = {}) {
     updatedAt: now,
     completedAt: null,
     usage: null,
-    usageComplete: null,
     usageComplete: false,
     usageAttempts: { recorded: 0, unrecorded: 0 },
     nodes: Object.fromEntries(workflow.nodes.map(node => [node.id, {
@@ -934,13 +951,38 @@ export function waitWorkflowNodeOnChild(definition, run, nodeId, waitingOn, now 
   return state;
 }
 
+/**
+ * The run status that matches `states` after one node stopped blocking.
+ *
+ * Unblocking a single node must not erase the fact that *other* nodes are still blocked. Writing
+ * `running` unconditionally left `run.status = "running"` while a sibling sat in
+ * `awaiting-model-choice`; `maybeFinalizeWorkflow` then refused to normalize (it returns early on any
+ * non-terminal node), `wait()` never saw a status it can stop on, and every second caller of the run
+ * — including a parent workflow's `call` node — waited forever. `restore()` re-derives the status, so
+ * a restart hides it.
+ *
+ * A node that is still blocked wins. Otherwise the run is ready to make progress, so it reports
+ * `running` even while the node just unblocked is `pending` — that is what re-arms the pump, and a
+ * run left on its previous blocked status would never be driven again. Only the three statuses the
+ * engine's `wait()` stops on are used as blocked answers; `awaiting-retry` is excluded because a
+ * retryable node is re-driven by the pump rather than left blocked.
+ */
+function runStatusAfterUnblocking(states) {
+  if (states.some(state => state.status === "awaiting-recovery")) return "awaiting-recovery";
+  if (states.some(state => state.status === "awaiting-child")) return "awaiting-child";
+  if (states.some(state => state.status === "awaiting-model-choice")) return "awaiting-model-choice";
+  if (states.some(state => state.status === "running")) return null;
+  return "running";
+}
+
 export function resumeWorkflowNodeAfterChild(run, nodeId, now = new Date().toISOString()) {
   const state = run.nodes[nodeId];
   if (!state || state.status !== "awaiting-child") throw new Error(`Node ${nodeId} is not waiting on a child workflow.`);
   state.status = "pending";
   clearNodeFailure(state);
+  const status = runStatusAfterUnblocking(Object.values(run.nodes));
+  if (status) run.status = status;
   const remaining = Object.values(run.nodes).find(candidate => candidate.status === "awaiting-child");
-  run.status = remaining ? "awaiting-child" : "running";
   run.waitingOn = remaining ? { nodeId: remaining.id, ...structuredClone(remaining.waitingOn) } : null;
   run.error = null;
   run.updatedAt = now;
@@ -954,7 +996,8 @@ export function prepareWorkflowNodeRetry(run, nodeId, now = new Date().toISOStri
   }
   state.status = "pending";
   clearNodeFailure(state);
-  run.status = "running";
+  const status = runStatusAfterUnblocking(Object.values(run.nodes));
+  if (status) run.status = status;
   run.error = null;
   run.updatedAt = now;
   return state;

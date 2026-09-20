@@ -4,7 +4,7 @@ import { relative, resolve, sep } from "node:path";
 import { queryAll } from "../lib/data-helpers.mjs";
 import { SUMMARY_LIMITS } from "../lib/core.mjs";
 
-async function sourceGuidance(moduleDirectory, captures) {
+async function sourceGuidance(moduleDirectory, captures, services) {
   if (!moduleDirectory) return [];
   const registryPath = resolve(moduleDirectory, "config", "archive-sources", "registry.json");
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
@@ -15,7 +15,7 @@ async function sourceGuidance(moduleDirectory, captures) {
     const guidancePath = resolve(moduleDirectory, source.guidanceFile);
     const relation = relative(moduleDirectory, guidancePath);
     if (!relation || relation.startsWith("..") || relation.includes(`..${sep}`)) throw new Error(`Archive source guidance escapes narrative-memory: ${source.guidanceFile}`);
-    result.push({ sourceModuleId: source.sourceModuleId, adapterId: source.id, guidance: await readFile(guidancePath, "utf8") });
+    result.push({ sourceModuleId: source.sourceModuleId, adapterId: source.id, guidance: services.cardText.render(await readFile(guidancePath, "utf8"), guidancePath) });
   }
   return result;
 }
@@ -33,7 +33,7 @@ async function supportRecord(data, id) {
   return { id: item.id, revision: item.revision, data: item.value };
 }
 
-export async function execute({ run, conversation, data, module }) {
+export async function execute({ run, conversation, data, module, services }) {
   const settingsRecord = await supportRecord(data, "narrative-memory-settings");
   const archiveState = await supportRecord(data, "narrative-memory-archive-state");
   const settings = settingsRecord.data.archive;
@@ -50,7 +50,7 @@ export async function execute({ run, conversation, data, module }) {
   const archiveMessages = conversation.messages.filter(message => (message.binding?.turn || 0) >= firstTurn && (message.binding?.turn || 0) <= eligibleLastTurn);
   const captureCandidates = await queryAll(data, { moduleId: "narrative-memory", collectionId: "source-captures", recordTypes: ["memory.source-capture"], where: { capturedTurn: { gte: firstTurn } }, view: "archive" });
   const captures = captureCandidates.filter(item => (item.value?.capturedTurn ?? -1) <= eligibleLastTurn);
-  const captureGuidance = await sourceGuidance(module?.directory, captures);
+  const captureGuidance = await sourceGuidance(module?.directory, captures, services);
   const overLimit = [];
   for (const [collectionId, recordTypes] of Object.entries({ entities: ["memory.entity"], relationships: ["memory.relationship"], events: ["memory.event", "memory.event-summary"], cognitions: ["memory.cognition"], "knower-groups": ["memory.knower-group"] })) {
     const items = await queryAll(data, { moduleId: "narrative-memory", collectionId, recordTypes, where: { summaryOverLimit: { eq: true } }, view: "archive" });

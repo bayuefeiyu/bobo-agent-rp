@@ -263,7 +263,21 @@ deep_wrapper = FIXTURE / "workflows" / "director-deep-wrapper" / "workflow.json"
 deep_original = deep_wrapper.read_text(encoding="utf-8")
 deep_document = json.loads(deep_original)
 report("positive: the shipped deep wrapper resolves its trigger document",
-       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e])
+       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e or "storyContextSource" in e])
+
+broken = json.loads(deep_original)
+broken["nodes"][0]["metadata"].pop("storyContextSource", None)
+write_json(deep_wrapper, broken)
+report("negative: a deep wrapper must declare its story-context source explicitly",
+       [e for e in run_cli(FIXTURE) if "metadata.storyContextSource must be explicitly declared" in e],
+       expect_empty=False)
+
+broken = json.loads(deep_original)
+broken["nodes"][0]["metadata"]["storyContextSource"] = "history"
+write_json(deep_wrapper, broken)
+report("negative: a trigger-backed deep wrapper must not fall back to history",
+       [e for e in run_cli(FIXTURE) if 'metadata.storyContextSource "history" must not' in e],
+       expect_empty=False)
 
 broken = json.loads(deep_original)
 broken["trigger"]["documents"]["story-context"] = {"fromNode": "no-such-node", "output": "story-context"}
@@ -298,7 +312,10 @@ report("negative: pointing the wrapper at an integration without that output mus
        expect_empty=False)
 deep_wrapper.write_text(deep_original, encoding="utf-8")
 report("positive: restoring the shipped wrapper clears the trigger-document findings",
-       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e])
+       [e for e in run_cli(FIXTURE) if "trigger.documents" in e or "triggerInputs" in e or "storyContextSource" in e])
+
+report("positive: the opening deep wrapper explicitly permits history",
+       [e for e in run_cli(FIXTURE) if "director-opening-deep-wrapper" in e and "storyContextSource" in e])
 
 print()
 print("== deep wrappers must authorize every call their runtime script makes ==")

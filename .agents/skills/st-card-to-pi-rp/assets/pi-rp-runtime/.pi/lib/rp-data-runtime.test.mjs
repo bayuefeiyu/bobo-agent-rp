@@ -75,6 +75,30 @@ test("module profile settings override only the initial session snapshot", async
   assert.equal((await second.readCollection("settings-module", "settings")).records[0].data.archive.interval, 3);
 });
 
+test("initial records and hybrid baseline bind the session player without rewriting the card", async t => {
+  const root = await mkdtemp(join(tmpdir(), "rp-data-player-template-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const moduleDirectory = join(root, "module");
+  const initialPath = join(moduleDirectory, "initial.json");
+  await mkdir(moduleDirectory, { recursive: true });
+  const seed = {
+    protocolVersion: 2, id: "rumor.seed", moduleId: "rumors", collectionId: "entries", recordType: "rumor.entry", dataSchemaVersion: 1, revision: 1, sequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", status: "active",
+    provenance: { source: "initial" }, binding: { messageId: null, turn: 0 }, data: { content: "{{user}}在场", source: "character.queen", spread: 0 }, note: null,
+  };
+  await writeFile(initialPath, JSON.stringify(seed), "utf8");
+  const seededContract = structuredClone(contract);
+  seededContract.collections.entries.storage.initialSnapshotFile = "initial.json";
+  const sessionDirectory = join(root, "session");
+  const first = new RpDataStore({ sessionDirectory, modules: [{ contract: seededContract, moduleDirectory }], playerName: "林$&舟" });
+  await first.initialize();
+  assert.equal((await first.readCollection("rumors", "entries")).records[0].data.content, "林$&舟在场");
+  await writeFile(join(sessionDirectory, "session.json"), JSON.stringify({ playerName: "林$&舟" }), "utf8");
+  const resumed = new RpDataStore({ sessionDirectory, modules: [{ contract: seededContract, moduleDirectory }] });
+  assert.equal((await resumed.readCollection("rumors", "entries")).records[0].data.content, "林$&舟在场");
+  assert.equal(JSON.parse(await readFile(initialPath, "utf8")).data.content, "{{user}}在场");
+});
+
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "rp-data-"));
   t.after(() => rm(root, { recursive: true, force: true }));

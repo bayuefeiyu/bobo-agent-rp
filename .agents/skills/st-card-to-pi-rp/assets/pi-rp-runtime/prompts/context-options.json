@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "prefixExclusive": false,
+  "tailExclusive": false,
+  "tailMode": "on-start",
+  "defaults": {
+    "totalPrefixRole": "system",
+    "modelPrefixRole": "system",
+    "agentRole": "system",
+    "cardFoundationRole": "user",
+    "playerProfileRole": "user",
+    "totalTailRole": "user",
+    "modelTailRole": "user"
+  }
+}

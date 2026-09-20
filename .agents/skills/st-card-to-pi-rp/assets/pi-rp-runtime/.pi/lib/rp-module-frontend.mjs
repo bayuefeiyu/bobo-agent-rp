@@ -25,8 +25,21 @@ function text(value, label) {
   return value.trim();
 }
 
+/**
+ * Path segments that must never be traversed or assigned.
+ *
+ * A settings-form field path is written into the record with a plain property assignment, so a path
+ * such as `/__proto__/surprise` walks the prototype chain and pollutes `Object.prototype` for the
+ * whole Pi process — every later `({}).surprise` in any module or Agent then sees a value the card
+ * chose. Rejecting the three special segments here, instead of at the assignment, also covers
+ * `constructor` and `prototype`.
+ */
+const UNSAFE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
 function pointer(value, label) {
   if (typeof value !== "string" || !value.startsWith("/") || value === "/" || value.split("/").some((part, index) => index > 0 && !part)) throw new Error(`${label} must be an RFC 6901 pointer below the record data root.`);
+  const unsafe = [...new Set(value.split("/").slice(1).filter(part => UNSAFE_PATH_SEGMENTS.has(part)))];
+  if (unsafe.length) throw new Error(`${label} must not traverse ${unsafe.join(", ")}.`);
   return value;
 }
 
@@ -204,7 +217,12 @@ export function frontendRegion(module, regionId, expectedType = null) {
 }
 
 function decodePointer(pointerValue) {
-  return pointerValue.slice(1).split("/").map(part => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+  const parts = pointerValue.slice(1).split("/").map(part => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+  // Second gate: this is the writer, so it refuses the unsafe segments even when a caller reaches it
+  // with a region object that never went through `pointer()`.
+  const unsafe = [...new Set(parts.filter(part => UNSAFE_PATH_SEGMENTS.has(part)))];
+  if (unsafe.length) throw new Error(`Settings field path must not traverse ${unsafe.join(", ")}.`);
+  return parts;
 }
 
 function setAtPointer(root, pointerValue, nextValue) {

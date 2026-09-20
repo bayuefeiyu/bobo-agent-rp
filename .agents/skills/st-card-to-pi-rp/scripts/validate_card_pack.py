@@ -24,6 +24,47 @@ ALLOWED_TRANSFORMS = {
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
 RUNTIME_SERVICES = {"random"}
+CHARACTER_MACROS = ("{{char}}", "<char>", "<bot>")
+PLAYER_MACROS = ("{{user}}", "<user>")
+STRUCTURAL_FIELDS = {"id", "moduleId", "collectionId", "recordType", "source", "target", "path", "file", "entryFile", "skillFile", "dataContractFile", "resourceCatalogFile", "frontendViewFile"}
+
+
+def validate_name_templates(root: Path, errors: list[str]) -> None:
+    """Check author-facing runtime material, leaving archived source text untouched."""
+    excluded = {"source", "web", "provenance", "sessions"}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".md", ".json"}:
+            continue
+        relative = path.relative_to(root)
+        if any(part in excluded for part in relative.parts[:-1]):
+            continue
+        if relative.as_posix() in {"provenance.json", "conversion-report.md", "unresolved.md"}:
+            continue
+        text = path.read_text(encoding="utf-8-sig")
+        for macro in CHARACTER_MACROS:
+            if macro in text:
+                errors.append(f"{relative.as_posix()} contains {macro}; resolve its definite name during conversion")
+        if "<user>" in text:
+            errors.append(f"{relative.as_posix()} contains <user>; normalize it to {{{{user}}}} during conversion")
+        if path.suffix.lower() != ".json":
+            continue
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            continue  # The format validator reports malformed JSON separately.
+        def check_structure(item: Any, label: str) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if any(macro in key for macro in PLAYER_MACROS):
+                        errors.append(f"{label} has a player macro in a JSON key")
+                    structural = key in STRUCTURAL_FIELDS or bool(re.search(r"(?:Id|Ids|Path|File)$", key))
+                    if structural and isinstance(child, str) and any(macro in child for macro in PLAYER_MACROS):
+                        errors.append(f"{label}.{key} has a player macro in a structural field")
+                    check_structure(child, f"{label}.{key}")
+            elif isinstance(item, list):
+                for index, child in enumerate(item):
+                    check_structure(child, f"{label}[{index}]")
+        check_structure(value, relative.as_posix())
 
 # The shipped foreground templates. Their design conventions are reported as warnings, because a
 # card is free to rename, replace, or decouple its foreground workflow: an assertion keyed on a
@@ -1522,6 +1563,24 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                     errors.append(f"{node_label}.outputs.{output_id}.kind is invalid")
                 elif output.get("format") == "document-set" and output.get("kind", "directory") != "directory":
                     errors.append(f"{node_label}.outputs.{output_id} document-set must use directory kind")
+                if isinstance(output, dict):
+                    required_files = output.get("requiredFiles", [])
+                    if not isinstance(required_files, list) or any(not safe_relative_path(path) for path in required_files) or (required_files and output.get("kind") != "directory"):
+                        errors.append(f"{node_label}.outputs.{output_id}.requiredFiles must name relative files in a directory output")
+                    if "jsonSchema" in output and (not isinstance(output["jsonSchema"], dict) or output.get("format") != "json" or output.get("kind", "file") != "file"):
+                        errors.append(f"{node_label}.outputs.{output_id}.jsonSchema requires a JSON file and an object schema")
+            delivery = node.get("delivery")
+            if delivery is not None:
+                if node_type != "agent" or not isinstance(delivery, dict) or set(delivery) - {"primaryOutput", "maxReminders"}:
+                    errors.append(f"{node_label}.delivery must be an Agent delivery declaration")
+                else:
+                    primary = delivery.get("primaryOutput")
+                    definition = outputs.get(primary) if isinstance(primary, str) else None
+                    if primary is not None and (not isinstance(definition, dict) or definition.get("kind", "file") != "file" or definition.get("required") is False or primary == node.get("metadata", {}).get("documentWorkspaceSnapshot", {}).get("output")):
+                        errors.append(f"{node_label}.delivery.primaryOutput must reference a required Agent file output")
+                    reminders = delivery.get("maxReminders", 2)
+                    if type(reminders) is not int or not 0 <= reminders <= 5:
+                        errors.append(f"{node_label}.delivery.maxReminders must be an integer from 0 to 5")
             handoff = node.get("workspaceHandoff", {"include": []})
             if not isinstance(handoff, dict) or set(handoff) != {"include"} or not isinstance(handoff.get("include"), list):
                 errors.append(f"{node_label}.workspaceHandoff must contain only an include array")
@@ -1766,6 +1825,32 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
     for directory in sorted(path for path in workflow_root.iterdir() if path.is_dir()):
         workflow = load_json(directory / "workflow.json", {})
         trigger = workflow.get("trigger") if isinstance(workflow, dict) else None
+        trigger_documents = trigger.get("documents", {}) if isinstance(trigger, dict) else {}
+        for node in (workflow.get("nodes", []) if isinstance(workflow, dict) and isinstance(workflow.get("nodes"), list) else []):
+            if not isinstance(node, dict):
+                continue
+            metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+            entry = metadata.get("entryFile")
+            if not isinstance(entry, str) or not entry.replace("\\", "/").endswith("/integration/runtime/run-deep-if-needed.mjs"):
+                continue
+            node_label = f"workflows/{directory.name}/workflow.json node {node.get('id')}"
+            source = metadata.get("storyContextSource")
+            declared_inputs = metadata.get("triggerInputs", []) if isinstance(metadata.get("triggerInputs"), list) else []
+            has_story_mapping = isinstance(trigger_documents, dict) and "story-context" in trigger_documents
+            has_story_input = "story-context" in declared_inputs
+            if source not in {"trigger", "history"}:
+                errors.append(f'{node_label} metadata.storyContextSource must be explicitly declared as "trigger" or "history"')
+                continue
+            if source == "trigger":
+                if not has_story_mapping:
+                    errors.append(f'{node_label} metadata.storyContextSource "trigger" requires trigger.documents.story-context')
+                if not has_story_input:
+                    errors.append(f'{node_label} metadata.storyContextSource "trigger" requires metadata.triggerInputs to include story-context')
+            else:
+                if has_story_mapping:
+                    errors.append(f'{node_label} metadata.storyContextSource "history" must not map trigger.documents.story-context')
+                if has_story_input:
+                    errors.append(f'{node_label} metadata.storyContextSource "history" must not declare story-context in metadata.triggerInputs')
         if not isinstance(trigger, dict) or trigger.get("type") != "after-workflow":
             continue
         target = trigger.get("workflowId")
@@ -2072,6 +2157,7 @@ def main() -> int:
     provenance = load_json(root / "provenance.json", errors)
     invariants = validate_design_invariants(root, manifest, errors)
     validate_manifest(root, manifest, errors, warnings)
+    validate_name_templates(root, errors)
     validate_provenance(root, provenance, errors, warnings)
     workflow_ids = validate_workflows(root, errors, warnings, invariants)
     if isinstance(card_settings, dict):

@@ -20,16 +20,8 @@ function stripFrontmatter(markdown) {
   return end === -1 ? normalized.trim() : normalized.slice(end + 5).trim();
 }
 
-function substituteMacros(text, cardName, playerName) {
-  return text
-    .replaceAll("{{char}}", cardName)
-    .replaceAll("<char>", cardName)
-    .replaceAll("<bot>", cardName)
-    .replaceAll("{{user}}", playerName)
-    .replaceAll("<user>", playerName);
-}
-
-export function createCardStore(cardDirectory) {
+export function createCardStore(cardDirectory, renderText) {
+  if (typeof renderText !== "function") throw new Error("Card store requires the host card-text renderer.");
   const root = resolve(cardDirectory);
 
   async function readManifest() {
@@ -58,7 +50,9 @@ export function createCardStore(cardDirectory) {
       for (const record of manifest.openings) {
         if (!record.id || ids.has(record.id)) throw new Error("Opening IDs must be present and unique.");
         ids.add(record.id);
-        await readOpeningRecord(record);
+        const opening = await readOpeningRecord(record);
+        renderText(opening.content, "{{user}}", record.file);
+        renderText(opening.title, "{{user}}", `opening ${record.id} title`);
       }
     },
 
@@ -87,7 +81,8 @@ export function createCardStore(cardDirectory) {
         cardName: manifest.name,
         playerName,
         ...opening,
-        content: substituteMacros(opening.content, manifest.name, playerName),
+        title: renderText(opening.title, playerName, `opening ${record.id} title`),
+        content: renderText(opening.content, playerName, record.file),
       };
     },
 

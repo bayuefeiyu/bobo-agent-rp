@@ -33,19 +33,12 @@
           "format": "markdown",
           "scope": "workflow",
           "retain": "run"
-        },
-        "recent-turns": {
-          "path": "recent-complete-turns.md",
-          "format": "markdown",
-          "scope": "workflow",
-          "retain": "run"
         }
       },
       "workspaceHandoff": {
         "include": [
           { "output": "workspace-overview" },
-          { "output": "upstream-context" },
-          { "output": "recent-turns" }
+          { "output": "upstream-context" }
         ]
       },
       "moduleAccess": [],
@@ -67,14 +60,6 @@
             "perspective": "general",
             "priority": 100,
             "description": "在正文创作前由已配置上下文处理器生成的上游资料；未生成时文件不存在。"
-          },
-          "recent-turns": {
-            "readPolicy": "required",
-            "authority": "canonical",
-            "appliesAt": "analysis-planning-writing",
-            "perspective": "story",
-            "priority": 100,
-            "description": "按工作流窗口一次性冻结的最近完整聊天回合；后续快照复用此文件。"
           }
         }
       }
@@ -125,13 +110,14 @@
     },
     {
       "id": "write-narrative",
+      "promptFile": "prompts/workflows/standard-rp/write-narrative.md",
       "title": "规划与正文创作",
       "description": "读取节点工作区文档清单，先形成初步规划，按需调用获准的模块工作流，再修正规划并完成正文。",
       "type": "agent",
       "dependsOn": ["prepare-recent-narrative-stories"],
       "retry": { "maxAttempts": 3 },
       "context": { "mode": "previous-output", "fromNodes": ["prepare-document-workspace", "prepare-card-context", "prepare-recent-narrative-stories"] },
-      "prompt": "先读取 WORKSPACE-DOCUMENTS.md，并依据其中的路径、readPolicy、authority、appliesAt 和说明使用已准备资料。先结合固定设定、工作流配置的最近完整回合、当前玩家输入和工作区资料形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，则在初步分析完成后调用一次；context由运行时自动冻结当前已授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导，再修正规划。其他模块调用只按节点作者写明的时机与要求执行。完成正文后最终回复就是玩家可见正文，不得混入提示词、工具记录、规划或清单。",
+      "prompt": "先读取 WORKSPACE-DOCUMENTS.md，并依据其中的路径、readPolicy、authority、appliesAt 和说明使用已准备资料。先结合固定设定、工作流配置的最近完整回合、当前玩家输入和工作区资料形成初步剧情规划。若调用清单中存在world-narrative-coordinator/pre-director-update，则在初步分析完成后调用一次；context由运行时自动冻结当前已授权文档工作区，不要自行提供或覆盖。随后调用一次materialize-guidance读取publication-narrative/narrative指导，再修正规划。其他模块调用只按节点作者写明的时机与要求执行。完成正文后通过交付工具提交 narrative；玩家可见正文以正式文件为准，不得混入提示词、工具记录、规划或清单。",
       "outputs": {
         "narrative": {
           "path": "narrative.md",
@@ -146,7 +132,7 @@
           "scope": "turn",
           "retain": "turn"
         }
-      },
+      }, "delivery": {"primaryOutput": "narrative"},
       "moduleAccess": [],
       "workflowCalls": [
         { "target": "world-narrative-coordinator/pre-director-update", "documentSnapshotInput": "context", "maxCalls": 1 },
@@ -154,7 +140,7 @@
       ],
       "dataCommit": { "onNodeEnd": [] },
       "narrativeSource": { "layer": "story" },
-      "metadata": { "documentWorkspace": true, "documentWorkspaceSnapshot": { "output": "post-turn-context" } }
+      "metadata": { "documentWorkspace": true, "initialContext": { "cardFoundation": true, "playerProfile": true, "recentNarrative": true, "currentInput": true }, "documentWorkspaceSnapshot": { "output": "post-turn-context" } }
     },
     {
       "id": "finalize-turn",

@@ -84,4 +84,4 @@ Do not use those values to decide the Pi loading policy. Determine fixed versus 
 
 ## Macros
 
-Keep `{{char}}`, `<char>`, `<bot>`, `{{user}}`, and `<user>` as runtime placeholders unless the destination explicitly requires fixed names. List unknown macros in the conversion report and preserve them verbatim until their meaning is known.
+Determine who `{{char}}`, `<char>`, and `<bot>` mean in the source and replace them with that definite name in all runtime material. Do not assume the card title is the character name. Record ambiguous referents as conversion questions before generating the card. Keep `{{user}}` as the canonical authoring placeholder; normalize source `<user>` to `{{user}}`. The play session resolves it to the selected player name in display, Agent inputs, exported documents, and initial data. Keep source archives and provenance quotations faithful to the original. List other unknown macros in the conversion report.

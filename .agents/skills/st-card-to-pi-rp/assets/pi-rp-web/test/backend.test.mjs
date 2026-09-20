@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { createApplication } from "../server.mjs";
 import { createCardStore } from "../server/card-store.mjs";
+import { renderCardText } from "../../pi-rp-runtime/.pi/lib/rp-card-text.mjs";
 
 async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), "pi-rp-web-"));
@@ -21,11 +22,17 @@ async function createFixture() {
   }), "utf8");
   await writeFile(
     join(cardDirectory, "openings", "00.md"),
-    "---\nid: opening-00\n---\n{{char}}看向{{user}}。",
+    "---\nid: opening-00\n---\n沈月看向{{user}}。",
     "utf8",
   );
   return cardDirectory;
 }
+
+test("an opening with unresolved character macro is rejected instead of using the card title", async () => {
+  const cardDirectory = await createFixture();
+  await writeFile(join(cardDirectory, "openings", "00.md"), "{{char}}看向{{user}}。", "utf8");
+  await assert.rejects(createCardStore(cardDirectory, renderCardText).validate(), /openings\/00\.md contains \{\{char\}\}/);
+});
 
 test("card-local server only transports view state and player input", async () => {
   const cardDirectory = await createFixture();
@@ -188,7 +195,7 @@ test("card-local server only transports view state and player input", async () =
       return { openingId, playerName, messages, busy: false };
     },
   };
-  const server = createServer(createApplication({ cardStore: createCardStore(cardDirectory), bridge }));
+  const server = createServer(createApplication({ cardStore: createCardStore(cardDirectory, renderCardText), bridge }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -210,7 +217,7 @@ test("card-local server only transports view state and player input", async () =
 
     const card = await fetch(`${base}/api/card`).then(response => response.json());
     assert.equal(card.name, "沈月");
-    assert.equal(card.openings[0].content, "{{char}}看向{{user}}。");
+    assert.equal(card.openings[0].content, "沈月看向{{user}}。");
 
     const sessions = await fetch(`${base}/api/sessions`).then(response => response.json());
     assert.equal(sessions[0].id, "saved-01");
@@ -252,6 +259,10 @@ test("card-local server only transports view state and player input", async () =
     assert.deepEqual(openedModuleDocument, { moduleId: "character-memory", target: "definition" });
     const imageGeneration = await fetch(`${base}/api/image-generation`).then(response => response.json());
     assert.equal(imageGeneration.profiles[0].id, "demo");
+    const imagePreferences = { selectedProfileIds: ["demo"], quickMode: true, inputPolicy: { kind: "recent-turns", turnCount: 3, target: "latest" } };
+    const savedImagePreferences = await fetch(`${base}/api/image-generation/preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(imagePreferences) });
+    assert.equal(savedImagePreferences.status, 200);
+    assert.deepEqual((await savedImagePreferences.json()).preferences, imagePreferences);
     const imageRun = await fetch(`${base}/api/image-generation/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profileIds: ["demo"] }) });
     assert.equal(imageRun.status, 202);
     assert.equal((await imageRun.json()).runId, "image-run-1");

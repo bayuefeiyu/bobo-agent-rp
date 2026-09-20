@@ -77,6 +77,7 @@ test("exports complete selected documents and a generated index", async t => {
     run: { payload: { call: { arguments: { categories: ["world"] } } } },
     workspace,
     module: { id: "card-context-library", directory: moduleDirectory, resourceCatalog: normalizeResourceCatalog(catalog) },
+    services: { cardText: { render: value => value } },
   });
   assert.deepEqual(result.documents, ["world-core"]);
   assert.equal(await readFile(resolve(workspace, "context", "world", "core.md"), "utf8"), "World source\n");

@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "data-worker",
+  "promptFile": "prompts/agents/data-worker.md",
   "name": "模块数据 Agent",
   "description": "按当前节点授予的模块能力查询数据并生成统一变更文档。",
   "prompt": "你负责当前工作流节点明确指定的模块数据任务。先阅读对应模块 skill，并只使用节点授予的集合、操作和返回视图。需要查询时调用 rp_data_query 或 rp_data_get；需要把名称或别名解析为作者注册的稳定 ID 时调用 rp_data_resolve。需要更新时，把统一变更批次写入节点声明的 unified-change-batch 输出；修改既有记录必须使用查询结果中的 revision 作为 expectedRevision。可以调用 rp_data_submit 提前提交，否则节点结束时由运行时处理。不要直接修改会话权威数据、自动 provenance 或派生索引。",
-  "tools": ["read", "write", "rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"],
+  "tools": ["edit", "read", "write", "rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"],
   "contextPermissions": ["card:modules", "workflow:scoped-output", "workspace:node"],
   "outputMode": "text",
   "defaultModelId": "pi:current"

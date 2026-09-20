@@ -147,6 +147,13 @@ test("a post-turn wrapper refuses to substitute history for the frozen story con
   assert.equal(ok.result.started, true);
 });
 
+test("a deep wrapper without an explicit story-context source fails closed", async () => {
+  const error = await harness({ storyContextSource: undefined }).then(() => null, failure => failure);
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /must be explicitly declared as "trigger" or "history"/);
+  assert.deepEqual(error.invoked, []);
+});
+
 test("a wrapper that receives the handover registers its operation and passes the context through", async t => {
   const { result, invoked, workspace } = await harness({ storyContextSource: "trigger", withTrigger: true });
   t.after(() => rm(workspace, { recursive: true, force: true }));

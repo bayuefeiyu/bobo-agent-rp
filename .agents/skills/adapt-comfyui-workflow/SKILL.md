@@ -18,4 +18,6 @@ Read [references/profile-format.md](references/profile-format.md), then:
 
 An actual queued generation is an external mutation and may consume resources. Perform it only when the user explicitly asks for a live test. Static validation and a connection health check do not authorize queueing.
 
+For each ambiguous decision with several paths, number the item and label the paths `A`, `B`, `C` and so on. Put a justified recommendation at `A` when practical; state whether paths can be combined and accept replies such as `1A+C`. Keep earlier choices and relabel a changed set before asking again. Do not force a recommendation or ask extra questions only to apply this format.
+
 Keep all fixed quality, style, LoRA triggers, and negative text in the profile. The guide should teach only model-specific scene description and any tokens that must vary with scene content. Map the filename prefix so generated files stay below the runtime-provided flat per-chat subfolder.

@@ -64,6 +64,7 @@ const DETERMINISTIC_FAILURE_CODES = new Set([
   // function schema. Switching models cannot repair a malformed schema, so the failure is
   // configuration, not model output.
   "tool_schema_invalid",
+  "agent_delivery_finalize_failed",
 ]);
 
 function deferred() {
@@ -125,6 +126,10 @@ export class RpWorkflowEngine {
         turn: entry.run.turn,
         status: entry.run.status,
         nodes: nodes.map(node => ({ id: node.id, title: node.title, status: entry.run.nodes[node.id]?.status || "pending" })),
+        // A host-hook failure (persistence, event dispatch) is recorded on the run but does not move
+        // any node, so a blocking run can sit here with nothing explaining why it never progresses.
+        // Carrying the reason lets the panel say "stuck because X" instead of just "busy".
+        changeFailures: Array.isArray(entry.run.changeFailures) ? structuredClone(entry.run.changeFailures) : [],
       });
     }
     return structuredClone(blocking);
@@ -693,7 +698,16 @@ export class RpWorkflowEngine {
   }
 
   async #invokeAndWait(parentEntry, parentNode, request, options = {}) {
-    if (parentEntry.stopped || parentEntry.run.status === "cancelled") throw Object.assign(new Error("The parent workflow was cancelled before this child call could be dispatched."), { code: "workflow_cancelled" });
+    // The terminal finalizer is the one call that must still run once the run is finished: its whole
+    // contract is to release module state on `failed`, `cancelled` and `skipped` (see
+    // `world-narrative-coordinator/deep-director-team-planning`, whose finalizer closes the deep
+    // operation). Refusing it here because the run was cancelled meant that cleanup never happened:
+    // the deep state and its operation manifest stayed `running` forever, so the next turn's
+    // `deepStateVerdict` answered `already-running` and the deep director silently stopped working.
+    // The caller already stops itself from dispatching anything new (`#pump` bails on `stopped`), so
+    // exempting the finalizer cannot release further work.
+    const cancelledBeforeCall = parentEntry.stopped || parentEntry.run.status === "cancelled";
+    if (cancelledBeforeCall && options.lifecycle !== true) throw Object.assign(new Error("The parent workflow was cancelled before this child call could be dispatched."), { code: "workflow_cancelled" });
     if (!request || typeof request !== "object" || Array.isArray(request)) throw Object.assign(new Error("Workflow call request must be an object."), { code: "workflow_configuration_invalid" });
     const reference = typeof request.workflow === "string" ? request.workflow : parentNode.target;
     if (!reference) throw Object.assign(new Error("Workflow call request must name a target workflow."), { code: "workflow_configuration_invalid" });
@@ -733,12 +747,20 @@ export class RpWorkflowEngine {
       }
     }
     const completedChild = normalizedTarget.instancePolicy.reuseCompleted
-      ? [...this.runs.values()].find(candidate => (normalizedTarget.instancePolicy.mode === "multiple"
-        ? candidate.run.instanceKey === childInstanceKey
-        : candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id)
-        && candidate.run.status === "completed"
-        && candidate.run.invocationFingerprint === invocationFingerprint
-        && canonicalWorkflowRef(candidate.workflow) === targetReference)
+      ? [...this.runs.values()].find(candidate => {
+        // A `multiple` workflow that declares no `dedupeKey` gets a freshly minted random suffix in its
+        // instance key, so comparing keys could never match and reuse was silently dead for exactly that
+        // combination — while `reuseCompleted` defaults to true. Identity is what matters: the same
+        // parent node asking for the same call again. Dedupe-keyed workflows still reuse across nodes,
+        // because their key is the stable identity the workflow itself declared.
+        const sameCall = typeof normalizedTarget.instancePolicy.dedupeKey === "string" && normalizedTarget.instancePolicy.dedupeKey
+          ? candidate.run.instanceKey === childInstanceKey
+          : candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id;
+        return sameCall
+          && candidate.run.status === "completed"
+          && candidate.run.invocationFingerprint === invocationFingerprint
+          && canonicalWorkflowRef(candidate.workflow) === targetReference;
+      })
       : null;
     if (completedChild) {
       return this.#completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, completedChild.run);
@@ -955,10 +977,20 @@ export class RpWorkflowEngine {
       try {
         const finalizer = entry.workflow.terminalFinalizer;
         if (finalizer?.statuses.includes(entry.run.status)) {
-          const argumentsForFinalizer = Object.fromEntries(finalizer.forwardArguments.filter(key => Object.hasOwn(entry.run.arguments || {}, key)).map(key => [key, structuredClone(entry.run.arguments[key])]));
-          argumentsForFinalizer.terminalStatus = entry.run.status;
+          // `forwardArguments` names every parameter the finalizer target is called with: the run's own
+          // arguments that match, plus the terminal-derived `terminalStatus` / `terminalError` when the
+          // list asks for them. They are engine-provided rather than run arguments, so they cannot be
+          // filtered by presence in `run.arguments` — doing that dropped `terminalStatus` and made the
+          // target reject the call as a missing required parameter. Previously those two were added
+          // unconditionally, which quietly widened every finalizer's declared interface: one that
+          // forwarded only `operationId` still received them, and a target that did not declare them
+          // was rejected as "undeclared parameter inputs".
           const terminalError = entry.run.error || Object.values(entry.run.nodes || {}).find(state => state.status === "failed")?.error || null;
-          if (terminalError !== null && terminalError !== undefined) argumentsForFinalizer.terminalError = terminalError;
+          const argumentsForFinalizer = Object.fromEntries(finalizer.forwardArguments.flatMap(key => {
+            if (key === "terminalStatus") return [[key, entry.run.status]];
+            if (key === "terminalError") return terminalError === null || terminalError === undefined ? [] : [[key, structuredClone(terminalError)]];
+            return Object.hasOwn(entry.run.arguments || {}, key) ? [[key, structuredClone(entry.run.arguments[key])]] : [];
+          }));
           const pseudoNode = { id: "$terminal-finalizer", type: "code", target: finalizer.target, workflowCalls: [{ target: finalizer.target, fixedArguments: {}, allowedArguments: null, maxCalls: 1, documentSnapshotInput: null }] };
           const result = await this.#invokeAndWait(entry, pseudoNode, { workflow: finalizer.target, arguments: argumentsForFinalizer, outputPaths: {} }, { lifecycle: true });
           entry.run.terminalFinalization.workflow = result.workflow;

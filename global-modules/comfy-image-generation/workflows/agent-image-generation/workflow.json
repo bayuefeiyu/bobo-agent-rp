@@ -119,7 +119,7 @@
       "context": {
         "mode": "fixed"
       },
-      "outputs": {},
+      "outputs": {"result": {"path": "content-prompts.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["prompts"], "properties": {"prompts": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []

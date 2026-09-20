@@ -13,7 +13,7 @@ function list(values) {
   return values?.length ? values.map(value => `  - ${value}`).join("\n") : "  - none";
 }
 
-export async function execute({ run, workspace, module }) {
+export async function execute({ run, workspace, module, services }) {
   if (!module?.resourceCatalog || module.id !== "card-context-library") throw new Error("The card context library resource catalog is unavailable.");
   const requested = run.payload?.call?.arguments?.categories;
   if (!Array.isArray(requested) || !requested.length || requested.some(value => typeof value !== "string")) throw new Error("categories must be a non-empty string array.");
@@ -32,7 +32,7 @@ export async function execute({ run, workspace, module }) {
     const targetRelative = document.path.replace(/^documents\//, "");
     const target = safeChild(outputRoot, targetRelative, `Snapshot document ${document.id}`);
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, await readFile(source), { flag: "wx" });
+    await writeFile(target, services.cardText.render(await readFile(source, "utf8"), source), { encoding: "utf8", flag: "wx" });
   }
   const selectedGroups = Object.fromEntries(Object.entries(module.resourceCatalog.selectionGroups)
     .filter(([groupId]) => selected.some(document => document.selectionGroup === groupId)));
@@ -72,6 +72,6 @@ export async function execute({ run, workspace, module }) {
       "",
     ]),
   ].join("\n");
-  await writeFile(resolve(outputRoot, "DOCUMENTS.md"), `${index}\n`, { encoding: "utf8", flag: "wx" });
+  await writeFile(resolve(outputRoot, "DOCUMENTS.md"), `${services.cardText.render(index, "card context index")}\n`, { encoding: "utf8", flag: "wx" });
   return { categories, documents: selected.map(document => document.id) };
 }

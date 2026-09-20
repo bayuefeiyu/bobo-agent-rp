@@ -55,6 +55,8 @@ At each stage, read only its linked reference and the current project specificat
 3. **Decision needed** — only choices that materially change the outcome;
 4. **Choices** — accept the recommendation, discuss one finding, skip this stage, or return to the previous stage.
 
+When a discussion item has several paths, number the item and label its paths `A`, `B`, `C` and so on. Put the recommended path at `A` when practical and give its reason; do not invent a recommendation when the paths are equally suitable. Say whether the paths can be combined, so the user can reply concisely, for example `2A+C`. Keep accepted choices stable and relabel a changed choice set before asking again. This format does not create extra decision gates.
+
 After the user decides, acknowledge with a compact ledger update such as `Recorded: preserve the customized workflow and repair two conflicts. Progress: 2/5. Next: project dependencies.` Then continue to the next stage. The user may revisit any completed or skipped stage before final confirmation.
 
 - For card-pack semantics, read [references/prompt-audit.md](references/prompt-audit.md).
