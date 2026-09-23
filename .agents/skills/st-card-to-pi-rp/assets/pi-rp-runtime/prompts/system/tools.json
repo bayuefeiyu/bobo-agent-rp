@@ -8,6 +8,7 @@
   "find": "Find authorized workspace files by pattern.",
   "ls": "List an authorized workspace directory.",
   "rp_call": "Invoke a module workflow available to this node; read returned documents when needed.",
+  "rp_task_next": "After finishing the current task stage, request the next stage. Call it alone.",
   "rp_roll": "Roll dice; the same key and arguments replay one logical roll.",
   "rp_data_query": "Query authorized indexed RP data through a named view.",
   "rp_data_get": "Read one authorized RP data record through a named view.",

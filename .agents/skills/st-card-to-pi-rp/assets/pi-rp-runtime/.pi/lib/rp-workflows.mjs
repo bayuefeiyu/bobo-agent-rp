@@ -1177,6 +1177,9 @@ export function normalizeWorkflowCallRequest(targetWorkflow, request, authorizat
   }
   const input = assertObject(request, "workflow call request");
   const text = input.text === undefined ? "" : typeof input.text === "string" ? input.text : (() => { throw new Error("workflow call text must be a string."); })();
+  const textFile = input.textFile === undefined ? undefined : safeRelativePath(input.textFile, "workflow call textFile");
+  if (textFile !== undefined && input.text !== undefined) throw new Error("Workflow call must supply either text or textFile, not both.");
+  if (textFile !== undefined && !Object.values(target.interface.inputs).some(definition => definition.type === "text")) throw new Error("Workflow call textFile requires a declared text input.");
   const requestedParameters = input.arguments === undefined ? {} : structuredClone(assertObject(input.arguments, "workflow call arguments"));
   const parameters = applyWorkflowCallArgumentPolicy(requestedParameters, authorization);
   const documents = normalizePathMap(input.documents, "workflow call documents");
@@ -1200,7 +1203,7 @@ export function normalizeWorkflowCallRequest(targetWorkflow, request, authorizat
   }
   for (const [id, definition] of Object.entries(target.interface.inputs)) {
     if (!definition.required) continue;
-    const present = definition.type === "text" ? Boolean(text.trim()) : definition.type === "document" ? Boolean(documents[id]) : Object.hasOwn(parameters, id);
+    const present = definition.type === "text" ? Boolean(text.trim()) || textFile !== undefined : definition.type === "document" ? Boolean(documents[id]) : Object.hasOwn(parameters, id);
     if (!present) throw new Error(`Module workflow ${canonicalWorkflowRef(target)} requires ${definition.type} input ${id}.`);
   }
   const declaredExports = Object.keys(target.interface.exports).sort();
@@ -1208,5 +1211,5 @@ export function normalizeWorkflowCallRequest(targetWorkflow, request, authorizat
   if (JSON.stringify(declaredExports) !== JSON.stringify(suppliedExports)) {
     throw new Error(`Module workflow ${canonicalWorkflowRef(target)} outputPaths must exactly match exports: ${declaredExports.join(", ") || "(none)"}.`);
   }
-  return { text, arguments: parameters, documents, outputPaths };
+  return { text, ...(textFile !== undefined ? { textFile } : {}), arguments: parameters, documents, outputPaths };
 }

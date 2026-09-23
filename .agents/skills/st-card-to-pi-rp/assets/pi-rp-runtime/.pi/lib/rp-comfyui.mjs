@@ -177,10 +177,11 @@ async function waitHistory(connection, promptId, headers, timeoutMs, socket = nu
   throw new Error(`ComfyUI prompt ${promptId} did not finish within ${timeoutMs} ms.`);
 }
 
-export function createComfyUiService({ rootDirectory, cardDirectory, featureModules, secretCacheDirectory = null }) {
+export function createComfyUiService({ rootDirectory, cardDirectory, featureModules, secretCacheDirectory = null, isolatedRuntime = false }) {
   const root = resolve(rootDirectory);
-  const settingsPath = resolve(root, "settings", "comfyui-connections.json");
-  const overridesPath = resolve(root, "settings", "comfyui-profile-overrides.json");
+  const settingsRoot = isolatedRuntime ? resolve(cardDirectory, "settings") : resolve(root, "settings");
+  const settingsPath = resolve(settingsRoot, "comfyui-connections.json");
+  const overridesPath = resolve(settingsRoot, "comfyui-profile-overrides.json");
   const secretsPath = resolve(secretCacheDirectory || cacheRoot(), "projects", projectId(root), "comfyui-secrets.json");
   const module = featureModules.find(item => item.id === "comfy-image-generation");
   async function documents() {

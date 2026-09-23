@@ -283,6 +283,11 @@ def build_inventory(card_root: Path, project_root: Path, updated_source: Path | 
             "manifestSha256": sha256_file(manifest_path),
             "fileCount": len(file_map(card_root)),
         },
+        "runtimePackage": {
+            "mode": "independent" if (card_root / "runtime-lock.json").is_file() else "legacy-shared",
+            "lock": load_json(card_root / "runtime-lock.json"),
+            "launch": load_json(card_root / "runtime" / "launch.json"),
+        },
         "references": reference_inventory(card_root, manifest),
         "modules": module_inventory(card_root, project_root, manifest),
         "workflows": workflow_inventory(card_root, project_root, runtime_template),

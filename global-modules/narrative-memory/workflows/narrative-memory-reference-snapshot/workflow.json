@@ -16,7 +16,7 @@
     }
   },
   "revision": "1",
-  "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } },
+  "defaults": { "agentId": null, "modelId": "pi:current", "context": { "mode": "fixed" } },
   "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 8 },
   "nodes": [
     {

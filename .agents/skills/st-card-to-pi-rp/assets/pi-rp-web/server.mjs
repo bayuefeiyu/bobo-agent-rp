@@ -566,8 +566,10 @@ export async function startWebBridge({ cardDirectory, bridge, host = "127.0.0.1"
     url: `http://${host}:${address.port}`,
     close: async () => {
       if (!server.listening) return;
-      server.close();
-      await once(server, "close");
+      await new Promise((resolveClose, rejectClose) => {
+        server.close(error => error ? rejectClose(error) : resolveClose());
+        server.closeAllConnections();
+      });
     },
   };
 }

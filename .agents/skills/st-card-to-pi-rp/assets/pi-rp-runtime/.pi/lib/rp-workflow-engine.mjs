@@ -85,12 +85,13 @@ function frozenModelSnapshot(model) {
 }
 
 export class RpWorkflowEngine {
-  constructor({ executor, resolveAgent, resolveModel, resolveWorkflow, policy = {}, onRunStart = async () => null, onChange = async () => {}, beforeNodeComplete = async ({ result }) => result, onNodeComplete = async () => null, onRunTerminal = async () => null, nodeHistory = () => null }) {
+  constructor({ executor, resolveAgent, resolveModel, resolveWorkflow, readCallTextFile, policy = {}, onRunStart = async () => null, onChange = async () => {}, beforeNodeComplete = async ({ result }) => result, onNodeComplete = async () => null, onRunTerminal = async () => null, nodeHistory = () => null }) {
     if (typeof executor !== "function") throw new Error("RpWorkflowEngine requires an executor.");
     this.executor = executor;
     this.resolveAgent = resolveAgent || (() => null);
     this.resolveModel = resolveModel || (() => null);
     this.resolveWorkflow = resolveWorkflow || (() => null);
+    this.readCallTextFile = readCallTextFile || (() => { throw new Error("This workflow host does not support textFile calls."); });
     this.policy = normalizeRuntimePolicy(policy);
     this.onRunStart = onRunStart;
     this.onChange = onChange;
@@ -632,7 +633,7 @@ export class RpWorkflowEngine {
         resolvedAgentId: agent.id || agentId,
         resolvedModelId: binding.modelId,
         modelSnapshot: frozenModelSnapshot(model),
-        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "tools", "contextPermissions", "outputMode", "defaultModelId"]
+        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
       };
@@ -670,7 +671,7 @@ export class RpWorkflowEngine {
         resolvedAgentId: agent.id || spec.agentId,
         resolvedModelId: resolved.modelId,
         modelSnapshot: frozenModelSnapshot(resolvedModel),
-        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "tools", "contextPermissions", "outputMode", "defaultModelId"]
+        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
       };
@@ -715,7 +716,16 @@ export class RpWorkflowEngine {
     if (!target) throw Object.assign(new Error(`Unknown module workflow: ${reference}`), { code: "workflow_reference_invalid" });
     const normalizedTarget = normalizeWorkflowDefinition(target);
     assertWorkflowCallAllowed(parentEntry.workflow, parentNode, normalizedTarget, { agent: options.agent === true, lifecycle: options.lifecycle === true });
-    const normalizedRequest = normalizeWorkflowCallRequest(normalizedTarget, request, workflowCallAuthorization(parentNode, reference));
+    const authorization = workflowCallAuthorization(parentNode, reference);
+    let normalizedRequest = normalizeWorkflowCallRequest(normalizedTarget, request, authorization);
+    if (normalizedRequest.textFile !== undefined) {
+      const { textFile, ...inlineRequest } = normalizedRequest;
+      const text = await this.readCallTextFile({ workflow: parentEntry.workflow, run: parentEntry.run, node: parentNode, path: textFile });
+      // Revalidate the actual file contents (including a required non-blank input)
+      // before fingerprinting or starting a child. Persist the text so child retry
+      // and recovery do not depend on a mutable caller file.
+      normalizedRequest = { ...normalizeWorkflowCallRequest(normalizedTarget, { ...inlineRequest, text }, authorization), textFile };
+    }
     const parentStack = Array.isArray(parentEntry.run.callContext?.stack) ? parentEntry.run.callContext.stack : [];
     const callerIdentity = parentEntry.workflow.kind.startsWith("module-")
       ? canonicalWorkflowRef(parentEntry.workflow)

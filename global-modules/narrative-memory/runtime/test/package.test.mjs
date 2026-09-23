@@ -47,6 +47,16 @@ test("every nested module call obeys the public workflow layering rules", async 
   }
 });
 
+test("retrieval explicitly receives the caller text in its task message", async () => {
+  const workflow = normalizeWorkflowDefinition(await json(resolve(root, "workflows/narrative-memory-retrieve/workflow.json")));
+  const agents = workflow.nodes.filter(node => node.type === "agent");
+  assert.equal(agents.length, 1);
+  assert.equal(workflow.interface.inputs.request.type, "text");
+  assert.equal(workflow.interface.inputs.request.required, true);
+  assert.equal(agents[0].metadata.initialContext.currentInput, true);
+  assert.deepEqual(agents[0].metadata.callInputs, ["documents"]);
+});
+
 test("archive and compression preparation routes skip every downstream model node", async () => {
   for (const workflowId of ["narrative-memory-archive", "narrative-memory-compression"]) {
     const workflow = normalizeWorkflowDefinition(await json(resolve(root, "workflows", workflowId, "workflow.json")));

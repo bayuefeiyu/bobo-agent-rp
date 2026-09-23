@@ -185,4 +185,8 @@ test("every registered tool compiles to a provider-acceptable object schema", as
   assert.deepEqual(query.properties.cursor.type, ["string", "null"]);
   const get = compile(declarations.find(item => item.name === "rp_data_get").expression, Type, source);
   assert.deepEqual(get.required, ["moduleId", "collectionId", "id"]);
+  const call = compile(declarations.find(item => item.name === "rp_call").expression, Type, source);
+  assert.equal(call.properties.textFile.type, "string");
+  assert.equal(call.required.includes("textFile"), false);
+  assert.equal(call.required.includes("text"), false);
 });

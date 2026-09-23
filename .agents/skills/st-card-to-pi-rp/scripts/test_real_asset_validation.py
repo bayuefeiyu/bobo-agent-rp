@@ -153,10 +153,16 @@ def build_fixture() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("// fixture\n", encoding="utf-8")
 
-    # Card-owned support scripts: the converter copies assets/card-runtime/ into the card root.
+    # Card support scripts and prompts come from their single respective sources.
     card_runtime = ASSETS / "card-runtime"
     if card_runtime.is_dir():
         shutil.copytree(card_runtime, FIXTURE, dirs_exist_ok=True)
+    shutil.copytree(ASSETS / "pi-rp-runtime" / "prompts", FIXTURE / "prompts", dirs_exist_ok=True)
+    for module_id in MODULE_IDS:
+        module_prompts = module_source(module_id) / "prompts"
+        if module_prompts.is_dir():
+            shutil.copytree(module_prompts, FIXTURE / "prompts" / "modules" / module_id)
+            shutil.rmtree(FIXTURE / "features" / module_id / "prompts")
 
 
 def install_integration(replace: bool) -> None:
@@ -209,6 +215,22 @@ print()
 print("== shipped templates must validate cleanly ==")
 baseline = run_cli(FIXTURE)
 report("complete fixture card has no unexpected errors", baseline)
+
+prompt_path = FIXTURE / "prompts" / "modules" / "comfy-image-generation" / "agents" / "image-prompt-writer.md"
+prompt_stash = FIXTURE / ".stash-image-prompt-writer.md"
+shutil.move(str(prompt_path), str(prompt_stash))
+report("negative: a missing card-owned promptFile target must fail",
+       [e for e in run_cli(FIXTURE) if "promptFile does not exist" in e], expect_empty=False)
+shutil.move(str(prompt_stash), str(prompt_path))
+
+agent_path = FIXTURE / "features" / "comfy-image-generation" / "agents" / "image-prompt-writer" / "agent.json"
+agent_original = load(agent_path)
+agent_with_duplicate = json.loads(json.dumps(agent_original))
+agent_with_duplicate["prompt"] = "duplicate inline prompt"
+write_json(agent_path, agent_with_duplicate)
+report("negative: promptFile and inline prompt must not be duplicated",
+       [e for e in run_cli(FIXTURE) if "must not duplicate prompt text" in e], expect_empty=False)
+write_json(agent_path, agent_original)
 
 print()
 print("== activeWorkflowId must reference a foreground workflow ==")

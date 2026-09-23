@@ -10,12 +10,12 @@ import { runtimeTestLibrary } from "./runtime-test-runtime.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-test("a copied card module runs its package test against play/.pi/lib", async t => {
+for (const independent of [false, true]) test(`a copied module uses ${independent ? "card/runtime/engine/lib" : "legacy play/.pi/lib"}`, async t => {
   const fixture = await mkdtemp(join(tmpdir(), "narrative-memory-card-layout-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
 
   const copiedModule = resolve(fixture, "play", "cards", "fixture", "features", "narrative-memory");
-  const copiedRuntime = resolve(fixture, "play", ".pi", "lib");
+  const copiedRuntime = independent ? resolve(fixture, "play", "cards", "fixture", "runtime", "engine", "lib") : resolve(fixture, "play", ".pi", "lib");
   await mkdir(dirname(copiedModule), { recursive: true });
   await mkdir(dirname(copiedRuntime), { recursive: true });
   await cp(moduleRoot, copiedModule, { recursive: true });
@@ -31,6 +31,6 @@ test("a copied card module runs its package test against play/.pi/lib", async t 
     timeout: 60_000,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /pass 7/);
+  assert.match(result.stdout, /pass 8/);
   assert.match(result.stdout, /fail 0/);
 });

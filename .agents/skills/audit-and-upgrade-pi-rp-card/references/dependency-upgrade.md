@@ -8,6 +8,8 @@ Use the current [global-module import contract](../../st-card-to-pi-rp/reference
 
 Keep these independently scoped:
 
+Before comparing dependencies, inspect `runtimePackage.mode` from `inventory_card.py`. A card with `runtime-lock.json` is an independent package: compare its own runtime and launch files. A legacy card still uses the installed shared runtime. Do not silently fill a legacy card from the current root template; first identify its actual installed code and effective shared Agent, workflow, prompt and setting values. Packaging a legacy card is an explicit named-card migration with isolated validation and a backup.
+
 1. shared runtime (`play/.pi` and runtime libraries/extensions);
 2. global Agent, workflow, model, and runtime-policy configuration;
 3. copied card workflows and Agent overrides;

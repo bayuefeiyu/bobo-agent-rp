@@ -41,13 +41,11 @@ bobo-agent-rp/
 ├── global-modules/                  # 可选的项目级模块源
 ├── my-cards/                        # 本地待转换素材（Git 忽略）
 ├── play/                            # 独立游玩根目录（Git 忽略）
-│   ├── .pi/                         # RP 运行时、扩展与游玩 skills
-│   ├── cards/<card-id>/             # 转换后的卡包
+│   ├── launcher/                    # 独立选卡页面与最近游玩记录
+│   ├── cards/<card-id>/             # 新卡自带 RP 运行时、前端和配置
 │   ├── sessions/<card-id>/          # 聊天与模块状态
-│   ├── agents/                      # 全局 Agent 基础配置
-│   ├── workflows/                   # 可复制到卡片的全局工作流模板
-│   ├── settings/                    # 用户资料、头像、非敏感模型配置与运行策略
-│   └── runtime.json                 # 本地运行时布局标记
+│   ├── pi-sessions/<card-id>/       # 新卡自己的 Pi 会话文件
+│   └── .pi/、agents/ 等             # 仅已有旧卡使用的共享运行文件
 ├── PI-RP-DEVELOPMENT-SCOPE.md       # 根目录、卡片、运行时与 session 修改边界
 └── PI-PLAY-CONTEXT-ISOLATION.md     # 玩家需要手动完成的隔离步骤
 ```
@@ -74,6 +72,8 @@ pi --approve
 
 转换 skill 会先检查源资料并解决本次需要引入的全局模块，再给出“单一精简基础设定 + 卡片资料库”的明确划分、统一数据/功能模块、EJS 处理和开场白等简要方案并等待确认；只有用户或创作者确认该整体方案后才会正式生成卡包。基础设定主要保留来源支持的世界/前提总览与故事长期基调、原则、走向；详细世界观、完整人物资料、规则、创作指导、文风、格式和参考材料进入卡片自有的静态资料库。选择叙事记忆等会改变内容承载方式的大型模块时，方案还必须明确披露迁入模块、继续固定、继续由其他模块拥有及只保留提示锚点的内容。
 
+提示词的目录、消息角色、发送顺序、引入方式和手写格式见[提示词目录、角色与手写指南](.agents/skills/st-card-to-pi-rp/assets/prompt-templates/README.md)。同一目录还提供完全可选的 Agent 固定提示词片段、节点任务片段和静态资料模板，创作者可以自由新增或重组。它们不会自动进入卡片：转卡时只有明确选中的内容才会拼入卡片已有的 Agent／工作流提示词或作为普通静态资料编目，之后由该卡独立维护。项目现有的创作类、非创作类和系统提示词位置见[提示词来源清单](.agents/skills/st-card-to-pi-rp/references/prompt-inventory.md)。
+
 检查或升级一张既有卡时，明确调用 `audit-and-upgrade-pi-rp-card` 并指定 `play/cards/<card-id>/`。该 skill 不会自动触发；它会逐项讨论卡包语义、工作流、项目依赖、前端和新版原卡，允许跳过任一项，全部讨论结束并获得最终确认后才实施修改。
 
 游玩时发现异常，可在仓库根目录的开发 Pi 会话中使用 `debug-pi-rp-play`，指定卡与会话或描述现象。它会检查各工作流最近的运行及节点证据，按问题提供可组合的单卡修复、项目修复、继续调查或仅记录等方案；只执行用户选定的范围。暂缓问题可记入被 Git 忽略的 `local-development-records/docs/play-debug/`。根目录各 skill 在逐项讨论多个方案时使用问题编号和 `A/B/C` 选项，推荐方案尽量排在 `A`。
@@ -84,7 +84,7 @@ pi --approve
 
 如果项目根目录存在 `global-modules/<module-id>/module.json`，转换时会主动列出可用的全局模块并询问本次需要引入哪些。
 
-仓库内置 `global-modules/narrative-memory/` 叙事记忆模块源，用于在长篇 RP 中按需检索实体、事件、关系、认知与知情范围，并通过独立的两级归档工作流持续维护记录。模块前端面向调试与设置，可分页查看全部记录和修订历史、提醒归档覆盖或正文修订问题、按用户选择的回合范围修复或补充记录、调整常用参数及手动启动受控维护工作流；提醒不会自动使记录失效或启动修复。该源包不会自动修改已经转换的卡。
+仓库内置 `global-modules/narrative-memory/` 叙事记忆模块源，用于在长篇 RP 中按需检索实体、事件、关系、认知与知情范围，并通过独立的归档工作流持续维护记录。归档 Agent 在节点工作区完成梳理、建模与核对，代码节点校验并提交。模块前端面向调试与设置，可分页查看全部记录和修订历史、提醒归档覆盖或正文修订问题、按用户选择的回合范围修复或补充记录、调整常用参数及手动启动受控维护工作流；提醒不会自动使记录失效或启动修复。该源包不会自动修改已经转换的卡。
 
 仓库内置 `global-modules/world-narrative-coordinator/` 世界叙事统筹模块源。它以私有孵化、频道指导、深度推演、持久参考资料和已确认归档交接等职责，在世界逻辑基础上寻找有张力的发展；采用前置轻量调整、后置阻塞复盘和按需异步深度推演。深度推演可在原单 Agent 工作流与动态 Leader/秘书/专家/助理会议之间切换，团队版使用独立阶段额度、并行助理、一次定稿审查和短锁原子提交。模块依赖 `card-context-library` 的 `director-future` 类别与 `narrative-memory`，前端提供状态、参考资料、设置、统计提醒和手动维护入口，不会自动维护或修改既有卡与会话。
 
@@ -94,7 +94,21 @@ pi --approve
 
 生图运行时只让 Agent 生成随画面变化的内容片段；固定质量、风格、LoRA 触发词和负面提示词由 profile 组装。图片始终保留在 ComfyUI 的 `output/bobo-agent-rp/<聊天目录>/`，项目只保存会话期内的提示词和 ComfyUI 输出引用，不复制、缓存或随聊天删除图片。
 
-转换完成后不要直接在仓库根目录游玩。先按 [PI-PLAY-CONTEXT-ISOLATION.md](PI-PLAY-CONTEXT-ISOLATION.md) 完成一次项目级隔离，再从 `play/` 启动新的 Pi 会话。
+新转换卡在临时目录构建并校验后，用 `scripts/package_card_runtime.mjs` 发布为带 `runtime-lock.json` 的独立卡包。项目运行库、提示词、Agent、工作流和 Web 随卡复制；升级根目录模板或转换另一张卡不会自动改动它。卡包记录打包时的 Node 主版本及已测试 Pi 版本，启动器在启动前检查；使用其他引擎组合需先验证再更新兼容声明。启动器独立安装，不由每次转卡顺带覆盖。模板维护位置和自动生成副本见[模板的唯一维护来源](.agents/skills/st-card-to-pi-rp/references/template-sources.md)。需要直接运行打包器时，从仓库根目录执行：
+
+```powershell
+node .agents/skills/st-card-to-pi-rp/scripts/package_card_runtime.mjs <临时卡目录> play/cards/<新卡ID>
+node .agents/skills/st-card-to-pi-rp/scripts/validate_runtime_package.mjs play/cards/<新卡ID>
+```
+
+安装轻量选卡页面后，可直接从 `play/` 启动它，浏览所有卡和最近游玩记录；此时不启动 Pi。选卡后它才启动对应卡的 Pi 和 Web 前端；卡内前端管理本卡聊天记录。安装或更新启动器是独立操作：
+
+```powershell
+node .agents/skills/st-card-to-pi-rp/scripts/install_launcher.mjs play
+node play/launcher/server.mjs play
+```
+
+已有的共享运行时卡仍按 [PI-PLAY-CONTEXT-ISOLATION.md](PI-PLAY-CONTEXT-ISOLATION.md) 的旧卡流程游玩。旧卡不会因为安装选卡页面自动获得独立运行时；迁移需指定卡并先冻结它实际使用的依赖。
 
 ## 转换原则
 
@@ -173,7 +187,7 @@ python -X utf8 .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py pla
 校验故事规范生成副本和仓库发布完整性：
 
 ```powershell
-node .agents/skills/create-pi-rp-feature-module/scripts/sync_story_mechanics.mjs --check
+node .agents/skills/create-pi-rp-feature-module/scripts/sync_template_assets.mjs --check
 node .agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs
 ```
 

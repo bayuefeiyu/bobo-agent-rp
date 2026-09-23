@@ -3,12 +3,12 @@
   "id": "narrative-memory-retrieve",
   "ownerModuleId": "narrative-memory",
   "title": "叙事记忆检索",
-  "description": "从调用方提供的自然语言Markdown查询清单开始，匹配记录并确定性组装记忆文档；不替调用方完成情景分析或剧情推理。",
+  "description": "根据调用方的自然语言查询及可选分析，自主规划检索并选择记录，再确定性组装记忆文档；不交付检索Agent自己的剧情结论、理由或主观意见。",
   "kind": "module-external",
   "agentCallable": true,
   "interface": {
     "inputs": {
-      "request": { "type": "text", "required": true, "description": "自然语言Markdown查询清单；应列实体、关系、事件、认知、知情范围等简单资料目标，不提交需要检索Agent推理结论的问题。" },
+      "request": { "type": "text", "required": true, "description": "自然语言Markdown查询清单，可附调用方的情景或任务分析，允许模糊或需要判断的历史信息询问。通过text直接提交，或通过textFile指定包含分析及查询清单的工作区文档，运行时读取全文作为文本输入。" },
       "documents": { "type": "document", "required": false, "formats": ["markdown"], "description": "调用方选择提供的查询补充文档。" },
       "budget": { "type": "parameter", "required": false, "valueType": "object", "description": "可选检索预算；必须处于调用节点静态上限内。" }
     },
@@ -76,7 +76,7 @@
       "agentId": "narrative-memory-retriever",
       "dependsOn": ["prepare-reference-snapshot", "materialize-retrieval-task"],
       "context": { "mode": "previous-output", "fromNodes": ["prepare-reference-snapshot", "materialize-retrieval-task"] },
-      "prompt": "读取WORKSPACE-DOCUMENTS.md及目录快照，把调用方的自然语言Markdown查询清单解析为内部结构，并完成候选匹配。不要回答需要调用方自行推理的结论。将符合Agent约定的JSON写入工作文件并交付。",
+      "promptFile": "prompts/modules/narrative-memory/workflows/narrative-memory-retrieve/memory-retrieval.md",
       "outputs": {"result": {"path": "retrieval.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["queries"], "properties": {"queries": {"type": "array"}, "restrictedPerspectives": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [
         { "moduleId": "narrative-memory", "collectionId": "entities", "capabilities": ["memory.records.inspect"], "views": ["retrieval"], "queryBudget": { "maxRecords": 200, "maxCharacters": 500000, "defaultRecords": 35, "defaultCharacters": 200000, "parameter": "budget" } },
@@ -87,7 +87,7 @@
       ],
       "workflowCalls": [],
       "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "documentWorkspace": true, "callInputs": ["documents"] }
+      "metadata": { "documentWorkspace": true, "callInputs": ["documents"], "initialContext": { "currentInput": true } }
     },
     {
       "id": "compose-memory",

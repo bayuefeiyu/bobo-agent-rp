@@ -6,7 +6,7 @@
   "kind": "module-internal",
   "revision": "1",
   "defaults": {
-    "agentId": "background-worker",
+    "agentId": null,
     "modelId": "pi:current",
     "context": {
       "mode": "fixed"

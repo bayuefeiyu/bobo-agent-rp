@@ -161,6 +161,41 @@ def require_file(root: Path, value: Any, label: str, errors: list[str]) -> None:
         errors.append(f"{label} does not exist: {value}")
 
 
+def validate_prompt_references(root: Path, errors: list[str]) -> None:
+    """Validate card-root promptFile references without rejecting legacy inline-only cards."""
+    candidates: list[Path] = []
+    for directory in (root / "agents", root / "workflows", root / "features"):
+        if directory.is_dir():
+            candidates.extend(directory.rglob("*.json"))
+    for path in sorted(set(candidates)):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        relative_path = path.relative_to(root).as_posix()
+
+        def visit(value: Any, label: str) -> None:
+            if isinstance(value, list):
+                for index, child in enumerate(value):
+                    visit(child, f"{label}[{index}]")
+                return
+            if not isinstance(value, dict):
+                return
+            if "promptFile" in value:
+                prompt_file = value.get("promptFile")
+                prompt_label = f"{label}.promptFile"
+                if not safe_relative_path(prompt_file) or not prompt_file.startswith("prompts/"):
+                    errors.append(f"{prompt_label} must be a safe card-relative path under prompts/: {prompt_file!r}")
+                elif not (root / prompt_file).is_file():
+                    errors.append(f"{prompt_label} does not exist: {prompt_file}")
+                if "prompt" in value:
+                    errors.append(f"{label} must not duplicate prompt text when promptFile is present")
+            for key, child in value.items():
+                visit(child, f"{label}.{key}")
+
+        visit(document, relative_path)
+
+
 # Loadable Skill contract, mirrored from the runtime `rp-skill-contract.mjs`. Both the extension
 # and this validator read the same two facts, so the same positive and negative fixtures in
 # `test_real_asset_validation.py` and `rp-skill-contract.test.mjs` guard against rule drift.
@@ -2158,6 +2193,7 @@ def main() -> int:
     invariants = validate_design_invariants(root, manifest, errors)
     validate_manifest(root, manifest, errors, warnings)
     validate_name_templates(root, errors)
+    validate_prompt_references(root, errors)
     validate_provenance(root, provenance, errors, warnings)
     workflow_ids = validate_workflows(root, errors, warnings, invariants)
     if isinstance(card_settings, dict):

@@ -1,6 +1,6 @@
 # 导入与顶层接入
 
-本目录是项目全局源模块。只有用户在转卡提案中明确选择后，才复制到卡片的 `features/world-narrative-coordinator/`；同时复制 `agents/` 中的 Agent 配置到卡片 `agents/`。导入副本归卡片所有，不与本目录自动同步。
+本目录是项目全局源模块。只有用户在转卡提案中明确选择后，才复制到卡片的 `features/world-narrative-coordinator/`；顶层 `prompts/` 映射到卡片 `prompts/modules/world-narrative-coordinator/`，不在 `features/` 下保留第二份；同时复制 `agents/` 中的 Agent 配置到卡片 `agents/`。导入副本归卡片所有，不与本目录自动同步。
 
 ## 必需依赖
 

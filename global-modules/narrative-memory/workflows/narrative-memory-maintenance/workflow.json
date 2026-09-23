@@ -141,7 +141,7 @@
       }
     },
     {
-      "id": "maintenance-model",
+      "id": "maintenance-model", "promptFile": "prompts/modules/narrative-memory/workflows/narrative-memory-maintenance/maintenance-model.md",
       "title": "生成限定维护变更",
       "description": "只处理指定目标，输出原子统一变更批次。",
       "type": "agent",

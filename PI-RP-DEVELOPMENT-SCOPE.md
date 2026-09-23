@@ -7,7 +7,7 @@ All conversion, module development, data design, card customization, audit, migr
 Treat these as independent modification targets:
 
 1. root Skills, specifications, global modules, runtime templates, Web templates, tests, and documentation;
-2. the installed shared runtime and settings under `play/`;
+2. the installed launcher, legacy shared runtime and settings under `play/`;
 3. each converted card under `play/cards/<card-id>/`;
 4. each card's session authority under `play/sessions/<card-id>/`.
 
@@ -16,6 +16,7 @@ Reading one layer for comparison does not authorize writing it. A confirmation s
 ## No implicit propagation
 
 - Root development does not update installed runtime, converted cards, or sessions.
+- New independent cards contain their own runtime; installing or updating the card selector is a separate operation from conversion. Existing legacy cards retain their original runtime until an explicitly named migration.
 - Updating installed runtime does not update root templates, card-local customizations, or sessions.
 - Customizing one card changes only that named card. It does not change root Skills, templates, global modules, shared runtime, another card, or sessions.
 - Session migration requires an explicitly named card/session scope and does not change the card or root sources unless separately listed.

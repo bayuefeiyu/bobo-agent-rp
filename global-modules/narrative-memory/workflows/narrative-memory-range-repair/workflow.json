@@ -4,9 +4,9 @@
   "title": "叙事记忆回合范围修复与补充",
   "description": "由用户选择已完成回合范围，复核修复或主动补充记忆；运行期间阻止下一轮输入。",
   "kind": "module-internal",
-  "revision": "2",
+  "revision": "3",
   "defaults": {
-    "agentId": "narrative-memory-archive-indexer",
+    "agentId": "narrative-memory-archive-editor",
     "modelId": "pi:current",
     "context": {
       "mode": "fixed"
@@ -169,11 +169,11 @@
       }
     },
     {
-      "id": "range-checklist",
-      "title": "列出范围归档清单",
-      "description": "依据用户选择的修复或补充意图，客观列出该范围需要新增或修改的记录。",
+      "id": "range-model",
+      "title": "梳理并生成范围变更",
+      "description": "在节点工作区梳理、分析和核对指定范围，完成语义修复或补充。",
       "type": "agent",
-      "agentId": "narrative-memory-archive-indexer",
+      "agentId": "narrative-memory-archive-editor",
       "modelId": "pi:current",
       "dependsOn": [
         "prepare-reference-snapshot",
@@ -189,108 +189,7 @@
           "materialize-range-task"
         ]
       },
-      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料和完整目录。repair表示复核当前正文与既有记录是否矛盾或遗漏；supplement表示不预设既有记录错误，重新审视并补充。仍只写客观Markdown清单并交付，不解释、不分析、不输出JSON。",
-      "outputs": { "checklist": { "path": "range-checklist.md", "format": "markdown", "kind": "file", "scope": "workflow", "retain": "run" } }, "delivery": {"primaryOutput": "checklist"},
-      "workspaceHandoff": { "include": [{ "output": "checklist" }] },
-      "moduleAccess": [
-        {
-          "moduleId": "narrative-memory",
-          "collectionId": "entities",
-          "capabilities": [
-            "memory.archive.read"
-          ],
-          "views": [
-            "archive"
-          ],
-          "queryBudget": {
-            "maxRecords": 1000,
-            "maxCharacters": 500000
-          }
-        },
-        {
-          "moduleId": "narrative-memory",
-          "collectionId": "relationships",
-          "capabilities": [
-            "memory.archive.read"
-          ],
-          "views": [
-            "archive"
-          ],
-          "queryBudget": {
-            "maxRecords": 1000,
-            "maxCharacters": 500000
-          }
-        },
-        {
-          "moduleId": "narrative-memory",
-          "collectionId": "events",
-          "capabilities": [
-            "memory.archive.read"
-          ],
-          "views": [
-            "archive"
-          ],
-          "queryBudget": {
-            "maxRecords": 1000,
-            "maxCharacters": 500000
-          }
-        },
-        {
-          "moduleId": "narrative-memory",
-          "collectionId": "cognitions",
-          "capabilities": [
-            "memory.archive.read"
-          ],
-          "views": [
-            "archive"
-          ],
-          "queryBudget": {
-            "maxRecords": 1000,
-            "maxCharacters": 500000
-          }
-        },
-        {
-          "moduleId": "narrative-memory",
-          "collectionId": "knower-groups",
-          "capabilities": [
-            "memory.archive.read"
-          ],
-          "views": [
-            "archive"
-          ],
-          "queryBudget": {
-            "maxRecords": 1000,
-            "maxCharacters": 500000
-          }
-        }
-      ],
-      "dataCommit": {
-        "onNodeEnd": []
-      },
-      "metadata": { "documentWorkspace": true, "textOutput": "checklist", "documentIndex": { "checklist": { "readPolicy": "required", "authority": "advisory", "appliesAt": "archiving", "priority": 90, "description": "一级Agent生成的范围处理清单。" } } }
-    },
-    {
-      "id": "range-model",
-      "title": "审查并生成范围变更",
-      "description": "根据当前正文、既有记录和一级清单完成限定语义修复或补充。",
-      "type": "agent",
-      "agentId": "narrative-memory-archive-editor",
-      "modelId": "pi:current",
-      "dependsOn": [
-        "range-checklist"
-      ],
-      "retry": {
-        "maxAttempts": 2
-      },
-      "context": {
-        "mode": "previous-output",
-        "fromNodes": [
-          "prepare-reference-snapshot",
-          "materialize-range-task",
-          "range-checklist"
-        ]
-      },
-      "prompt": "读取WORKSPACE-DOCUMENTS.md列出的范围任务资料、完整目录和一级清单，只处理其中给出的回合范围和用户要求，不扩大到未指定历史。允许在确认现有记忆已经充分准确时输出operations为空的atomic unified-change-batch；覆盖确认由后续代码记录。",
+      "promptFile": "prompts/modules/narrative-memory/workflows/narrative-memory-range-repair/range-model.md",
       "outputs": {"result": {"path": "range-change-batch.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["operations"], "properties": {"operations": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
       "moduleAccess": [
         {

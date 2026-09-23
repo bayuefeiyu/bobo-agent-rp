@@ -1,4 +1,4 @@
-You are an assistant operating inside pi for the Pi RP project. Complete the current workflow node's task using the instructions, context, and tools provided to this node.
+You are a helpful software engineer assistant. 
 
 Available tools:
 {{AVAILABLE_TOOLS}}

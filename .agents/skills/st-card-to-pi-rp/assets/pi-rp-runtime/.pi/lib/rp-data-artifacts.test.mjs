@@ -1,11 +1,39 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { cleanupArtifacts, readVisibleArtifacts, registerNodeArtifacts, workflowNodeWorkspace } from "./rp-data-artifacts.mjs";
-import { stageWorkflowCallInputs, stageWorkspaceHandoffs } from "./rp-workspace-handoff.mjs";
+import { readWorkflowCallTextFile, stageWorkflowCallInputs, stageWorkspaceHandoffs } from "./rp-workspace-handoff.mjs";
+
+test("textFile reads the entire caller file without parsing Markdown and rejects invalid sources", async t => {
+  const sessionDirectory = await mkdtemp(join(tmpdir(), "rp-call-text-"));
+  t.after(() => rm(sessionDirectory, { recursive: true, force: true }));
+  const workflow = { id: "story" }, run = { id: "turn-1" }, node = { id: "writer" };
+  const workspace = workflowNodeWorkspace(sessionDirectory, workflow.id, run.id, node.id);
+  await mkdir(resolve(workspace, "notes"), { recursive: true });
+  const content = "\uFEFF# 情景分析\r\n林月也许认出了他。\r\n\r\n# 查询清单\r\n- 她以前见过青鸦吗？\r\n";
+  await writeFile(resolve(workspace, "notes/analysis.md"), content);
+  const read = path => readWorkflowCallTextFile({ sessionDirectory, workflow, run, node, path });
+  assert.equal(await read("notes/analysis.md"), content);
+  assert.equal(await read("notes\\analysis.md"), content);
+  for (const path of ["../private.md", resolve(workspace, "notes/analysis.md"), "C:\\private.md", "notes/analysis.md:secret", "\0", " "]) {
+    await assert.rejects(() => read(path), /safe caller-workspace relative path/);
+  }
+  await assert.rejects(() => read("notes"), /regular file/);
+  await assert.rejects(() => read("missing.md"), /ENOENT/);
+  await writeFile(resolve(workspace, "binary.md"), Buffer.from([0xff, 0xfe]));
+  await assert.rejects(() => read("binary.md"), /encoded data|UTF-8/i);
+  await writeFile(resolve(workspace, "nul.md"), "before\0after");
+  await assert.rejects(() => read("nul.md"), /UTF-8/);
+  // Windows junctions exercise an ancestor-link escape without symlink privileges.
+  const outside = resolve(sessionDirectory, "outside");
+  await mkdir(outside);
+  await writeFile(resolve(outside, "private.md"), "outside");
+  await symlink(outside, resolve(workspace, "linked"), process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(() => read("linked/private.md"), /symbolic links/);
+});
 
 function sourceNode() {
   return {

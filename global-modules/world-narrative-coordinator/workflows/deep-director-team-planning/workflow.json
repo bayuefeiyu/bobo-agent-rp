@@ -45,7 +45,7 @@
       "id": "meeting",
       "type": "team",
       "dependsOn": ["prepare-private", "prepare-author-future"],
-      "prompt": "完整阅读冻结正文、导演私有目录、作者未来资料目录及会议过程中返回的检索报告。区分已发生事实、作者未来意图、导演规划、推断与备选；规划必须高度动态，尽量保留作者强调的核心结果和长期影响，过程可随实际情况合理变形。控制世界节奏与烈度，允许多数推演长期停留为氛围和谈资，大事件优先从多个已有因素交汇中生长。最终report只能包含basisTurn、basisWorldTime、coverage、assumptions、invalidatingSignals、summary、content、worldNarrativeTopics、nextReviewTriggers、referenceUpdates；不要写schemaVersion或previousRevision，previousRevision由提交阶段补入。basisTurn必须等于冻结回合；worldNarrativeTopics恰好一个active且至少一个backup。referenceUpdates只收录对日常导演有用的世界知识、桥段与视野扩展，不是世界事实；可省略referenceId，由运行时分配稳定ID。",
+      "promptFile": "prompts/modules/world-narrative-coordinator/workflows/deep-director-team-planning/meeting.md",
       "team": {
         "schemaVersion": 1,
         "leader": { "id": "leader", "agentId": "world-narrative-team-leader" },

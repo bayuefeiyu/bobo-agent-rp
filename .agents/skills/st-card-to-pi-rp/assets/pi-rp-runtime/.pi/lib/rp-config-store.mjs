@@ -85,19 +85,19 @@ function cleanSecretDocument(value) {
   return { schemaVersion: 1, models };
 }
 
-export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null, resolveModuleWorkflow = null } = {}) {
+export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null, resolveModuleWorkflow = null, isolatedRuntime = false } = {}) {
   const root = resolve(rootDirectory);
   const card = resolve(cardDirectory);
   const secretDirectory = resolve(secretCacheDirectory || systemCacheRoot(), "projects", projectCacheId(root));
   const paths = {
     root,
     card,
-    models: resolve(root, "settings", "model-profiles.json"),
+    models: isolatedRuntime ? resolve(card, "defaults", "model-profiles.json") : resolve(root, "settings", "model-profiles.json"),
     modelSecrets: resolve(secretDirectory, "model-secrets.json"),
-    runtime: resolve(root, "settings", "workflow-runtime.json"),
-    agents: resolve(root, "agents"),
+    runtime: isolatedRuntime ? resolve(card, "defaults", "workflow-runtime.json") : resolve(root, "settings", "workflow-runtime.json"),
+    agents: isolatedRuntime ? resolve(card, "agents") : resolve(root, "agents"),
     cardAgents: resolve(card, "agents"),
-    workflows: resolve(root, "workflows"),
+    workflows: isolatedRuntime ? resolve(card, "workflows") : resolve(root, "workflows"),
     cardWorkflows: resolve(card, "workflows"),
     moduleWorkflowOverrides: resolve(card, "module-workflow-overrides.json"),
   };
@@ -191,8 +191,8 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     if (!ownerModuleId) {
       const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
       const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
-      const raw = await readJson(cardPath, null) || await readJson(globalPath, null);
-      if (!raw) throw new Error(`Workflow ${workflowId} was not found in the card or the shared runtime.`);
+      const raw = await readJson(cardPath, null) || (isolatedRuntime ? null : await readJson(globalPath, null));
+      if (!raw) throw new Error(isolatedRuntime ? `Workflow ${workflowId} is missing from this card.` : `Workflow ${workflowId} was not found in the card or the shared runtime.`);
       const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
       if (workflow.kind.startsWith("module-")) throw new Error(`Module workflow ${workflowId} must be resolved through its owning module, not the top-level workflow store.`);
       return workflow;
@@ -214,6 +214,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     if (!workflow.kind.startsWith("module-") || !workflow.ownerModuleId) throw new Error("Only an owned module workflow can be saved as a module override.");
     if (typeof resolveModuleWorkflow !== "function") throw new Error(`Module workflow ${workflow.ownerModuleId}/${workflow.id} cannot be resolved: the card has no feature-module registry.`);
     const profile = await activeProfile();
+    if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a module workflow.");
     if (profile) {
       profile.workflowOverrides[workflowOverrideKey(workflow.ownerModuleId, workflow.id)] = workflow;
       await profileStore.save(profile);
@@ -228,6 +229,12 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
   return {
     paths,
     async ensure() {
+      if (isolatedRuntime) {
+        for (const path of [paths.models, paths.runtime]) {
+          if (!await readJson(path, null)) throw new Error(`Card runtime default is missing: ${path}`);
+        }
+        return;
+      }
       await Promise.all([
         mkdir(paths.agents, { recursive: true }),
         mkdir(paths.cardAgents, { recursive: true }),
@@ -248,6 +255,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     async saveRuntimePolicy(value) {
       const policy = normalizeRuntimePolicy(value);
       const profile = await activeProfile();
+      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing runtime policy.");
       if (profile) {
         profile.workflowOverrides.runtimePolicy = policy;
         await profileStore.save(profile);
@@ -266,7 +274,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
         }
         return models;
       }
-      const { models: value, secrets } = await modelDocuments({ migrate: true });
+      const { models: value, secrets } = await modelDocuments({ migrate: !isolatedRuntime });
       const profiles = value.profiles.map(normalizeModelProfile);
       return profiles.map(profile => {
         const source = value.profiles.find(item => item.id === profile.id) || {};
@@ -278,6 +286,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     async saveModel(value) {
       const profile = normalizeModelProfile(value);
       const active = await activeProfile();
+      if (isolatedRuntime && !active) throw new Error("Select an editable card configuration profile before changing a model.");
       if (active) {
         const saved = {
           ...profile,
@@ -308,6 +317,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     async removeModel(modelId) {
       assertId(modelId, "modelId");
       const profile = await activeProfile();
+      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before removing a model.");
       if (profile) {
         const before = profile.models.length;
         profile.models = profile.models.filter(item => item.id !== modelId);
@@ -325,7 +335,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       await atomicJson(paths.models, document);
     },
     async listAgents() {
-      const ids = [...new Set([...(await directoryIds(paths.agents)), ...(await directoryIds(paths.cardAgents))])].sort();
+      const ids = [...new Set([...(await directoryIds(paths.agents)), ...(isolatedRuntime ? [] : await directoryIds(paths.cardAgents))])].sort();
       const result = [];
       for (const id of ids) result.push(await this.getAgent(id));
       return result;
@@ -335,7 +345,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       const cardBasePath = resolve(paths.cardAgents, agentId, "agent.json");
       const globalBasePath = resolve(paths.agents, agentId, "agent.json");
       const cardBase = await readJson(cardBasePath, null);
-      const basePath = cardBase ? cardBasePath : globalBasePath;
+      const basePath = cardBase ? cardBasePath : isolatedRuntime ? cardBasePath : globalBasePath;
       const overridePath = resolve(paths.cardAgents, agentId, "override.json");
       const base = await readJson(basePath);
       const override = await readJson(overridePath, null);
@@ -346,6 +356,8 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     async saveAgent(value, { scope = "card" } = {}) {
       const profile = normalizeAgentProfile(value);
       const active = await activeProfile();
+      if (isolatedRuntime && scope === "global") throw new Error("Shared Agent definitions are unavailable in an isolated card.");
+      if (isolatedRuntime && !active) throw new Error("Select an editable card configuration profile before changing an Agent.");
       if (active && scope !== "global") {
         const current = await this.getAgent(profile.id);
         const override = {};
@@ -376,6 +388,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     async restoreAgent(agentId) {
       assertId(agentId, "agentId");
       const profile = await activeProfile();
+      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before restoring an Agent.");
       if (profile) {
         delete profile.agentOverrides[agentId];
         for (const key of Object.keys(profile.agentOverrides)) if (key.endsWith(`/agent/${agentId}`)) delete profile.agentOverrides[key];
@@ -387,7 +400,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     },
     async listWorkflows() {
       const cardIds = await directoryIds(paths.cardWorkflows);
-      const globalIds = await directoryIds(paths.workflows);
+      const globalIds = isolatedRuntime ? [] : await directoryIds(paths.workflows);
       const ids = [...new Set([...cardIds, ...globalIds])].sort();
       const result = [];
       for (const id of ids) {
@@ -414,6 +427,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
      */
     async copyWorkflowToCard(workflowId, ownerModuleId = null) {
       const profile = await activeProfile();
+      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a workflow.");
       if (!ownerModuleId) {
         const workflow = await resolveOwnedWorkflow(null, workflowId);
         if (profile) return workflow;
@@ -426,6 +440,7 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       const workflow = normalizeWorkflowDefinition(value);
       if (workflow.kind.startsWith("module-")) return saveModuleWorkflowOverride(workflow);
       const profile = await activeProfile();
+      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a workflow.");
       if (profile) {
         profile.workflowOverrides[workflowOverrideKey(null, workflow.id)] = workflow;
         await profileStore.save(profile);

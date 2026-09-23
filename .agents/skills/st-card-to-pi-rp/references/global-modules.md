@@ -28,13 +28,13 @@ The formal proposal discusses only the selected set in implementation detail. Fo
 
 ## Import semantics
 
-After formal confirmation, copy each selected package into `features/<module-id>/`; never make a card depend on the mutable project-global directory at runtime. Keep the global source unchanged.
+After formal confirmation, copy each selected package into `features/<module-id>/`, mapping its top-level authored `prompts/` tree to the card's `prompts/modules/<module-id>/` instead of leaving a second copy under `features/`. Never make a card depend on the mutable project-global directory at runtime. Keep the global source unchanged.
 
 The copied package becomes card-owned. Later card conversion or customization never modifies the project-global source, and later source changes never update the card copy implicitly. Do not place promotion, upstreaming, or reusable-candidate notes into the card package.
 
 Validate the copied package as an ordinary card-local module, then make only confirmed card-specific adaptations. Preserve reusable runtime behavior. Put card-specific prompt text in the imported module's card-local skill, initialize only source-supported state, and update manifest paths, workflow grants, context order, and display order for the card.
 
-Copy the module's `agents/` profiles into the card's matching `agents/<id>/` locations when its owned workflows reference them. Module workflows remain inside `features/<module-id>/workflows/` and are registered only through `module.json.workflowFiles`; do not copy or splice them into top-level workflows. Generate or copy any selected top-level orchestration separately under the card's `workflows/`, using explicit `call` nodes and top-level trigger/blocking policy. Report collisions before overwriting and record every copied path.
+Copy the module's `agents/` profiles into the card's matching `agents/<id>/` locations when its owned workflows reference them. Their `promptFile` values, and those of module Agent／team nodes, resolve against the card root, so `global-modules/<module-id>/prompts/agents/` and `prompts/workflows/` must be mapped to `prompts/modules/<module-id>/agents/` and `prompts/modules/<module-id>/workflows/` rather than left only inside `features/`. Module workflows remain inside `features/<module-id>/workflows/` and are registered only through `module.json.workflowFiles`; do not copy or splice them into top-level workflows. Generate or copy any selected top-level orchestration separately under the card's `workflows/`, using explicit `call` nodes and top-level trigger/blocking policy. Report collisions before overwriting and record every copied path.
 
 When IDs or collection ownership collide with a source-derived module, stop before formal import and resolve whether to configure, merge, rename, or skip. A substantial card-specific schema change is a distinct module with `basedOn`; do not keep two modules authoritative for the same state.
 

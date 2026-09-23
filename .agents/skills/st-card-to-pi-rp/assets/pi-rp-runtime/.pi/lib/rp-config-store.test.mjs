@@ -26,6 +26,26 @@ test("resolves a default only from card-local foreground workflows", () => {
   assert.throws(() => resolveActiveForegroundWorkflow([...workflows, { id: "second-card-story", kind: "foreground", source: "card" }]), /multiple foreground workflows/);
 });
 
+test("isolated card configuration never falls back to shared Agent or workflow files", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-isolated-config-"));
+  const card = resolve(root, "cards", "demo");
+  await mkdir(resolve(root, "agents", "writer"), { recursive: true });
+  await mkdir(resolve(root, "workflows", "shared"), { recursive: true });
+  await mkdir(resolve(card, "defaults"), { recursive: true });
+  await writeFile(resolve(root, "agents", "writer", "agent.json"), JSON.stringify({ schemaVersion: 1, id: "writer", name: "Shared", prompt: "wrong" }));
+  await writeFile(resolve(root, "workflows", "shared", "workflow.json"), JSON.stringify({ id: "shared" }));
+  for (const [name, content] of [["model-profiles.json", { schemaVersion: 1, profiles: [] }], ["workflow-runtime.json", { schemaVersion: 1, maxConcurrency: 3 }]]) {
+    await writeFile(resolve(card, "defaults", name), JSON.stringify(content));
+  }
+  const store = createRpConfigStore(root, card, { isolatedRuntime: true });
+  await store.ensure();
+  assert.deepEqual(await store.listAgents(), []);
+  assert.deepEqual(await store.listWorkflows(), []);
+  await assert.rejects(store.getAgent("writer"));
+  await assert.rejects(store.getWorkflow("shared"), /missing from this card/);
+  await assert.rejects(store.saveRuntimePolicy({ schemaVersion: 1, maxConcurrency: 4 }), /editable card configuration profile/);
+});
+
 test("layers card agent overrides without changing the global profile", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
   const store = testStore(root);

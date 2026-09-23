@@ -1,8 +1,36 @@
-import { lstat, mkdir, writeFile } from "node:fs/promises";
-import { extname, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { readVisibleArtifacts, workflowNodeWorkspace } from "./rp-data-artifacts.mjs";
 import { copyWorkspaceEntry } from "./rp-document-sets.mjs";
+
+// A text-file call reads only an explicitly named regular file in the caller's
+// workspace. Its full content becomes the persisted call text, not a live link.
+export async function readWorkflowCallTextFile({ sessionDirectory, workflow, run, node, path }) {
+  if (typeof path !== "string" || !path.trim() || path.startsWith("/") || path.startsWith("\\") || /[:\0]/.test(path) || path.split(/[\\/]/).includes("..")) {
+    throw new Error("Workflow call textFile must be a safe caller-workspace relative path.");
+  }
+  const callerWorkspace = await realpath(workflowNodeWorkspace(sessionDirectory, workflow.id, run.id, node.id));
+  const parts = path.split(/[\\/]/).filter(part => part && part !== ".");
+  if (!parts.length) throw new Error("Workflow call textFile must name a regular file.");
+  let target = callerWorkspace;
+  for (let index = 0; index < parts.length; index += 1) {
+    target = resolve(target, parts[index]);
+    const entry = await lstat(target);
+    if (entry.isSymbolicLink() || (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())) {
+      throw new Error("Workflow call textFile must use real directories and a regular file, without symbolic links.");
+    }
+  }
+  const resolvedTarget = await realpath(target);
+  const relation = relative(callerWorkspace, resolvedTarget);
+  if (!relation || isAbsolute(relation) || relation === ".." || relation.startsWith(`..${sep}`)) {
+    throw new Error("Workflow call textFile escapes its caller workspace.");
+  }
+  const content = await readFile(resolvedTarget);
+  const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  if (text.includes("\0")) throw new Error("Workflow call textFile must contain UTF-8 text.");
+  return text;
+}
 
 export async function stageWorkflowCallInputs({ sessionDirectory, workflow, run, node }) {
   if (!run.callContext) return [];

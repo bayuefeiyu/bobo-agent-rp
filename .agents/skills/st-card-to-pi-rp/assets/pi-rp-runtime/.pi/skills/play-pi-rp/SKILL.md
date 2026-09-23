@@ -5,7 +5,7 @@ description: Start, continue, or resume roleplay from a converted Pi RP card pac
 
 # Play Pi RP
 
-Use the selected card and shared runtime. Keep file and tool work out of player-visible prose.
+Use the selected card and its packaged runtime. Keep file and tool work out of player-visible prose.
 
 ## Start
 

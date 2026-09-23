@@ -6,27 +6,19 @@ The Web mode is a presentation surface for the current Pi session, not an altern
 
 ## Ownership and layout
 
-From the conversion repository root, copy `assets/pi-rp-web/` into every converted card as `play/cards/<card-id>/web/`. At runtime, start Pi with `play/` as its working directory, so all paths below remain runtime-relative:
+From the conversion repository root, copy `assets/pi-rp-web/` into the staging card as `web/`, then publish it with `scripts/package_card_runtime.mjs`. The play selector starts without Pi and launches a card-bound Pi process only after selection. Pi may keep `play/` as its working directory, but all authored behavior is loaded from the selected card:
 
 ```text
 play/
-├── settings/
-│   └── common.json
-├── .pi/
-│   ├── extensions/pi-rp-web.ts
-│   └── skills/
-│       ├── play-pi-rp/
-│       └── play-pi-rp-web/
-├── cards/
-│   └── <card-id>/
-│       ├── manifest.json
-│       ├── settings.json
-│       ├── openings/
-│       ├── world/
-│       └── web/
-└── sessions/
-    └── <card-id>/
-        └── <pi-session-id>/
+├── launcher/                  # independent card selector and recent-card list
+├── cards/<card-id>/
+│   ├── runtime/engine/        # this card's Pi extension, libraries and Skills
+│   ├── defaults/              # authored behavior defaults
+│   ├── settings.json          # card-local user choices
+│   ├── openings/
+│   └── web/                   # matching frontend and backend
+├── pi-sessions/<card-id>/     # Pi's own sessions
+└── sessions/<card-id>/        # RP transcript and module authority
 ```
 
 The generic template is copied, not shared at runtime. A later conversion or manual edit may customize that card's typography, layout, portraits, status panels, or other presentation without changing other cards.
@@ -50,9 +42,9 @@ The browser and card-local server must not:
 - load world knowledge or decide RP behavior;
 - construct model prompts or generate assistant text.
 
-The shared `.pi/extensions/pi-rp-web.ts` extension starts the card's server, opens the page, persists submitted model profiles under `play/settings/`, registers providers, schedules nodes, injects the narrative node with `pi.sendUserMessage()`, and mirrors completed responses back to the page. Ordinary worker nodes use isolated in-memory Pi sessions and card/chat workspaces. A `team` node instead gives each configured member one isolated persistent session under that node's private workspace so later meeting phases can continue the same member context; members receive only the dedicated team read/control tools. Neither form becomes an alternative browser-side runtime.
+The card-owned `runtime/engine/extensions/pi-rp-web.ts` starts its matching Web server, reads authored defaults and editable profiles from this card, registers providers, schedules nodes, injects the narrative node with `pi.sendUserMessage()`, and mirrors completed responses back to the page. Ordinary worker nodes use isolated in-memory Pi sessions and card/chat workspaces. A `team` node instead gives each configured member one isolated persistent session under that node's private workspace so later meeting phases can continue the same member context; members receive only the dedicated team read/control tools. Neither form becomes an alternative browser-side runtime.
 
-Browser and tool callbacks receive ordinary extension context, which cannot replace Pi sessions. For chat reselection or card switching, dispatch the registered `/rp-web-reset <card-id>` extension command with `pi.sendUserMessage(..., { expandPromptTemplates: true })`. Its command context owns `newSession()` and re-dispatches `/rp-web` from the replacement session. Do not cast a tool/event context and call `newSession()` directly.
+Browser and tool callbacks receive ordinary extension context, which cannot replace Pi sessions. Chat reselection stays in this card's frontend. Opening another card returns to the standalone selector, which starts a separate card-bound Pi process. `/rp-web-reset` remains available for this card's own Pi session reset; it must not load a different card in the same process.
 
 Each workflow node owns `workspace/private/<workflow-id>/<run-id>/<node-id>/`. Nodes declare named outputs, scopes, and retention; the runtime registers only those exact files. Nothing in a workspace is authoritative session state. Durable/queryable information is committed through unified change batches to module collections, either explicitly or by exact node-end declarations.
 
@@ -65,8 +57,8 @@ Editing any saved message revises only that message text. It deliberately leaves
 3. Read bridge state and render its ordered messages. Submit player text to the bridge; the bridge injects it into the current Pi session.
 4. In the character-card panel, list every valid card under `cards/`, with search, display name, and a cover resolved from `manifest.cover`, a root `cover.*`, or the original source image. Switching cards must create a fresh Pi session before opening the selected card so contexts never mix.
 5. In start choices, let the player delete inactive saved chats only after explicit confirmation. Resolve the exact session under `sessions/<card-id>/`, refuse the active record, and delete no broader path.
-6. In user settings, select, edit, and delete saved player profiles by name. Keep at least one saved profile. Root preview persists the global development value below `.pi-rp-local/`; play reads shared `settings/common.json` as fallback and saves the current card's higher-priority user category under `cards/<card-id>/settings.json.settings.common`. Deleting the active profile selects the first remaining profile, updates current-session metadata and fixed player context immediately, and removes its avatar file when no remaining profile references it. Allow one PNG, JPEG, or WebP avatar of at most 5 MB per saved nickname. Store image bytes under the current environment's settings avatar directory and only a safe relative avatar reference in the user profile. Validate both declared MIME type and file signature. Use the current card cover as the assistant avatar and the nickname-specific image as the player avatar, with initial-letter fallbacks. Persist the active profile in current session metadata. Inject the active profile as fixed RP context before the card's primary-character profile; avatars are presentation-only and a description must never override player agency.
-7. In system settings, adjust the story font size. Root preview persists it as a global development default; play inherits shared `settings/common.json` and saves a higher-priority card system category under `cards/<card-id>/settings.json.settings.common`. Also list every frontend feature module with a visibility checkbox and accessible up/down controls. Persist module visual order and hidden IDs in `cards/<card-id>/settings.json` under `settings.featureModules`; apply them only to the Web rail and keep these card-bound controls disabled in root preview. Background modules never appear in this list. Presentation preferences do not enter Pi context, alter transcripts, rewrite module definitions, or change author-controlled `contextOrder`.
+6. In user settings, select, edit, and delete saved player profiles by name. Keep at least one saved profile. Root preview persists its global development value below `.pi-rp-local/`; independent play cards read their own `defaults/common.json` and save user choices in `settings.json.settings.common`. After an opening is selected, the player name is fixed for that session; changing or deleting its active profile requires explicit root maintenance. Allow one PNG, JPEG, or WebP avatar of at most 5 MB per saved nickname. Store avatar image bytes in the card's `settings-assets/avatars/` and only a safe relative avatar reference in the user profile. Validate both declared MIME type and file signature. Use the current card cover as the assistant avatar and the nickname-specific image as the player avatar, with initial-letter fallbacks. Persist the active profile in current session metadata. Inject the active profile as fixed RP context before the card's primary-character profile; avatars are presentation-only and a description must never override player agency.
+7. In system settings, adjust the story font size. Root preview persists it as a global development default; an independent play card uses its own `defaults/common.json` and saves a higher-priority card system category under `settings.json.settings.common`. Also list every frontend feature module with a visibility checkbox and accessible up/down controls. Persist module visual order and hidden IDs in `settings.json.settings.featureModules`; apply them only to the Web rail and keep these card-bound controls disabled in root preview. Background modules never appear in this list. Presentation preferences do not enter Pi context, alter transcripts, rewrite module definitions, or change author-controlled `contextOrder`.
 8. Poll or subscribe to bridge state and display the completed Pi response.
 9. Render frontend card modules from `GET /api/modules` inside `#card-module-list`. Use card-local display settings when present; otherwise use authored `displayOrder`. SchemaVersion 1 regions retain their read-only behavior. SchemaVersion 2 may additionally declare `record-browser`, `settings-form`, `workflow-controls`, and `integrity-alerts`; fetch their data only through the region-scoped APIs, never by loading all module collections into `/api/modules`. Record browsers use stable keyset pagination and rendered history, settings submit declared fields with `expectedRevision`, workflow controls start only static background IDs with typed parameters, and integrity alerts remain read-only until the user explicitly starts their statically linked repair workflow. Render JSON values recursively, never as executable content. `查看数据` remains a generated user-only diagnostic document. The browser never edits authority files directly or treats frontend access as Agent permission. Omit background modules and keep display selection/order frontend-only.
 10. Edit model profiles only inside the named configuration-profile panel; do not expose a duplicate API/models page in the sidebar. Support service URL/protocol/model, limits/thinking, optional head/tail prompts, and local credentials. Store API keys only in the project-hashed operating-system cache described in `workflow-system.md`; never echo a saved API key back to the browser or include it in profile JSON.
@@ -98,7 +90,7 @@ Render authored and generated message content with the card-local safe Markdown 
 - `POST /api/modules/<module-id>/regions/<region-id>/workflows/<workflow-id>/run`: start one statically allowed background workflow with validated parameters.
 - `GET /api/image-generation`: read the installed ComfyUI module's preferences, profiles, requests and renders. The associated preferences, run, connection, profile override/open, image proxy and regenerate endpoints remain scoped to this built-in service and its installed module.
 - `GET|POST|DELETE /api/models...`: list/redact, save, discover, smoke-test, or delete model profiles.
-- `GET|PUT|POST /api/agents...`: list effective Agent layers, save card/global configuration, or restore the card default.
+- `GET|PUT|POST /api/agents...`: list effective Agent layers, save card configuration, or restore the card's packaged default. Root development preview separately manages global sources.
 - `GET /api/workflows`, `GET /api/workflow-runs`: reread definitions and live instances.
 - `POST /api/workflows/<id>/activate`, `PUT .../nodes/<id>/binding`, `PUT .../trigger`: activate/copy a workflow, change a card node binding, or configure a supported background trigger.
 - `POST /api/workflow-runs/<id>/nodes/<id>/retry`, `POST .../cancel`, `POST .../skip`: explicit failure and blocking-run recovery. Retry rejects a terminal foreground run because it no longer owns a live prose turn. `POST .../nodes/<id>/process-record/open` opens a completed node's user-only process record; `POST .../nodes/<id>/team-transcript/open` opens only that team's registered transcript.
@@ -112,7 +104,7 @@ Render authored and generated message content with the card-local safe Markdown 
 - `DELETE /api/user-profile?playerName=<name>`: delete one saved profile, retaining at least one and switching the current profile when necessary.
 - `POST /api/module-display-settings`: save card-local frontend module order and hidden IDs without changing Agent context.
 - `POST /api/user-avatar?playerName=<name>`: upload one validated nickname-specific avatar as raw image bytes.
-- `POST /api/system-settings`: update shared presentation settings.
+- `POST /api/system-settings`: update this card's presentation settings.
 - `PUT /api/messages/<sequence>`: replace one message's saved local text.
 - `DELETE /api/messages/<sequence>`: truncate the saved local transcript from that message onward.
 - `DELETE /api/sessions/<session-id>`: delete one inactive chat after client confirmation.

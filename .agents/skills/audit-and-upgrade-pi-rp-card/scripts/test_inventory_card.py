@@ -85,6 +85,7 @@ class InventoryCardTests(unittest.TestCase):
 
             self.assertEqual(before, after)
             self.assertEqual(result["card"]["id"], "test-card")
+            self.assertEqual(result["runtimePackage"]["mode"], "legacy-shared")
             self.assertEqual([item["path"] for item in result["references"]["missing"]], ["core/missing.md"])
             self.assertEqual(result["frontend"]["status"], "diverged")
             self.assertEqual(result["frontend"]["modified"], ["public/app.js"])

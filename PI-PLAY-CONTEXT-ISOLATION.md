@@ -1,5 +1,7 @@
 # Pi 游玩上下文隔离
 
+本页的手工 Pi 设置步骤适用于依赖 `play/.pi` 共享扩展的旧卡。新独立卡由 `play/launcher/server.mjs` 的选卡页面启动，选卡前不运行 Pi；选卡后以显式卡内扩展和 Skill 启动 Pi，并关闭项目资源自动发现。
+
 本仓库根目录用于转换、数据设计、模块开发和角色卡定制，`play/` 仅用于游玩。两者必须从不同工作目录启动新的 Pi 会话。完整开发边界见 [PI-RP-DEVELOPMENT-SCOPE.md](PI-RP-DEVELOPMENT-SCOPE.md)。
 
 仅切换到 `play/` 还不够：Pi 会向上扫描直到 Git 根目录，并发现根目录下用于转换、维护和开发的 `.agents/skills/`。因此首次游玩前，需要在 `play/` 写入项目级资源覆盖，禁用这些根目录 skills。

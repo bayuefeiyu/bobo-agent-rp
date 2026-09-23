@@ -592,6 +592,14 @@ test("validates module call inputs and exact caller-selected export paths", () =
     outputPaths: { context: "lore/context.md" },
   });
   assert.throws(() => normalizeWorkflowCallRequest(target, { outputPaths: { context: "context.md" } }), /requires text input/);
+  assert.equal(normalizeWorkflowCallRequest(target, { textFile: "notes/analysis.md", outputPaths: { context: "context.md" } }).textFile, "notes/analysis.md");
+  for (const text of ["scene", ""]) {
+    assert.throws(() => normalizeWorkflowCallRequest(target, { text, textFile: "analysis.md", outputPaths: { context: "context.md" } }), /either text or textFile/);
+  }
+  for (const textFile of [null, 7, "", "../analysis.md", "C:\\analysis.md", "/analysis.md"]) {
+    assert.throws(() => normalizeWorkflowCallRequest(target, { textFile, outputPaths: { context: "context.md" } }), /safe relative path/);
+  }
+  assert.throws(() => normalizeWorkflowCallRequest({ ...target, interface: { ...target.interface, inputs: {} } }, { textFile: "analysis.md", outputPaths: { context: "context.md" } }), /requires a declared text input/);
   assert.throws(() => normalizeWorkflowCallRequest(target, { text: "scene", outputPaths: {} }), /exactly match exports/);
   assert.throws(() => normalizeWorkflowCallRequest(target, { text: "scene", outputPaths: { context: "..\/context.md" } }), /safe relative path/);
   assert.throws(() => normalizeWorkflowCallRequest(target, { text: "scene", arguments: { extra: true }, outputPaths: { context: "context.md" } }), /undeclared parameter inputs/);

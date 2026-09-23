@@ -42,6 +42,24 @@ function mockData({ archiveState = { lastArchivedTurn: 0 }, moduleSettings = set
   };
 }
 
+test("archive and range repair each use one Agent with the original task and catalog inputs", async () => {
+  for (const [workflowId, agentNodeId, taskNodeId, commitNodeId] of [
+    ["narrative-memory-archive", "archive-model", "materialize-archive-task", "commit-archive"],
+    ["narrative-memory-range-repair", "range-model", "materialize-range-task", "commit-range"],
+  ]) {
+    const path = resolve(import.meta.dirname, "../../workflows", workflowId, "workflow.json");
+    const workflow = JSON.parse(await readFile(path, "utf8"));
+    const agents = workflow.nodes.filter(node => node.type === "agent");
+    assert.equal(agents.length, 1, workflowId);
+    const [agent] = agents;
+    assert.equal(agent.id, agentNodeId);
+    assert.equal(agent.agentId, "narrative-memory-archive-editor");
+    assert.deepEqual(agent.dependsOn, ["prepare-reference-snapshot", taskNodeId]);
+    assert.deepEqual(agent.context.fromNodes, ["prepare-reference-snapshot", taskNodeId]);
+    assert.ok(workflow.nodes.find(node => node.id === commitNodeId).dependsOn.includes(agentNodeId));
+  }
+});
+
 test("archive preparation treats eligible turns as one continuous batch", async () => {
   const messages = [];
   for (let turn = 1; turn <= 5; turn += 1) messages.push({ id: `m${turn}`, revision: 1, binding: { turn }, metadata: { narrativeSource: { producerKind: "agent", layer: "story" } }, data: { role: "assistant", content: `第${turn}轮正文` } });

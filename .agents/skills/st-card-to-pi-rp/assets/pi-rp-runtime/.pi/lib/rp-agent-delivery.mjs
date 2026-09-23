@@ -86,7 +86,8 @@ export function agentDeliveryContract(node, agent = {}) {
 export function deliveryPrompt(contract) {
   return [
     "## 本节点统一交付协议",
-    "在工作区内完成任务。可以直接写正式产物，也可以起草、检查和修改；步骤自行决定，不要求草稿、检查或修改轮数。草稿满意后可以直接作为正式产物交付。",
+    "在工作区内完成任务。按当前已经发放的任务阶段工作；阶段内可以直接写正式产物，也可以起草、检查和修改，不要求草稿、检查或修改轮数。草稿满意后可以直接作为正式产物交付。",
+    "如果当前任务分阶段，完成当前阶段后单独调用 rp_task_next({})。收到下一阶段任务后继续；工具报告所有阶段均已发放后，才可以结束节点。运行时只控制任务发放顺序，不判断阶段内容是否充分。",
     "产物写入文件；最后一条聊天回复不作为作品。输入资料只读，临时文件可自行组织。rp_files 可列举文件或统计字数；统计仅供参考，不是达标要求。",
     "完成一项产物后调用 rp_deliver({output:产物标识,path:实际相对路径})。实际路径可以不同于预定路径，工具会复制到预定位置。目录交付包含目录内全部文件，不要混入输入或无关草稿。",
     "只有交付工具成功回执才表示形式检查通过，不代表内容质量正确。失败时修改现有文件并重新交付；更新已经交付的版本也要重新交付。可以分次交付不同产物。",
@@ -223,7 +224,7 @@ export async function createAgentDelivery({ workspace, node, agent, inputPaths =
   return { contract, access, protect, assertCallOutputPath, deliver, check, complete, result, get completed() { return completed; }, get receipts() { return [...receipts.values()]; } };
 }
 
-export async function runAgentDeliverySession({ session, prompt, delivery }) {
+export async function runAgentDeliverySession({ session, prompt, delivery, stageController = null }) {
   let next = prompt;
   for (let round = 0; round <= delivery.contract.maxReminders; round++) {
     await session.prompt(next, { expandPromptTemplates: false, source: "extension" });
@@ -231,7 +232,8 @@ export async function runAgentDeliverySession({ session, prompt, delivery }) {
     const last = [...session.messages].reverse().find(message => message.role === "assistant");
     if (["error", "aborted"].includes(last?.stopReason)) throw noTextOutputError({ message: last, label: "Workflow Agent" });
     const problems = await delivery.check();
-    next = ["节点尚未结束。请沿用当前文件继续工作，不必重写已完成内容。", ...problems, problems.length ? "请完成交付后，再单独调用 rp_node_complete。" : "产物已交付，请单独调用 rp_node_complete 结束节点。"].join("\n");
+    const stageReminder = stageController?.reminder?.() || "";
+    next = ["节点尚未结束。请沿用当前文件继续工作，不必重写已完成内容。", stageReminder, ...problems, stageReminder ? "完成当前阶段后先推进任务，不要提前结束节点。" : problems.length ? "请完成交付后，再单独调用 rp_node_complete。" : "产物已交付，请单独调用 rp_node_complete 结束节点。"].filter(Boolean).join("\n");
   }
   throw failure("agent_delivery_not_completed", `Agent did not complete explicit delivery and node completion after ${delivery.contract.maxReminders} reminders.`);
 }

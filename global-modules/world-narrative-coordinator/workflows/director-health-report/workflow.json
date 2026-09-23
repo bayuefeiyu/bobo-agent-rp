@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3, "id": "director-health-report", "ownerModuleId": "world-narrative-coordinator", "title": "统计导演数据健康", "description": "统计记录数与字符量、更新前端统计快照，并与卡片可配置参考线比较；不自动维护。", "kind": "module-internal", "agentCallable": false,
-  "interface": { "inputs": {}, "exports": { "report": { "format": "json", "kind": "file", "description": "健康统计报告。" } } }, "revision": "1", "defaults": { "agentId": "background-worker", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
+  "interface": { "inputs": {}, "exports": { "report": { "format": "json", "kind": "file", "description": "健康统计报告。" } } }, "revision": "1", "defaults": { "agentId": null, "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
   "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "health-dashboard" }],
   "nodes": [
     { "id": "report", "type": "code", "outputs": { "report": { "path": "health-report.json", "format": "json", "scope": "workflow", "retain": "run" } }, "moduleAccess": [

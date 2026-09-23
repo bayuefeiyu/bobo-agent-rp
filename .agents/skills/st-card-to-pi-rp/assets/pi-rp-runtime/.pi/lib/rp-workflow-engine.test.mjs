@@ -98,7 +98,7 @@ test("team preflight freezes member prompts before the first member call", async
     nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent" }, secretary: { id: "secretary", agentId: "secretary-agent" }, experts: [], assistants: [] } }],
   };
   const engine = new RpWorkflowEngine({
-    resolveAgent: async id => ({ id, prompt: promptVersion, modelId: "pi:current", tools: [] }),
+    resolveAgent: async id => ({ id, prompt: promptVersion, promptFile: `prompts/agents/${id}.md`, modelId: "pi:current", tools: [] }),
     executor: async task => {
       if (task.node.type === "team") {
         promptVersion = "changed after meeting preflight";
@@ -112,6 +112,7 @@ test("team preflight freezes member prompts before the first member call", async
   assert.equal(completed.status, "completed");
   assert.equal(executedPrompt, "original member prompt");
   assert.equal(completed.teamPreflights.meeting.bindings["member:leader"].agentSnapshot.prompt, "original member prompt");
+  assert.equal(completed.teamPreflights.meeting.bindings["member:leader"].agentSnapshot.promptFile, "prompts/agents/leader-agent.md");
   assert.equal(completed.nodes.meeting.status, "completed");
 });
 
@@ -1135,6 +1136,97 @@ test("parent recovery reuses the recovered child workflow instead of starting th
   assert.equal(completed.status, "completed");
   assert.equal(childAttempts, 2);
   assert.equal(engine.snapshot().filter(run => run.workflowId === "remote-child").length, 1);
+});
+
+test("textFile freezes resolved content for child retries and fingerprints content rather than the path", async () => {
+  const original = "# 情景分析\n林月也许认出了他。\n\n# 查询清单\n- 她以前见过青鸦吗？\n";
+  const changed = "# 查询清单\n- 两人上次在哪里见面？\n";
+  let fileContent = original;
+  let reads = 0;
+  const received = [];
+  const child = {
+    schemaVersion: 3, id: "retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
+    interface: { inputs: { request: { type: "text", required: true } }, exports: {} },
+    nodes: [
+      { id: "search", type: "agent", retry: { maxAttempts: 2 } },
+      { id: "return", type: "workflow-return", dependsOn: ["search"], exports: {} },
+    ],
+  };
+  const parent = { schemaVersion: 3, id: "text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: () => child,
+    readCallTextFile: ({ workflow, run, node, path }) => {
+      assert.equal(workflow.id, parent.id);
+      assert.equal(run.id, "text-file-parent-run");
+      assert.equal(node.id, "writer");
+      assert.equal(path, "analysis.md");
+      reads += 1;
+      return fileContent;
+    },
+    executor: async task => {
+      if (task.workflow.id === parent.id) {
+        const request = { workflow: "memory/retrieve", textFile: "analysis.md", outputPaths: {} };
+        await task.invokeWorkflow(request, { agent: true });
+        await task.invokeWorkflow({ workflow: "memory/retrieve", text: original, outputPaths: {} }, { agent: true });
+        assert.equal(received.length, 2, "identical inline input reuses the completed file call");
+        await task.invokeWorkflow(request, { agent: true });
+        return { output: "done" };
+      }
+      if (task.node.id === "search") {
+        received.push(task.run.textInput);
+        if (received.length === 1) {
+          fileContent = changed;
+          task.markModelDispatched();
+          throw new Error("temporary provider failure");
+        }
+      }
+      return { output: { outputs: {} } };
+    },
+  });
+  const started = await engine.start(parent, { id: "text-file-parent-run" });
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed", completed.nodes.writer.error);
+  assert.equal(reads, 2, "child retry uses saved input without rereading the caller file");
+  assert.deepEqual(received, [original, original, changed]);
+  const children = engine.snapshot().filter(run => run.workflowId === child.id);
+  assert.equal(children.length, 2);
+  assert.deepEqual(children.map(run => run.textInput), [original, changed]);
+  assert.equal(children[0].payload.call.textFile, "analysis.md");
+  assert.notEqual(children[0].invocationFingerprint, children[1].invocationFingerprint);
+});
+
+test("invalid textFile calls fail before dispatch and unauthorized calls never read the file", async () => {
+  let reads = 0;
+  const child = {
+    schemaVersion: 3, id: "retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
+    interface: { inputs: { request: { type: "text", required: true } }, exports: {} },
+    nodes: [{ id: "return", type: "workflow-return", exports: {} }],
+  };
+  const parent = { schemaVersion: 3, id: "invalid-text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
+  const engine = new RpWorkflowEngine({
+    resolveWorkflow: () => child,
+    readCallTextFile: ({ path }) => {
+      reads += 1;
+      if (path === "missing.md") throw Object.assign(new Error("missing text file"), { code: "ENOENT" });
+      return " \n\t";
+    },
+    executor: async task => {
+      assert.equal(task.workflow.id, parent.id, "no child should start for an invalid call");
+      const call = fields => task.invokeWorkflow({ workflow: "memory/retrieve", outputPaths: {}, ...fields }, { agent: true });
+      await assert.rejects(() => call({ textFile: "blank.md" }), /requires text input/);
+      await assert.rejects(() => call({ textFile: "missing.md" }), /missing text file/);
+      await assert.rejects(() => call({ text: "inline", textFile: "analysis.md" }), /either text or textFile/);
+      await assert.rejects(() => call({ textFile: "../analysis.md" }), /safe relative path/);
+      child.agentCallable = false;
+      await assert.rejects(() => call({ textFile: "private.md" }), /not callable by Agents/);
+      return { output: "done" };
+    },
+  });
+  const started = await engine.start(parent);
+  const completed = await engine.wait(started.id);
+  assert.equal(completed.status, "completed", completed.nodes.writer.error);
+  assert.equal(reads, 2);
+  assert.equal(engine.snapshot().length, 1);
 });
 
 test("a state-dependent child can disable completed-call reuse", async () => {

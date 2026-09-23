@@ -7,7 +7,16 @@ Generate one data card pack per converted card. Do not generate one discoverable
 ```text
 play/cards/<card-id>/
 ├── manifest.json
+├── runtime-lock.json
 ├── settings.json
+├── defaults/
+├── prompts/
+│   ├── agents/
+│   ├── workflows/
+│   └── modules/
+│       └── <module-id>/
+│           ├── agents/
+│           └── workflows/
 ├── source/
 │   ├── original.*
 │   ├── extracted.json
@@ -26,10 +35,12 @@ play/cards/<card-id>/
 │   ├── retrieval-policy.json
 │   └── skill/SKILL.md          # required only for Agent-enabled message retrieval
 ├── runtime/
+│   ├── launch.json
+│   ├── engine/                # card-owned Pi extension, libraries and gameplay Skills
 │   ├── context-processors/
 │   └── workflow/               # card-owned support scripts for top-level code nodes
 ├── agents/
-│   └── <agent-id>/override.json
+│   └── <agent-id>/agent.json  # complete card-owned Agent baseline; optional override.json
 ├── workflows/
 │   └── <workflow-id>/workflow.json
 ├── openings/
@@ -52,9 +63,11 @@ Copy the standard Web view into `web/`; it belongs to this card and may later be
 }
 ```
 
-The standalone runtime root is `play/`. It owns `play/settings/common.json` for settings shared by every card, such as player name and story font size. Card-specific controls and values belong only in the card's `settings.json`. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context.
+The play root holds the lightweight selector and session storage. Each independent card owns its Pi RP runtime, complete Agent definitions, prompts, behavior defaults, Web frontend and card settings. The card's `defaults/common.json` supplies initial player and display values; user changes are recorded in `settings.json`, and avatars belong to the card. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context. Credentials remain in the operating-system cache.
 
-Selected global workflows are copied under the card and become card-owned definitions. `settings.activeWorkflowId` selects the foreground workflow. Card Agent overrides are optional and contain only fields that differ from `play/agents/<agent-id>/agent.json`. Read [workflow-system.md](workflow-system.md) before creating either structure.
+Selected workflow templates are copied under the card and become card-owned definitions. `settings.activeWorkflowId` selects the foreground workflow. Every referenced Agent needs a complete `agent.json` in the card; a card-specific `override.json` may additionally change its fields. Missing card-owned definitions are errors. Read [workflow-system.md](workflow-system.md) before creating either structure.
+
+Every authored Agent prompt and Agent／team node task is a card-owned Markdown file referenced by `promptFile`. Common definitions use `prompts/agents/` and `prompts/workflows/`; imported modules use `prompts/modules/<module-id>/agents/` and `prompts/modules/<module-id>/workflows/`. Runtime compatibility with legacy inline `prompt` remains, but new card definitions do not duplicate the same text in JSON.
 
 ## Manifest
 
@@ -157,6 +170,22 @@ Each catalog entry declares path, title, summary, categories, optional subcatego
 Choice documents reference a catalog-level selection group. A group declares `one`, `at-most-one`, `one-or-more`, or `any`, an explicit selection instruction, and an optional fallback member. This lets an Agent choose among multiple authored styles or guides without treating every delivered candidate as simultaneously active.
 
 `card-context-library/export-context` deterministically exports all documents matching the caller's categories as one `document-set`. The set contains `DOCUMENTS.md` plus each independent document. The caller normally uses a fixed `call` node or code call; dynamic Agent calls are an extension point. More selective cards may customize or replace this workflow.
+
+### Optional project prompt templates
+
+The project provides optional starter material below `assets/prompt-templates/`. This directory is a conversion asset rather than part of the Pi runtime template source, so its files remain conversion-only copying sources. They are not card source material, do not create a new runtime prompt layer, and are never included merely because they exist.
+
+- Files below `agent-preferences/` are optional fixed-prompt snippets for explicitly selected Agents. They may target creative, summary, archive, or other Agents. Preserve the Agent's original task, tools, delivery contract, and module-specific responsibilities. `common-creative.md` is prepended once to each selected creative Agent unless the confirmed proposal states another order.
+- Files below `task-defaults/` are optional snippets for explicitly selected workflow-node task prompts. The shipped entry points cover output language, continuation or expansion, and length, but creators may freely add other files and subdirectories. A current player instruction may still override a default when the authored card rules allow it.
+- Files below `static-materials/` are optional static documents. Import them into `features/card-context-library/documents/` and catalog them together with source-authored documents, recording the template path in their source metadata. Styles, creative guidance, rules, and other static material receive their actual target Agents, categories, `readPolicy`, `appliesAt`, `readWhen`, selection guidance, and fallback behavior from the confirmed proposal; never infer these from a file or directory name. The reserved `static-materials/INDEX.md` is a conversion guide rather than a selectable document.
+
+Discover templates recursively from the actual files, excluding `static-materials/INDEX.md`. Creators may add, delete, rename, and reorganize files and subdirectories without maintaining an exhaustive registry. Empty and HTML-comment-only files are unavailable. Directory layout does not define mutual exclusion, combination order, or runtime behavior.
+
+When `static-materials/INDEX.md` exists, read it as free-form natural language without requiring headings, named fields, lists, or a fixed entry format. Identify the referenced materials and intended use conditions from its meaning; clarify only ambiguous references or conditions. Resolve referenced material paths relative to `static-materials/`. Report missing files and directory references without guessing replacements. The index may cover only some templates and does not select anything. For selected materials with presets, ask compactly whether to reuse the described timing; accept, revise, or decline it per the user's answer, and skip the question when the user already instructed the conversion to use the presets. Do not copy the index into the card.
+
+The conversion proposal records each selected passage, destination, and prompt-snippet order. Fixed-prompt snippets and static documents may contain similar guidance; preserve that choice without automatic splitting, moving, or deduplication, and report concrete behavioral conflicts. Unselected templates do not enter the card. Imported templates must be identified in the conversion report as optional project-provided starter material rather than source-authored text. Once copied, all such text belongs to the card and may be edited without changing the project template or any other card.
+
+Template-derived and source-authored static documents form one final resource collection. Build their catalog and `DOCUMENTS.md` with the same rules, then inspect the collection as a whole. When an Agent needs a top-level reminder before entering the document set—for example, “read the creative guidelines before writing” or “select the style matching this scene”—put that concise reminder in the relevant workflow call node's `metadata.documentIndex.description`. Keep document-specific conditions and choice details in the catalog-generated `DOCUMENTS.md`. Perform this check even when no template static material was selected but the source card itself contains multiple styles or authored guidance.
 
 ## Optional document frontmatter
 

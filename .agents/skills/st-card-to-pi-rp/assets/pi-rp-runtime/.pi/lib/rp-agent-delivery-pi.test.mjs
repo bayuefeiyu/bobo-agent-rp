@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAgentDelivery } from "./rp-agent-delivery.mjs";
 import { registerAgentDeliveryTools } from "./rp-agent-delivery-tools.mjs";
+import { createTaskStageController, parseTaskStages, registerTaskStageTool } from "./rp-task-stages.mjs";
 
 // Exercise the installed Pi engine with a deterministic stream; no provider, credentials,
 // user settings, network or model tokens are used.
@@ -82,4 +83,62 @@ test("delivery tool schemas are object rooted and closed", async t => {
     assert.equal(tool.executionMode, "sequential");
   }
   assert.match(JSON.stringify(tools.find(tool => tool.name === "rp_deliver").parameters.properties.output), /"const":"text"/);
+});
+
+test("installed Pi places a new task stage after its advance result and before the next model call", { skip: !pi }, async t => {
+  const workspace = await mkdtemp(join(tmpdir(), "rp-task-stage-pi-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const stages = parseTaskStages("共同要求\n<!-- stage -->\n只分析\n<!-- stage -->\n现在创作");
+  const controller = createTaskStageController(stages);
+  const delivery = await createAgentDelivery({
+    workspace,
+    node: { id: "writer", outputs: { result: { path: "result.md", format: "markdown", kind: "file" } }, delivery: { primaryOutput: "result" } },
+    agent: {},
+    beforeComplete: async () => controller.assertExhausted(),
+  });
+  let agent;
+  const tools = [pi.createWriteTool(workspace)];
+  const handlers = [];
+  const runtime = { registerTool: definition => tools.push(pi.wrapToolDefinition(definition)), on: (event, handler) => { assert.equal(event, "tool_call"); handlers.push(handler); } };
+  registerAgentDeliveryTools(runtime, delivery, { currentMessages: () => agent.state.messages }, pi.Type);
+  registerTaskStageTool(runtime, controller, {
+    currentMessages: () => agent.state.messages,
+    enqueueStage: async message => agent.steer({ role: "user", content: [{ type: "text", text: message }], timestamp: Date.now() }),
+  }, pi.Type);
+  const tc = (name, args) => ({ type: "toolCall", id: `call-${name}-${Math.random()}`, name, arguments: args });
+  const turns = [
+    [tc("rp_task_next", {})],
+    [tc("rp_task_next", {})],
+    [tc("write", { path: "draft.md", content: "正文" })],
+    [tc("rp_deliver", { output: "result", path: "draft.md" })],
+    [tc("rp_node_complete", {})],
+  ];
+  const contexts = [];
+  let requests = 0;
+  const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  agent = new pi.Agent({
+    initialState: { model: { id: "offline", name: "offline", api: "openai-completions", provider: "offline", contextWindow: 100000, maxTokens: 1000 }, tools },
+    beforeToolCall: async ({ toolCall }) => {
+      for (const handler of handlers) { const result = await handler({ toolName: toolCall.name, input: toolCall.arguments }); if (result) return result; }
+    },
+    streamFn: (...args) => {
+      const context = args.find(value => Array.isArray(value?.messages));
+      contexts.push(structuredClone(context?.messages || []));
+      const stream = new pi.AssistantMessageEventStream();
+      const content = turns[requests++];
+      assert.ok(content, "staged completion must not trigger an extra model request");
+      stream.push({ type: "done", reason: "toolUse", message: { role: "assistant", content, api: "openai-completions", provider: "offline", model: "offline", usage, stopReason: "toolUse", timestamp: Date.now() } });
+      return stream;
+    },
+  });
+  await agent.prompt(stages.initialText);
+  assert.equal(requests, 5);
+  const second = contexts[1];
+  const advanceResultIndex = second.findIndex(message => message.role === "toolResult" && message.toolName === "rp_task_next");
+  const nextStageIndex = second.findIndex(message => message.role === "user" && JSON.stringify(message.content).includes("现在创作"));
+  assert.ok(advanceResultIndex >= 0);
+  assert.equal(nextStageIndex, advanceResultIndex + 1);
+  assert.doesNotMatch(JSON.stringify(contexts[0]), /现在创作/);
+  assert.equal(delivery.completed, true);
+  assert.equal(await delivery.result(), "正文");
 });

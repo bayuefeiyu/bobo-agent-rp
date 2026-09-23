@@ -1,5 +1,7 @@
 import { parseRolePrompt, readPromptFile, selectPrompts } from "./rp-node-context.mjs";
 import { renderCardText } from "./rp-card-text.mjs";
+import { resolve } from "node:path";
+import { parseTaskStages } from "./rp-task-stages.mjs";
 
 async function optionalPromptFile(root, path) {
   return readPromptFile(root, path).catch(error => {
@@ -8,13 +10,26 @@ async function optionalPromptFile(root, path) {
   });
 }
 
+async function promptFileFromCardOrRoot(active, path) {
+  const cardContent = await optionalPromptFile(active.cardDirectory, path);
+  if (cardContent !== null || active.isolatedRuntime === true) return cardContent;
+  const rootContent = await optionalPromptFile(active.context.cwd, path);
+  if (rootContent !== null) return rootContent;
+  const moduleMatch = path.match(/^prompts\/modules\/([^/]+)\/(.+)$/);
+  if (!moduleMatch) return null;
+  return optionalPromptFile(resolve(active.context.cwd, "global-modules", moduleMatch[1]), `prompts/${moduleMatch[2]}`);
+}
+
+export async function playNodePrompt(active, node) {
+  const nodeText = node.promptFile
+    ? await promptFileFromCardOrRoot(active, node.promptFile)
+    : node.prompt || node.description || "";
+  if (node.promptFile && nodeText === null) throw new Error(`Missing node prompt file: ${node.promptFile}`);
+  return renderCardText(nodeText, active.playerName, node.promptFile || `node ${node.id} prompt`);
+}
+
 export async function playPromptSources(active, profile, agent, node, workspace, tools) {
-  const root = active.context.cwd;
-  const card = active.cardDirectory;
-  const fromCardOrRoot = async path => {
-    const cardContent = await optionalPromptFile(card, path);
-    return cardContent !== null ? cardContent : await optionalPromptFile(root, path);
-  };
+  const fromCardOrRoot = path => promptFileFromCardOrRoot(active, path);
   const authored = (value, label) => renderCardText(value, active.playerName, label);
   const optionsText = await fromCardOrRoot("prompts/context-options.json");
   const options = optionsText ? JSON.parse(optionsText) : {};
@@ -35,15 +50,17 @@ export async function playPromptSources(active, profile, agent, node, workspace,
   const modelPrefix = parseRolePrompt(authored(modelPrefixText, profile?.headPromptFile || "model headPrompt"), roles.modelPrefixRole || "system");
   const modelTail = parseRolePrompt(authored(modelTailText, profile?.tailPromptFile || "model tailPrompt"), roles.modelTailRole || "user");
   const agentText = agent?.promptFile ? await fromCardOrRoot(agent.promptFile) : agent?.prompt || "";
-  const nodeText = node.promptFile ? await fromCardOrRoot(node.promptFile) : node.prompt || node.description || "";
   if (agent?.promptFile && agentText === null) throw new Error(`Missing Agent prompt file: ${agent.promptFile}`);
-  if (node.promptFile && nodeText === null) throw new Error(`Missing node prompt file: ${node.promptFile}`);
+  const fullNodeText = await playNodePrompt(active, node);
+  const taskStages = parseTaskStages(fullNodeText, node.promptFile || `node ${node.id} prompt`);
   return {
     baseSystem,
     prefix: selectPrompts(totalPrefix, modelPrefix, options.prefixExclusive === true),
     tail: selectPrompts(totalTail, modelTail, options.tailExclusive === true),
     agent: parseRolePrompt(authored(agentText, agent?.promptFile || "Agent prompt"), roles.agentRole || "system"),
-    nodeText: authored(nodeText, node.promptFile || `node ${node.id} prompt`),
+    nodeText: taskStages.initialText,
+    fullNodeText,
+    taskStages,
     roles,
     tailMode: options.tailMode === "every-call" ? "every-call" : "on-start",
   };

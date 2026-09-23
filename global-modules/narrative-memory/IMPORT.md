@@ -1,14 +1,14 @@
 # 导入边界
 
-将本目录复制为目标卡的 `features/narrative-memory/`，在卡的 `manifest.feature_modules` 中注册 `features/narrative-memory/module.json`，再复制所需的 `agents/` 到卡的顶层目录。模块工作流保留在模块内，由 `module.json.workflowFiles` 注册；需要手动前端入口时，另行复制或保留公共运行时中的同名顶层包装工作流。复制后的内容归目标卡所有，不与本全局源包自动同步。
+将本目录复制为目标卡的 `features/narrative-memory/`，但把顶层 `prompts/` 映射到卡片 `prompts/modules/narrative-memory/`，不在 `features/` 下保留第二份；在卡的 `manifest.feature_modules` 中注册 `features/narrative-memory/module.json`，并复制所需的 `agents/` 到卡的顶层目录。模块工作流保留在模块内，由 `module.json.workflowFiles` 注册；需要手动前端入口时，另行复制或保留公共运行时中的同名顶层包装工作流。复制后的内容归目标卡所有，不与本全局源包自动同步。
 
-`runtime/test/package.test.mjs` 同时支持本全局源码布局与卡内安装布局：源码态自动使用转换资产中的 `.pi/lib`，卡内态自动使用所属 `play/.pi/lib`。在其他独立测试布局中，可用绝对路径环境变量 `PI_RP_RUNTIME_LIB` 指定公共运行时库。复制模块时须保留同目录的 `runtime-test-runtime.mjs`；转换回归会把模块复制到临时 `play/cards/<id>/` 后再次运行该测试，防止重新引入源码树相对路径。
+`runtime/test/package.test.mjs` 同时支持本全局源码布局与卡内安装布局：源码态自动使用转换资产中的 `.pi/lib`，独立卡使用卡内 `runtime/engine/lib`，旧卡兼容所属 `play/.pi/lib`。其他测试布局可用绝对路径环境变量 `PI_RP_RUNTIME_LIB` 指定运行库。复制模块时须保留同目录的 `runtime-test-runtime.mjs`；其唯一维护源位于根 Skill 的 `assets/module-testing/`，由 `sync_template_assets.mjs` 生成到各模块。转换回归会把模块复制到两种临时卡布局后运行，防止重新引入源码树相对路径。
 
 导入不是机械复制。转卡或开发 Agent 必须先与用户确认：原卡哪些固定资料迁入记忆、哪些继续固定提供、每个开局使用哪份初始记录、卡内时间格式与排序算法、创作工作流中检索节点的位置、其他模块的归档来源和节点权限。
 
-创作侧使用两个对外入口：`narrative-memory/narrative-memory-reference-snapshot` 按参数确定性输出目录、有效事件时间线或两者；`narrative-memory/narrative-memory-retrieve` 从调用方 Agent 提供的自然语言 Markdown 查询清单开始，内部匹配并返回记忆 `document-set`。情景分析与查询清单生成属于调用方 Agent；查询只列实体、关系、事件、认知和知情范围等简单资料目标，推理结论仍由调用方完成。进阶正文工作流通常先固定准备有效事件时间线，再由正文 Agent 分析并动态检索，完成初步规划后才选读按需世界观。来源捕获与归档的顶层触发包装仍必须按目标卡实际模块、来源权限和一致性要求生成。
+创作侧使用两个对外入口：`narrative-memory/narrative-memory-reference-snapshot` 按参数确定性输出目录、有效事件时间线或两者；`narrative-memory/narrative-memory-retrieve` 根据调用方提供的自然语言查询及可选分析，自主规划检索并返回记忆 `document-set`。调用支持直接传 `text`，或用 `textFile` 指定工作区文档，由运行时读取全文作为文本输入。正文 Agent 将情景分析及其后的查询清单写在同一文档中；可以提出模糊或需要判断的历史问题，无需先拆成记录类型或判断记录是否存在。检索 Agent 在有效预算内自主安排查找，最终只交付已有记录，不写自己的剧情结论、理由或主观意见。进阶正文工作流通常先固定准备有效事件时间线，再由正文 Agent 分析并动态检索，完成初步规划后才选读按需世界观。来源捕获与归档的顶层触发包装仍必须按目标卡实际模块、来源权限和一致性要求生成。
 
-公共运行时已经实现本模块依赖的 INFRA-001 与 INFRA-003 至 INFRA-007：来源捕获与两级归档工作流可阻止下一轮输入；消息和工作流产物保留叙事来源层；归档事务保留精确消息修订；模块前端可以分页查看全部集合及修订历史、修改常用设置，并从静态白名单启动归档、压缩、回合范围修复和限定维护工作流；代码节点还能执行冷却路由并把延迟批次绑定到实际覆盖范围。失败或重启恢复后的阻塞实例仍可在工作流面板重试、换模型、取消或显式跳过。
+公共运行时已经实现本模块依赖的 INFRA-001 与 INFRA-003 至 INFRA-007：来源捕获与归档工作流可阻止下一轮输入；消息和工作流产物保留叙事来源层；归档事务保留精确消息修订；模块前端可以分页查看全部集合及修订历史、修改常用设置，并从静态白名单启动归档、压缩、回合范围修复和限定维护工作流；代码节点还能执行冷却路由并把延迟批次绑定到实际覆盖范围。失败或重启恢复后的阻塞实例仍可在工作流面板重试、换模型、取消或显式跳过。
 
 模块前端还会只读显示已经越过保护与冷却但尚未覆盖的回合，以及归档后来源revision发生变化的回合。用户可以从提醒直接启动范围修复，也可以在没有提醒时手动选择任意已完成范围进行repair或supplement。系统不会因提醒自动使记录失效、自动修复或自动阻塞下一轮。
 

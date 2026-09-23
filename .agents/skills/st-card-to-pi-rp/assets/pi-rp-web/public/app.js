@@ -69,6 +69,7 @@ const elements = {
   saveModuleSettings: document.querySelector("#save-module-settings"),
   cardSearch: document.querySelector("#card-search"),
   cardGrid: document.querySelector("#card-grid"),
+  returnToSelector: document.querySelector("#return-to-selector"),
   handoffOverlay: document.querySelector("#handoff-overlay"),
   handoffTitle: document.querySelector("#handoff-title"),
   handoffDescription: document.querySelector("#handoff-description"),
@@ -2335,6 +2336,14 @@ async function initialize() {
   renderOpeningChoices();
   const snapshot = await request("/api/state");
   applySnapshot(snapshot);
+  if (snapshot.selectorUrl) {
+    elements.returnToSelector.href = snapshot.selectorUrl;
+    elements.returnToSelector.hidden = false;
+  }
+  if (snapshot.isolatedRuntime) {
+    document.querySelector("#tab-cards").hidden = true;
+    elements.saveAgentGlobal.hidden = true;
+  }
   const settings = await request("/api/settings");
   state.settings = settings;
   applyFontSize(settings.common?.system?.fontSize ?? 16);

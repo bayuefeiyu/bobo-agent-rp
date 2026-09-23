@@ -96,7 +96,7 @@
       }
     },
     {
-      "id": "generate-content-prompts",
+      "id": "generate-content-prompts", "promptFile": "prompts/modules/comfy-image-generation/workflows/agent-image-generation/generate-content-prompts.md",
       "title": "生成画面内容提示词",
       "description": "按每个不同模型指导，仅生成随剧情变化的画面内容片段。",
       "type": "agent",
