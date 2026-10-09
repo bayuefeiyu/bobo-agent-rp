@@ -1,6 +1,6 @@
 # Workflow data access
 
-Modules declare capabilities. Workflows grant a subset to concrete nodes. Skills explain correct usage but cannot expand authority.
+Modules declare capabilities. Workflow v4 requires every workflow kind to carry `ownerModuleId`; entry kinds (`foreground`, `turn-background`, and `global-background`) may declare triggers and do not require `workflow-return`, while callable `module-external` and `module-internal` workflows have no trigger and exactly one `workflow-return`. Workflows grant a subset to concrete nodes. Agent, workflow, node, code, and prompt components belong to their owning module; references use normalized `module-id/local-id` values, and `promptFile`/`entryFile` are module-relative. The common engine, tools, system models, and cross-module prompt templates remain host-owned public resources, and a module need not run independently. Skills explain correct usage but cannot expand authority.
 
 ## Node grants
 

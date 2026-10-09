@@ -51,19 +51,7 @@ const schemaTargets = [
 
 for (const item of copies) await access(item.source);
 const { STORY_RECORD_SCHEMA } = await import(`${pathToFileURL(resolve(assetRoot, "story-contract.mjs")).href}?sync=${Date.now()}`);
-const runtimeRoot = resolve(root, ".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime");
 const modulesRoot = resolve(root, "global-modules");
-
-async function namedFiles(directory, name) {
-  const result = [];
-  const entries = await readdir(directory, { withFileTypes: true }).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error));
-  for (const entry of entries) {
-    const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) result.push(...await namedFiles(path, name));
-    else if (entry.name === name) result.push(path);
-  }
-  return result;
-}
 
 async function verifyPromptReference(owner, value, expectedPrefix, sourceRoot) {
   if (typeof value.promptFile !== "string" || !value.promptFile.startsWith(expectedPrefix)) throw new Error(`Missing or invalid promptFile: ${owner}`);
@@ -74,31 +62,30 @@ async function verifyPromptReference(owner, value, expectedPrefix, sourceRoot) {
 }
 
 let promptReferenceCount = 0;
-for (const path of await namedFiles(resolve(runtimeRoot, "agents"), "agent.json")) {
-  const agent = JSON.parse(await readFile(path, "utf8"));
-  await verifyPromptReference(path, agent, "prompts/", resolve(runtimeRoot, "prompts"));
-  promptReferenceCount += 1;
-}
-for (const path of await namedFiles(resolve(runtimeRoot, "workflows"), "workflow.json")) {
-  const workflow = JSON.parse(await readFile(path, "utf8"));
-  for (const node of workflow.nodes.filter(node => ["agent", "team"].includes(node.type))) {
-    await verifyPromptReference(`${path}#${node.id}`, node, "prompts/", resolve(runtimeRoot, "prompts"));
-    promptReferenceCount += 1;
-  }
-}
+const owners = new Map();
 for (const moduleEntry of await readdir(modulesRoot, { withFileTypes: true })) {
   if (!moduleEntry.isDirectory()) continue;
   const moduleRoot = resolve(modulesRoot, moduleEntry.name);
-  const prefix = `prompts/modules/${moduleEntry.name}/`;
-  for (const path of await namedFiles(resolve(moduleRoot, "agents"), "agent.json")) {
+  const manifest = await readFile(resolve(moduleRoot, "module.json"), "utf8")
+    .then(JSON.parse)
+    .catch(error => error.code === "ENOENT" ? null : Promise.reject(error));
+  if (!manifest) continue;
+  const moduleId = manifest.id;
+  if (typeof moduleId !== "string" || !moduleId) throw new Error(`Missing module id: ${moduleRoot}`);
+  for (const relativePath of manifest.agentFiles || []) {
+    const path = resolve(moduleRoot, relativePath);
     const agent = JSON.parse(await readFile(path, "utf8"));
-    await verifyPromptReference(path, agent, prefix, resolve(moduleRoot, "prompts"));
+    await verifyPromptReference(path, agent, "prompts/", resolve(moduleRoot, "prompts"));
+    const ownerKey = `${moduleId}/${agent.id}`;
+    if (owners.has(ownerKey)) throw new Error(`Agent ${ownerKey} has multiple template owners: ${owners.get(ownerKey)} and ${path}`);
+    owners.set(ownerKey, path);
     promptReferenceCount += 1;
   }
-  for (const path of await namedFiles(resolve(moduleRoot, "workflows"), "workflow.json")) {
+  for (const relativePath of manifest.workflowFiles || []) {
+    const path = resolve(moduleRoot, relativePath);
     const workflow = JSON.parse(await readFile(path, "utf8"));
     for (const node of workflow.nodes.filter(node => ["agent", "team"].includes(node.type))) {
-      await verifyPromptReference(`${path}#${node.id}`, node, prefix, resolve(moduleRoot, "prompts"));
+      await verifyPromptReference(`${path}#${node.id}`, node, "prompts/", resolve(moduleRoot, "prompts"));
       promptReferenceCount += 1;
     }
   }
@@ -116,16 +103,4 @@ if (process.argv.includes("--check")) {
   for (const item of copies) for (const target of item.targets) await copyFile(item.source, target);
   for (const target of schemaTargets) await writeFile(target, `${JSON.stringify(STORY_RECORD_SCHEMA, null, 2)}\n`, "utf8");
 }
-const owners = new Map();
-const agentRoots = [resolve(runtimeRoot, "agents"), ...(await readdir(modulesRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => resolve(modulesRoot, entry.name, "agents"))];
-for (const directory of agentRoots) {
-  const entries = await readdir(directory, { withFileTypes: true }).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error));
-  for (const entry of entries.filter(entry => entry.isDirectory())) {
-    const path = resolve(directory, entry.name, "agent.json");
-    const agent = await readFile(path, "utf8").then(JSON.parse).catch(error => error.code === "ENOENT" ? null : Promise.reject(error));
-    if (!agent) continue;
-    if (owners.has(agent.id)) throw new Error(`Agent ${agent.id} has multiple template owners: ${owners.get(agent.id)} and ${path}`);
-    owners.set(agent.id, path);
-  }
-}
-console.log(`Template sources ${process.argv.includes("--check") ? "verified" : "synchronized"}: ${copies.length} file groups, ${schemaTargets.length} schemas, ${promptReferenceCount} prompt files, ${owners.size} unique Agents.`);
+console.log(`Template sources ${process.argv.includes("--check") ? "verified" : "synchronized"}: ${copies.length} file groups, ${schemaTargets.length} schemas, ${promptReferenceCount} prompt files, ${owners.size} unique module Agents.`);

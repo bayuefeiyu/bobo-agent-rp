@@ -14,6 +14,7 @@ const MODULE_FIELDS = [
   "frontendViewFile",
   "skillFile",
   "workflowFiles",
+  "agentFiles",
 ].sort();
 
 function assertRelativeFile(value, label) {
@@ -29,9 +30,9 @@ export function normalizeFeatureModuleManifest(value, label = "feature module") 
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be a JSON object.`);
   const fields = Object.keys(value).sort();
   if (fields.length !== MODULE_FIELDS.length || MODULE_FIELDS.some((field, index) => fields[index] !== field)) {
-    throw new Error(`${label} must use the exact schemaVersion 6 field set.`);
+    throw new Error(`${label} must use the exact schemaVersion 7 field set.`);
   }
-  if (value.schemaVersion !== 6 || typeof value.id !== "string" || !ID_PATTERN.test(value.id)) throw new Error(`Invalid ${label} definition.`);
+  if (value.schemaVersion !== 7 || typeof value.id !== "string" || !ID_PATTERN.test(value.id)) throw new Error(`Invalid ${label} definition.`);
   if (!["data", "resource", "hybrid"].includes(value.moduleKind)) throw new Error(`${label}.moduleKind must be data, resource, or hybrid.`);
   if (value.basedOn !== null && (typeof value.basedOn !== "string" || !ID_PATTERN.test(value.basedOn))) throw new Error(`${label}.basedOn must be null or a safe module ID.`);
   if (typeof value.title !== "string" || !value.title.trim()) throw new Error(`${label}.title must be non-empty.`);
@@ -46,9 +47,12 @@ export function normalizeFeatureModuleManifest(value, label = "feature module") 
   if ((value.surface === "frontend") !== (typeof value.frontendViewFile === "string")) throw new Error(`${label}.frontendViewFile must be present exactly for frontend modules.`);
   if (!Array.isArray(value.workflowFiles) || value.workflowFiles.length === 0) throw new Error(`${label}.workflowFiles must contain at least one owned workflow.`);
   const workflowFiles = value.workflowFiles.map((path, index) => assertRelativeFile(path, `${label}.workflowFiles[${index}]`));
+  if (!Array.isArray(value.agentFiles)) throw new Error(`${label}.agentFiles must be an array.`);
+  const agentFiles = value.agentFiles.map((path, index) => assertRelativeFile(path, `${label}.agentFiles[${index}]`));
+  if (new Set(agentFiles).size !== agentFiles.length) throw new Error(`${label}.agentFiles must not contain duplicates.`);
   if (new Set(workflowFiles).size !== workflowFiles.length) throw new Error(`${label}.workflowFiles must not contain duplicates.`);
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: value.id,
     moduleKind: value.moduleKind,
     basedOn: value.basedOn,
@@ -62,5 +66,6 @@ export function normalizeFeatureModuleManifest(value, label = "feature module") 
     frontendViewFile: value.surface === "frontend" ? assertRelativeFile(value.frontendViewFile, `${label}.frontendViewFile`) : null,
     skillFile: assertRelativeFile(value.skillFile, `${label}.skillFile`),
     workflowFiles,
+    agentFiles,
   };
 }

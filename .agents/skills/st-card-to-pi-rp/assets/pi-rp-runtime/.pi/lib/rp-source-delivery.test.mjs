@@ -29,9 +29,9 @@ test("all shipped ordinary Agent nodes declare a file or directory delivery and 
   const root = await findSourceRoot(runtime);
   if (!root) return t.skip("source assets are not installed beside this runtime copy");
   const sourceRuntime = join(root, ".agents", "skills", "st-card-to-pi-rp", "assets", "pi-rp-runtime");
-  const paths = [...await walk(join(sourceRuntime, "workflows"), "workflow.json"), ...await walk(join(root, "global-modules"), "workflow.json")];
-  const profiles = [...await walk(join(sourceRuntime, "agents"), "agent.json"), ...await walk(join(root, "global-modules"), "agent.json")];
-  const byId = new Map(await Promise.all(profiles.map(async path => { const profile = await json(path); return [profile.id, profile]; })));
+  const paths = await walk(join(root, "global-modules"), "workflow.json");
+  const profiles = await walk(join(root, "global-modules"), "agent.json");
+  const byId = new Map(await Promise.all(profiles.map(async path => { const profile = await json(path); return [`${profile.ownerModuleId}/${profile.id}`, profile]; })));
   let count = 0;
   let jsonCount = 0;
   for (const path of paths) {
@@ -56,6 +56,6 @@ test("all shipped ordinary Agent nodes declare a file or directory delivery and 
       assert.ok(!/不要尝试写文件|最终回复就是|最终回复只输出|最终严格按Agent约定输出JSON|输出且只输出含operations数组/.test(`${node.prompt || ""}\n${profile.prompt || ""}`), `${raw.id}/${node.id} uses delivery wording`);
     }
   }
-  assert.equal(count, 18);
+  assert.equal(count, 16);
   assert.equal(jsonCount, 12);
 });

@@ -3,7 +3,7 @@
   "id": "image-prompt-writer",
   "name": "生图提示词 Agent",
   "description": "按模型指导仅生成画面内容片段，不承担固定质量、风格、LoRA 或负面提示词。",
-  "promptFile": "prompts/modules/comfy-image-generation/agents/image-prompt-writer.md",
+  "promptFile": "prompts/agents/image-prompt-writer.md",
   "tools": [
     "edit",
     "write",
@@ -13,5 +13,6 @@
     "workflow:scoped-output"
   ],
   "outputMode": "json",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "comfy-image-generation"
 }

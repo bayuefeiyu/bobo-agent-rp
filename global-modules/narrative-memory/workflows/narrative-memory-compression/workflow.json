@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "narrative-memory-compression",
   "title": "叙事记忆事件压缩",
   "description": "在有效事件目录达到阈值时，以非阻塞后台工作流建立事件摘要。",
   "kind": "module-internal",
   "revision": "2",
   "defaults": {
-    "agentId": "narrative-memory-compressor",
+    "agentId": "narrative-memory/narrative-memory-compressor",
     "modelId": "pi:current",
     "context": {
       "mode": "fixed"
@@ -64,7 +64,7 @@
       },
       "routeFromOutput": "route",
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/prepare-compression.mjs"
+        "entryFile": "runtime/workflow/prepare-compression.mjs"
       }
     },
     {
@@ -72,17 +72,57 @@
       "title": "生成压缩规划资料",
       "description": "仅在满足压缩条件时，使用资格节点已冻结的有效目录生成时间线资料。",
       "type": "code",
-      "dependsOn": ["prepare-compression"],
-      "conditions": [{ "nodeId": "prepare-compression", "routes": ["compress"] }],
-      "retry": { "maxAttempts": 1 },
-      "context": { "mode": "previous-output", "fromNodes": ["prepare-compression"] },
-      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "dependsOn": [
+        "prepare-compression"
+      ],
+      "conditions": [
+        {
+          "nodeId": "prepare-compression",
+          "routes": [
+            "compress"
+          ]
+        }
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-compression"
+        ]
+      },
+      "outputs": {
+        "snapshot": {
+          "path": "reference-snapshot",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "snapshot"
+          }
+        ]
+      },
       "moduleAccess": [],
-      "dataCommit": { "onNodeEnd": [] },
+      "dataCommit": {
+        "onNodeEnd": []
+      },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/materialize-compression-snapshot.mjs",
-        "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "compression-planning", "priority": 100, "description": "由已冻结的有效目录生成的压缩资料；先读其中DOCUMENTS.md。" } }
+        "entryFile": "runtime/workflow/materialize-compression-snapshot.mjs",
+        "documentIndex": {
+          "snapshot": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "compression-planning",
+            "priority": 100,
+            "description": "由已冻结的有效目录生成的压缩资料；先读其中DOCUMENTS.md。"
+          }
+        }
       }
     },
     {
@@ -90,9 +130,11 @@
       "title": "规划语义分组",
       "description": "只根据有效目录提出可合并分组。",
       "type": "agent",
-      "agentId": "narrative-memory-compressor",
+      "agentId": "narrative-memory/narrative-memory-compressor",
       "modelId": "pi:current",
-      "dependsOn": ["materialize-compression-snapshot"],
+      "dependsOn": [
+        "materialize-compression-snapshot"
+      ],
       "conditions": [
         {
           "nodeId": "prepare-compression",
@@ -106,15 +148,41 @@
       },
       "context": {
         "mode": "previous-output",
-        "fromNodes": ["materialize-compression-snapshot"]
+        "fromNodes": [
+          "materialize-compression-snapshot"
+        ]
       },
-      "promptFile": "prompts/modules/narrative-memory/workflows/narrative-memory-compression/plan-compression.md",
-      "outputs": {"result": {"path": "compression-plan.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["groups"], "properties": {"groups": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
+      "promptFile": "prompts/workflows/narrative-memory-compression/plan-compression.md",
+      "outputs": {
+        "result": {
+          "path": "compression-plan.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "groups"
+            ],
+            "properties": {
+              "groups": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []
       },
-      "metadata": { "documentWorkspace": true }
+      "metadata": {
+        "documentWorkspace": true
+      }
     },
     {
       "id": "commit-compression",
@@ -237,7 +305,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/commit-compression.mjs"
+        "entryFile": "runtime/workflow/commit-compression.mjs"
       }
     },
     {

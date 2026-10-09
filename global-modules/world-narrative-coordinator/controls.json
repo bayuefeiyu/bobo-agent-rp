@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "title": "导演要求",
+  "delivery": {
+    "mode": "agent-prompt",
+    "agents": [
+      "world-narrative-coordinator/world-narrative-daily-director",
+      "world-narrative-coordinator/world-narrative-deep-director",
+      "world-narrative-coordinator/world-narrative-integrity-repairer",
+      "world-narrative-coordinator/world-narrative-maintainer",
+      "world-narrative-coordinator/world-narrative-story-reviewer",
+      "world-narrative-coordinator/world-narrative-team-expert",
+      "world-narrative-coordinator/world-narrative-team-leader",
+      "world-narrative-coordinator/world-narrative-team-secretary"
+    ],
+    "instruction": "以下为当前选中的导演要求。结合当前职责应用，并核对已有计划与旧指导的适用性。这些要求不改变已发生的事实，也不扩大当前节点职责。向正文或其他创作频道提供指导时，将其转化为有依据的具体安排，不原样转发幕后要求或档位标签。"
+  },
+  "groups": [
+    {
+      "id": "protagonist-treatment",
+      "title": "主角待遇",
+      "description": "由导演把控玩家角色获得的机会、照顾、阻力与代价。",
+      "options": [
+        {
+          "id": "ordinary",
+          "label": "普通角色",
+          "documentId": "treatment-ordinary"
+        },
+        {
+          "id": "favored",
+          "label": "主角优待",
+          "documentId": "treatment-favored"
+        },
+        {
+          "id": "pressured",
+          "label": "主角承压",
+          "documentId": "treatment-pressured"
+        }
+      ]
+    },
+    {
+      "id": "other-requirements",
+      "title": "其他要求",
+      "description": "补充个人偏好、感兴趣的题材或额外需要。默认内容由创作者或转卡者填写；自定义由玩家填写。",
+      "allowNone": false,
+      "last": true,
+      "options": [
+        {
+          "id": "default",
+          "label": "默认",
+          "documentId": "other-requirements-default"
+        }
+      ]
+    }
+  ]
+}

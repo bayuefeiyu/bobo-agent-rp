@@ -1,29 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { Type } from "typebox";
 
 import { DATA_GET_PARAMETERS, DATA_GET_REQUIRED, DATA_QUERY_PARAMETERS, DATA_QUERY_REQUIRED } from "./rp-data-tool-schemas.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const EXTENSION = resolve(here, "..", "extensions", "pi-rp-web.ts");
-const Type = await loadType();
-
-/** Load the typebox build Pi itself ships; the repository does not vendor it. */
-async function loadType() {
-  const appData = process.env.APPDATA;
-  if (!appData) return null;
-  for (const candidate of [
-    resolve(appData, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "typebox", "build", "index.mjs"),
-    resolve(appData, "npm", "node_modules", "typebox", "build", "index.mjs"),
-  ]) {
-    const loaded = await import(pathToFileURL(candidate).href).catch(() => null);
-    if (loaded?.Type) return loaded.Type;
-  }
-  return null;
-}
 
 /**
  * Every function-calling tool the bridge registers, with the exact `parameters:` expression the
@@ -147,7 +132,7 @@ test("the shipped data tool descriptors stay object-rooted and complete", () => 
 });
 
 test("the extension no longer builds a data tool root out of Type.Any()", async () => {
-  const source = await readFile(EXTENSION, "utf8");
+  const source = await readFile(new URL("./rp-node-executor.ts", import.meta.url), "utf8") + "\n" + await readFile(new URL("./rp-host-registration.ts", import.meta.url), "utf8") + "\n" + await readFile(new URL("./rp-host-utils.ts", import.meta.url), "utf8");
   const declarations = toolDeclarationSource(source);
   assert.ok(declarations.length >= 7, `expected every registered tool, found ${declarations.length}`);
   const dataQuery = declarations.find(item => item.name === "rp_data_query");
@@ -161,13 +146,9 @@ test("the extension no longer builds a data tool root out of Type.Any()", async 
   assert.equal(source.includes("parameters: Type.Any()"), false, "no registered tool may declare an untyped parameter root");
 });
 
-test("every registered tool compiles to a provider-acceptable object schema", async t => {
-  const source = await readFile(EXTENSION, "utf8");
+test("every registered tool compiles to a provider-acceptable object schema", async () => {
+  const source = await readFile(new URL("./rp-node-executor.ts", import.meta.url), "utf8") + "\n" + await readFile(new URL("./rp-host-registration.ts", import.meta.url), "utf8") + "\n" + await readFile(new URL("./rp-host-utils.ts", import.meta.url), "utf8");
   const declarations = toolDeclarationSource(source);
-  if (!Type) {
-    t.diagnostic("typebox is not installed next to Pi; the source-level assertions above still ran");
-    return;
-  }
   for (const declaration of declarations) {
     let schema;
     try {

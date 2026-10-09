@@ -6,13 +6,21 @@
 
 ## 文档导航
 
-- [PROJECT_STATUS.md](PROJECT_STATUS.md)：当前开发快照、已完成能力、验证结果、已知边界和接手注意事项。后续开发者应先读此文件。
+- [PROJECT_STATUS.md](PROJECT_STATUS.md)：**当前**开发快照、已完成能力、当前验证结果、已知边界和接手注意事项。后续开发者应先读此文件。
+- [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md)：从干净检出执行的开发与验证指南，包含可用的验证入口和交付命令。
+- [DEVELOPMENT-HISTORY.md](DEVELOPMENT-HISTORY.md)：历史实施记录（逐批次修复清单、当时验证计数与实机取证）；**不是当前规范**。
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md)：本机与受限环境下已确认的故障、根因和绕行做法。
 - [PI-RP-DEVELOPMENT-SCOPE.md](PI-RP-DEVELOPMENT-SCOPE.md)：根目录源、安装运行时、卡片和 session 之间的修改授权边界。
 - [PI-PLAY-CONTEXT-ISOLATION.md](PI-PLAY-CONTEXT-ISOLATION.md)：从 `play/` 启动游玩前的一次性隔离设置。
 - [PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md](PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md)：已经由用户确认的公共基础设施升级及其实施记录；它不是未确认想法清单。
+- [.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md](.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md)：工程架构优化的实施方案与实施状态表。
 - `global-modules/<module-id>/IMPORT.md`：全局模块的导入、运行时依赖和卡级适配要求。
 
-当前根目录提供五个可选全局模块源：`narrative-memory`、`world-narrative-coordinator`、`local-scene-narrative`、`world-scope-narrative` 与 `comfy-image-generation`。它们都只影响未来明确选择并导入它们的卡，不会同步更新 `play/` 中已有副本。
+当前根目录提供六个可选全局模块源：`narrative-controls`、`narrative-memory`、`world-narrative-coordinator`、`local-scene-narrative`、`world-scope-narrative` 与 `comfy-image-generation`。它们都只影响未来明确选择并导入它们的卡，不会同步更新 `play/` 中已有副本。
+
+`narrative-controls` 是默认置顶的“正文”模块，提供叙事节奏、抢话方式，以及字数（800以内/800-1500/1500以上/自定义）、语言（中文/自定义）、扩写（扩写/部分扩写/续写）的互斥拨档，提示词沿用已整理的夏瑾系列原文与字数变量句式，并在全部拨档最后提供“其他要求”的默认/自定义两档；默认由创作者或转卡者填写，玩家自定义独立保存。项目源和卡内副本都将完整档位资源与普通静态资料分开保存；正文生成时只把当前选择组合成《创作要求》，与其他静态创作准则放进同一资料目录、按同级要求交付。设置按聊天保存，切换后保存即用于下一次正文生成。导入与扩展见 [正文模块说明](global-modules/narrative-controls/IMPORT.md)。
+
+导演模块也提供独立的拨档要求：首项“主角待遇”，固定末项“其他要求”（创作者默认/玩家自定义）。档位文档以 `director-only` 注释标注专用段落，未标注内容适用于全部登记的导演 Agent；运行时按原文顺序过滤并加入对应导演的提示词。全部源资源随卡保留，当前选择按聊天保存，下一次导演运行生效。格式与扩展见 [导演拨档说明](global-modules/world-narrative-coordinator/DIRECTOR-CONTROLS.md)。
 
 其中**两个叙事模块不是一个可独立挑选的平级选项**：`local-scene-narrative` 与 `world-scope-narrative` 只负责写候选，由 `world-narrative-coordinator` 决定何时写、给什么指导、审核并发布，并接 `narrative-memory` 归档；两者都在自己的 `dependencies.json` 里记录这一点。转换时如只选叙事模块而不选导演，转换流程必须给出两条路并说明各自的工作量与风险：**补选导演**，或**在该卡内自行编写解耦的编排**（现成模板是六节点的 `director-post-with-narratives`，解耦后失去世界逻辑把关、深度推演题材与跨模块硬冲突检查）。`comfy-image-generation`、`narrative-memory` 与导演模块本身可按需单独选择。
 
@@ -45,7 +53,7 @@ bobo-agent-rp/
 │   ├── cards/<card-id>/             # 新卡自带 RP 运行时、前端和配置
 │   ├── sessions/<card-id>/          # 聊天与模块状态
 │   ├── pi-sessions/<card-id>/       # 新卡自己的 Pi 会话文件
-│   └── .pi/、agents/ 等             # 仅已有旧卡使用的共享运行文件
+│   └── launch/ 等                  # 公共启动器；卡内运行文件随卡独立维护
 ├── PI-RP-DEVELOPMENT-SCOPE.md       # 根目录、卡片、运行时与 session 修改边界
 └── PI-PLAY-CONTEXT-ISOLATION.md     # 玩家需要手动完成的隔离步骤
 ```
@@ -94,7 +102,7 @@ pi --approve
 
 生图运行时只让 Agent 生成随画面变化的内容片段；固定质量、风格、LoRA 触发词和负面提示词由 profile 组装。图片始终保留在 ComfyUI 的 `output/bobo-agent-rp/<聊天目录>/`，项目只保存会话期内的提示词和 ComfyUI 输出引用，不复制、缓存或随聊天删除图片。
 
-新转换卡在临时目录构建并校验后，用 `scripts/package_card_runtime.mjs` 发布为带 `runtime-lock.json` 的独立卡包。项目运行库、提示词、Agent、工作流和 Web 随卡复制；升级根目录模板或转换另一张卡不会自动改动它。卡包记录打包时的 Node 主版本及已测试 Pi 版本，启动器在启动前检查；使用其他引擎组合需先验证再更新兼容声明。启动器独立安装，不由每次转卡顺带覆盖。模板维护位置和自动生成副本见[模板的唯一维护来源](.agents/skills/st-card-to-pi-rp/references/template-sources.md)。需要直接运行打包器时，从仓库根目录执行：
+新转换卡在临时目录构建并校验后，用 `scripts/package_card_runtime.mjs` 发布为带 `runtime-lock.json` 的独立卡包。项目运行库、提示词、Agent、工作流和 Web 随卡复制；升级根目录模板或转换另一张卡不会自动改动它。卡包记录打包时的 Node 主版本及已测试 Pi 版本，启动器在启动前检查；使用其他引擎组合需先验证再更新兼容声明。启动器独立安装，不由每次转卡顺带覆盖。功能模块是最小组织和交付单元：项目源码统一放在 `global-modules/<id>/`，转卡时整体复制到 `features/<id>/`，所属 Agent、工作流、节点提示词、脚本与资源保持在模块内。正文和生图遵循同一处理方式；模块可依赖其他模块。公共引擎、工具、系统和模型前后置保留在公共层，跨模块转卡素材继续放在 `assets/prompt-templates/`。模板维护位置和自动生成副本见[模板的唯一维护来源](.agents/skills/st-card-to-pi-rp/references/template-sources.md)。需要直接运行打包器时，从仓库根目录执行：
 
 ```powershell
 node .agents/skills/st-card-to-pi-rp/scripts/package_card_runtime.mjs <临时卡目录> play/cards/<新卡ID>
@@ -133,13 +141,13 @@ node play/launcher/server.mjs play
 
 Web UI 将模型、Agent 和工作流配置统一收进命名配置方案。模型配置以 ID 保存，可设置上下文/输出限制、思考强度、并发量及可选的首尾提示词；Agent 与工作流配置可建立覆盖层，工作流节点只引用这些 ID。独立工作流页面用于查看定义、节点和运行实例，并提供运行期操作，不再直接修改配置。
 
-在仓库根目录运行 `node .agents/skills/manage-pi-rp-config-ui/scripts/start-config-ui.mjs` 会以“无卡、无聊天”的开发预览状态打开与 `play` 完全相同的 Web UI。正文区、角色卡页和模块栏可用于检查通用前端效果，但不会创建虚拟卡、会话或运行工作流；用户资料与正文字号等通用默认可以修改并保存在 `.pi-rp-local/`。游玩时共享 `settings/common.json` 作为全局回退，卡内 `settings.json.settings.common` 覆盖对应类别且优先级更高。从同一侧栏进入“配置方案”即可统一管理模型、Agent、工作流和模块参数，不再保留重复的独立编辑页。首次启动会从作者默认值建立并激活可编辑的“开发默认”方案，内置默认仍作为只读基线保留。Agent 和工作流都先选“通用”或所属模块，再选具体对象；“通用”只展示不属于模块的内容。工作流档案包含运行策略、触发方式和全部节点，并且只有 Agent 节点显示 Agent、模型、提示词和上下文选项。模块参数从 `settings-form` 初始值载入。全局开发模式与单卡游玩模式分别维护命名方案，支持新建、改名、复制、切换、删除和不含凭据的 JSON 导入导出；单卡方案只对当前卡生效。所有字段均带同排用途提示，模型 API Key 仍只保存在本机项目隔离缓存中。
+在仓库根目录运行 `node .agents/skills/manage-pi-rp-config-ui/scripts/start-config-ui.mjs` 会以“无卡、无聊天”的开发预览状态打开与 `play` 完全相同的 Web UI。正文区、角色卡页和模块栏可用于检查通用前端效果，但不会创建虚拟卡、会话或运行工作流；用户资料与正文字号等通用默认可以修改并保存在 `.pi-rp-local/`。游玩时共享 `settings/common.json` 作为全局回退，卡内 `settings.json.settings.common` 覆盖对应类别且优先级更高。从同一侧栏进入“配置方案”即可统一管理模型、Agent、工作流和模块参数，不再保留重复的独立编辑页。首次启动会从作者默认值建立并激活可编辑的“开发默认”方案，内置默认仍作为只读基线保留。Agent 和工作流都先选所属功能模块，再选具体对象。所有组件使用模块限定引用，方案覆盖保存在对应模块的精确配置键下。工作流档案包含运行策略、触发方式和全部节点，并且只有 Agent 节点显示 Agent、模型、提示词和上下文选项。模块参数从 `settings-form` 初始值载入。全局开发模式与单卡游玩模式分别维护命名方案，支持新建、改名、复制、切换、删除和不含凭据的 JSON 导入导出；单卡方案只对当前卡生效。所有字段均带同排用途提示，模型 API Key 仍只保存在本机项目隔离缓存中。
 
 API Key 不写入项目目录：运行时按 `play/` 绝对路径生成隔离标识，保存到操作系统缓存目录下的 `bobo-agent-rp/projects/<project-hash>/model-secrets.json`。分享或上传项目不会携带凭据；旧版 `model-profiles.json` 中的 Key 会在下次启动时自动迁移并从项目文件删除。
 
 前台工作流通过普通 Agent 节点生成一个或多个候选正文，再由 `turn-finalize` 选择玩家可见输出；正文 Agent 与其他 Agent 没有特殊执行器。任意生产节点都可用 `workspaceHandoff.include` 把严格列出的文件或文件夹移交给后继 Agent、代码或调用节点；接收端默认在 `handoff/<上游节点>/` 下保留其原工作区相对路径，形成白名单镜像，`as` 仅用于有意改名。没有整目录扫描、通配符或排除清单，缺失、越界、符号链接、路径重叠和碰撞均失败。任意 Agent 节点还可显式启用通用文档工作区，把普通上游结果、镜像根和已经完成的显式交接编入 `WORKSPACE-DOCUMENTS.md`；运行时不会解析或重建上游知识地图，地图本身也必须被显式移交。未启用时仍以内联方式接收普通上游内容。`standard-rp` 会初始化文档工作区，静态导出卡片资料库，并按 `turnContext.recentCompleteTurns` 提供最近若干完整回合、当前输入和该索引；其他叙事模块复用同一回合窗口。`advanced-memory-rp` 固定准备完整有效事件时间线；正文 Agent 自己分析情景并生成简单资料目标的自然语言 Markdown，动态调用记忆检索、完成资料推理和初步规划，随后才选读详细世界观等资料，修正规划并创作正文。
 
-模块只通过 Module v6 清单提供完整 `module-external`/`module-internal` 工作流。`data`、`resource`、`hybrid` 分别承载会话权威数据、静态作者资料或两者；资源模块不伪造数据集合。顶层节点以统一的调用并等待机制使用它们；父节点等待时释放调度槽。Agent 和代码节点都必须列出精确的 `workflowCalls`，可附加固定参数及参数值范围，Agent 还只能看到声明为 `agentCallable` 的入口。调用提示词中的使用时机完全由节点作者编写，运行时不会自行添加建议或风险话术。持久、可检索结果统一提交到所属模块集合；静态资料可通过 `document-set` 快照交付；其他临时结果按节点输出作用域与保留期管理。默认最多并发 10 个节点，并为前台保留一个位置。
+模块只通过 Module v7 清单提供完整 `module-external`/`module-internal` 工作流。`data`、`resource`、`hybrid` 分别承载会话权威数据、静态作者资料或两者；资源模块不伪造数据集合。顶层节点以统一的调用并等待机制使用它们；父节点等待时释放调度槽。Agent 和代码节点都必须列出精确的 `workflowCalls`，可附加固定参数及参数值范围，Agent 还只能看到声明为 `agentCallable` 的入口。调用提示词中的使用时机完全由节点作者编写，运行时不会自行添加建议或风险话术。持久、可检索结果统一提交到所属模块集合；静态资料可通过 `document-set` 快照交付；其他临时结果按节点输出作用域与保留期管理。默认最多并发 10 个节点，并为前台保留一个位置。
 
 公共运行时还提供与模块无关的结构化随机原语。任意 Agent 可由卡片在工具白名单中显式获得 `rp_roll`；任意代码节点可声明 `runtimeServices: ["random"]` 并调用 `services.random.roll()`。两种入口共用加密安全的整数随机源和按工作流实例、节点、逻辑 key 幂等的审计记录，因此节点重试不会悄然改变结果；随机记录不自动进入 Agent 上下文或成为模块权威数据。
 
@@ -155,42 +163,30 @@ API Key 不写入项目目录：运行时按 `play/` 绝对路径生成隔离标
 
 ## 验证
 
-本项目主要在 Windows/PowerShell 下开发。运行公共运行时、模块和 Web 回归测试：
+本项目主要在 Windows/PowerShell 下开发。根目录提供统一验证入口：
 
 ```powershell
-$runtimeTests = Get-ChildItem .agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
-node --test $runtimeTests
-
-$memoryTests = Get-ChildItem global-modules/narrative-memory/runtime/test -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
-node --test $memoryTests
-
-$directorTests = Get-ChildItem global-modules/world-narrative-coordinator/runtime/test -Filter '*.test.mjs' | Select-Object -ExpandProperty FullName
-node --test $directorTests
-
-npm test --prefix .agents/skills/st-card-to-pi-rp/assets/pi-rp-web
+npm ci --no-audit --no-fund  # 安装锁定的开发依赖，开发验证使用 Node 24+
+npm run verify              # 默认基础验证：Node + Python 测试、生成一致性、发布白名单
+npm run verify:integration  # 指定 Pi 宿主的离线集成验收（宿主缺失即失败）
+npm run verify:all          # 基础验证 + 离线集成验收
+npm run typecheck           # 全部 Pi 宿主 TypeScript 的严格检查
 ```
 
-运行 ComfyUI 适配与运行时测试：
+`verify` 逐文件运行 Node 测试，不使用 `node --test <glob>`，也不依赖 `npm test`：在部分受限环境下 `node --test` 需要通过管道启动子进程，会以 `spawn EPERM` 失败。它自带环境预检，任何预检项不满足都会使验证失败而不是静默通过。分项命令、定向套件与受限环境用法见 [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md) 第 3 节；环境限制的原因见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 第 2 节。
+
+仍可单独运行的常用命令：
 
 ```powershell
-node --test .agents/skills/adapt-comfyui-workflow/scripts/workflow-tools.test.mjs
-node --test .agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-comfyui.test.mjs
-```
-
-校验全局记忆模块或一张转换后的卡包：
-
-```powershell
+# Python 校验（python 必须是真实可用的 Python 3，见 TROUBLESHOOTING.md 第 1 节）
 python -X utf8 global-modules/narrative-memory/scripts/validate-module.py
 python -X utf8 .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
-```
 
-校验故事规范生成副本和仓库发布完整性：
-
-```powershell
+# 生成副本一致性与发布完整性
 node .agents/skills/create-pi-rp-feature-module/scripts/sync_template_assets.mjs --check
 node .agents/skills/st-card-to-pi-rp/scripts/check_release_manifest.mjs
 ```
 
 发布完整性检查默认核对当前工作区，允许尚未暂存但未被 Git 忽略的开发文件。准备发布时使用 `--staged` 核对暂存区，或使用 `--commit <ref>` 核对指定提交；这两种模式要求发布清单声明的模块文件全部位于对应 Git 文件集中。
 
-当前工作树的完整验证结果与本机 Python 注意事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。真实模型、真实 ComfyUI 服务和新转换卡的端到端验证不包含在上述单元测试中。
+当前工作树的完整验证结果与本机环境边界见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。真实模型、真实 ComfyUI 服务和新转换卡的端到端验证不包含在上述单元测试中。

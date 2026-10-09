@@ -30,7 +30,7 @@ test("the public runtime accepts the data contract and every workflow", async ()
   assert.equal(normalizeDataContract(contract, "narrative-memory").moduleId, "narrative-memory");
   for (const workflowId of await readdir(resolve(root, "workflows"))) {
     const workflow = await json(resolve(root, "workflows", workflowId, "workflow.json"));
-    assert.equal(normalizeWorkflowDefinition(workflow).id, workflowId);
+    assert.equal(normalizeWorkflowDefinition(workflow).id, `narrative-memory/${workflowId}`);
   }
 });
 
@@ -38,7 +38,7 @@ test("every nested module call obeys the public workflow layering rules", async 
   const workflows = new Map();
   for (const workflowId of await readdir(resolve(root, "workflows"))) {
     const workflow = normalizeWorkflowDefinition(await json(resolve(root, "workflows", workflowId, "workflow.json")));
-    workflows.set(`narrative-memory/${workflow.id}`, workflow);
+    workflows.set(workflow.id, workflow);
   }
   for (const workflow of workflows.values()) {
     for (const node of workflow.nodes) {
@@ -112,10 +112,14 @@ test("template, Agent, and code-entry registries contain valid local targets", a
   for (const workflowId of await readdir(resolve(root, "workflows"))) {
     const workflow = await json(resolve(root, "workflows", workflowId, "workflow.json"));
     for (const node of workflow.nodes) {
-      if (node.agentId) await readFile(resolve(root, "agents", node.agentId, "agent.json"));
+      if (node.agentId) {
+        const [ownerModuleId, agentId] = node.agentId.split("/");
+        assert.equal(ownerModuleId, "narrative-memory");
+        assert.ok(agentId);
+        await readFile(resolve(root, "agents", agentId, "agent.json"));
+      }
       if (node.metadata?.entryFile) {
-        const relative = node.metadata.entryFile.replace(/^features\/narrative-memory\//, "");
-        await readFile(resolve(root, relative));
+        await readFile(resolve(root, node.metadata.entryFile));
       }
     }
   }

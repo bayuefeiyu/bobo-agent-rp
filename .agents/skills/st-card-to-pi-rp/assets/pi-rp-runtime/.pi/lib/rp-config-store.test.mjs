@@ -7,28 +7,159 @@ import test from "node:test";
 import { createRpConfigStore, resolveActiveForegroundWorkflow } from "./rp-config-store.mjs";
 import { createConfigProfileStore } from "./rp-config-profiles.mjs";
 
-function testStore(root) {
-  return createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache") });
+function cardDirectory(root) {
+  return resolve(root, "cards", "demo");
+}
+
+function testStore(root, options = {}) {
+  return createRpConfigStore(root, cardDirectory(root), {
+    secretCacheDirectory: resolve(root, "system-cache"),
+    ...options,
+  });
+}
+
+function agentDefinition(ownerModuleId, id, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    id,
+    ownerModuleId,
+    name: id,
+    description: "Test Agent",
+    prompt: `authored ${id}`,
+    tools: [],
+    contextPermissions: [],
+    outputMode: "text",
+    defaultModelId: "pi:current",
+    ...overrides,
+  };
+}
+
+function foregroundWorkflow(ownerModuleId, id, title = "Global") {
+  return {
+    schemaVersion: 4,
+    id,
+    ownerModuleId,
+    kind: "foreground",
+    title,
+    nodes: [
+      { id: "story", type: "agent", outputs: { narrative: { path: "narrative.md", format: "narrative" } } },
+      { id: "done", type: "turn-finalize", dependsOn: ["story"], narrative: { fromNode: "story", output: "narrative" } },
+    ],
+  };
+}
+
+function moduleWorkflow(ownerModuleId, id, title = "Module workflow", modelId = "authored-model") {
+  return {
+    schemaVersion: 4,
+    id,
+    ownerModuleId,
+    kind: "module-external",
+    title,
+    interface: { inputs: {}, exports: {} },
+    nodes: [
+      { id: "review", type: "agent", modelId },
+      { id: "return", type: "workflow-return", dependsOn: ["review"], exports: {} },
+    ],
+  };
+}
+
+async function writeCard(root, moduleSpecs = []) {
+  const card = cardDirectory(root);
+  await mkdir(card, { recursive: true });
+  const modules = {};
+  for (const spec of moduleSpecs) {
+    const moduleDirectory = resolve(card, "features", spec.id);
+    const agents = spec.agents || [];
+    const workflows = spec.workflows || [moduleWorkflow(spec.id, "default")];
+    await mkdir(resolve(moduleDirectory, "skill"), { recursive: true });
+    await mkdir(resolve(moduleDirectory, "agents"), { recursive: true });
+    await mkdir(resolve(moduleDirectory, "workflows"), { recursive: true });
+    await writeFile(resolve(moduleDirectory, "catalog.json"), "{}\n", "utf8");
+    await writeFile(resolve(moduleDirectory, "skill", "SKILL.md"), "Test module.\n", "utf8");
+    const manifest = {
+      schemaVersion: 7,
+      id: spec.id,
+      moduleKind: "resource",
+      basedOn: null,
+      title: spec.title || spec.id,
+      description: "Test feature module.",
+      surface: "background",
+      contextOrder: 0,
+      displayOrder: 0,
+      dataContractFile: null,
+      resourceCatalogFile: "catalog.json",
+      frontendViewFile: null,
+      skillFile: "skill/SKILL.md",
+      workflowFiles: workflows.map(workflow => `workflows/${workflow.id}/workflow.json`),
+      agentFiles: agents.map(agent => `agents/${agent.id}/agent.json`),
+    };
+    await writeFile(resolve(moduleDirectory, "module.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const agentFiles = {};
+    for (const agent of agents) {
+      const path = resolve(moduleDirectory, "agents", agent.id, "agent.json");
+      await mkdir(resolve(path, ".."), { recursive: true });
+      await writeFile(path, `${JSON.stringify(agent, null, 2)}\n`, "utf8");
+      agentFiles[agent.id] = path;
+    }
+    const workflowFiles = {};
+    for (const workflow of workflows) {
+      const path = resolve(moduleDirectory, "workflows", workflow.id, "workflow.json");
+      await mkdir(resolve(path, ".."), { recursive: true });
+      await writeFile(path, `${JSON.stringify(workflow, null, 2)}\n`, "utf8");
+      workflowFiles[workflow.id] = path;
+    }
+    modules[spec.id] = { directory: moduleDirectory, agentFiles, workflowFiles };
+  }
+  await writeFile(resolve(card, "manifest.json"), JSON.stringify({ feature_modules: moduleSpecs.map(spec => `features/${spec.id}/module.json`) }), "utf8");
+  return { card, modules };
+}
+
+async function activeProfileStore(root, overrides = {}) {
+  const profileStore = createConfigProfileStore({
+    rootDirectory: root,
+    directory: resolve(cardDirectory(root), "config-profiles"),
+    scope: "card",
+    ownerId: "demo",
+    secretCacheDirectory: resolve(root, "system-cache"),
+  });
+  await profileStore.create({
+    id: "custom",
+    name: "Custom",
+    seed: {
+      schemaVersion: 1,
+      kind: "pi-rp-config-profile",
+      scope: "card",
+      id: "custom",
+      name: "Custom",
+      models: [],
+      agentOverrides: {},
+      workflowOverrides: {},
+      moduleOverrides: {},
+      ...overrides,
+    },
+  });
+  await profileStore.activate("custom");
+  return profileStore;
 }
 
 test("resolves a default only from card-local foreground workflows", () => {
   const workflows = [
-    { id: "standard-rp", kind: "foreground", source: "global" },
-    { id: "advanced-memory-rp", kind: "foreground", source: "global" },
-    { id: "card-story", kind: "foreground", source: "card" },
-    { id: "card-background", kind: "turn-background", source: "card" },
+    { id: "shared/standard-rp", kind: "foreground", source: "global" },
+    { id: "shared/advanced-memory-rp", kind: "foreground", source: "global" },
+    { id: "card-story/card-story", kind: "foreground", source: "module" },
+    { id: "card-story/card-background", kind: "turn-background", source: "module" },
   ];
-  assert.equal(resolveActiveForegroundWorkflow(workflows), "card-story");
-  assert.equal(resolveActiveForegroundWorkflow(workflows, "card-story"), "card-story");
-  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "standard-rp"), /card-local foreground/);
-  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "card-background"), /card-local foreground/);
+  assert.equal(resolveActiveForegroundWorkflow(workflows), "card-story/card-story");
+  assert.equal(resolveActiveForegroundWorkflow(workflows, "card-story/card-story"), "card-story/card-story");
+  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "shared/standard-rp"), /card-local foreground/);
+  assert.throws(() => resolveActiveForegroundWorkflow(workflows, "card-story/card-background"), /card-local foreground/);
   assert.throws(() => resolveActiveForegroundWorkflow(workflows.filter(item => item.source === "global")), /no foreground workflow/);
-  assert.throws(() => resolveActiveForegroundWorkflow([...workflows, { id: "second-card-story", kind: "foreground", source: "card" }]), /multiple foreground workflows/);
+  assert.throws(() => resolveActiveForegroundWorkflow([...workflows, { id: "card-story/second", kind: "foreground", source: "module" }]), /multiple foreground workflows/);
 });
 
 test("isolated card configuration never falls back to shared Agent or workflow files", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-isolated-config-"));
-  const card = resolve(root, "cards", "demo");
+  const card = (await writeCard(root)).card;
   await mkdir(resolve(root, "agents", "writer"), { recursive: true });
   await mkdir(resolve(root, "workflows", "shared"), { recursive: true });
   await mkdir(resolve(card, "defaults"), { recursive: true });
@@ -37,41 +168,44 @@ test("isolated card configuration never falls back to shared Agent or workflow f
   for (const [name, content] of [["model-profiles.json", { schemaVersion: 1, profiles: [] }], ["workflow-runtime.json", { schemaVersion: 1, maxConcurrency: 3 }]]) {
     await writeFile(resolve(card, "defaults", name), JSON.stringify(content));
   }
-  const store = createRpConfigStore(root, card, { isolatedRuntime: true });
+  const store = testStore(root, { isolatedRuntime: true });
   await store.ensure();
   assert.deepEqual(await store.listAgents(), []);
   assert.deepEqual(await store.listWorkflows(), []);
-  await assert.rejects(store.getAgent("writer"));
-  await assert.rejects(store.getWorkflow("shared"), /missing from this card/);
+  await assert.rejects(store.getAgent("writer"), /module-id\/component-id/);
+  await assert.rejects(store.getAgent("shared\/writer"), /not registered in this card/);
+  await assert.rejects(store.getWorkflow("shared"), /Component reference|not registered in this card/);
   await assert.rejects(store.saveRuntimePolicy({ schemaVersion: 1, maxConcurrency: 4 }), /editable card configuration profile/);
 });
 
-test("layers card agent overrides without changing the global profile", async () => {
+test("applies a scoped Agent profile override without changing the module source", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const store = testStore(root);
+  const setup = await writeCard(root, [{ id: "scene", agents: [agentDefinition("scene", "writer", { prompt: "base" })], workflows: [moduleWorkflow("scene", "scene-work")] }]);
+  const profileStore = await activeProfileStore(root);
+  const store = testStore(root, { profileStore });
   await store.ensure();
-  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "base", defaultModelId: "pi:current" }, { scope: "global" });
-  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "card", defaultModelId: "fast" });
-  const layered = await store.getAgent("writer");
+  const reference = "scene/writer";
+  await store.saveAgent({ ...agentDefinition("scene", reference, { prompt: "card", defaultModelId: "fast" }) });
+  const layered = await store.getAgent(reference);
+  assert.equal(layered.source, "module");
   assert.equal(layered.effective.prompt, "card");
   assert.equal(layered.base.prompt, "base");
-  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "global-next", defaultModelId: "pi:current" }, { scope: "global" });
-  assert.equal((await store.getAgent("writer")).overridden, false);
-  assert.equal((await store.getAgent("writer")).effective.prompt, "global-next");
-  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "card-next", defaultModelId: "fast" });
-  await store.restoreAgent("writer");
-  assert.equal((await store.getAgent("writer")).effective.prompt, "global-next");
+  const profile = await profileStore.get("custom");
+  assert.deepEqual(Object.keys(profile.agentOverrides), ["module/scene/agent/writer"]);
+  assert.equal(JSON.parse(await readFile(setup.modules.scene.agentFiles.writer, "utf8")).prompt, "base");
+  await store.saveAgent({ ...agentDefinition("scene", reference, { prompt: "card-next", defaultModelId: "fast" }) });
+  await store.restoreAgent(reference);
+  assert.equal((await store.getAgent(reference)).effective.prompt, "base");
+  assert.deepEqual((await profileStore.get("custom")).agentOverrides, {});
 });
 
-test("loads a complete card-owned companion agent", async () => {
+test("loads a complete module-owned companion agent", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  await writeCard(root, [{ id: "image-module", agents: [agentDefinition("image-module", "image-prompt-writer", { name: "Image", prompt: "scene only", outputMode: "json", contextPermissions: ["workflow:scoped-output"] })], workflows: [moduleWorkflow("image-module", "generate")] }]);
   const store = testStore(root);
   await store.ensure();
-  const path = resolve(root, "cards", "demo", "agents", "image-prompt-writer", "agent.json");
-  await mkdir(resolve(path, ".."), { recursive: true });
-  await writeFile(path, JSON.stringify({ schemaVersion: 1, id: "image-prompt-writer", name: "Image", prompt: "scene only", tools: [], contextPermissions: ["workflow:scoped-output"], outputMode: "json", defaultModelId: "pi:current" }));
-  const agent = await store.getAgent("image-prompt-writer");
-  assert.equal(agent.source, "card");
+  const agent = await store.getAgent("image-module/image-prompt-writer");
+  assert.equal(agent.source, "module");
   assert.equal(agent.effective.outputMode, "json");
 });
 
@@ -101,142 +235,103 @@ test("migrates a legacy project API key into the system cache", async () => {
   assert.equal((await store.listModels({ includeSecrets: true }))[0].apiKey, "legacy-secret");
 });
 
-test("prefers a card workflow copy over the global template", async () => {
+test("saves an existing module workflow file without creating a top-level copy", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const setup = await writeCard(root, [{ id: "narrative-controls", workflows: [foregroundWorkflow("narrative-controls", "standard", "Global")] }]);
   const store = testStore(root);
   await store.ensure();
-  const workflow = {
-    schemaVersion: 3,
-    id: "standard",
-    kind: "foreground",
-    title: "Global",
-    nodes: [
-      { id: "story", type: "agent", outputs: { narrative: { path: "narrative.md", format: "narrative" } } },
-      { id: "done", type: "turn-finalize", dependsOn: ["story"], narrative: { fromNode: "story", output: "narrative" } },
-    ],
-  };
-  await store.saveCardWorkflow({ ...workflow, title: "Card" });
-  assert.equal((await store.getWorkflow("standard")).title, "Card");
+  const reference = "narrative-controls/standard";
+  assert.equal((await store.getWorkflow(reference)).title, "Global");
+  await store.saveCardWorkflow({ ...(await store.getWorkflow(reference)), title: "Card" });
+  assert.equal((await store.getWorkflow(reference)).title, "Card");
+  assert.equal(JSON.parse(await readFile(setup.modules["narrative-controls"].workflowFiles.standard, "utf8")).title, "Card");
+  await assert.rejects(readFile(resolve(setup.card, "workflows", "standard", "workflow.json"), "utf8"), /ENOENT/);
 });
 
-// RC-03: panel retry resolved the failed node's workflow through the top-level store only, so a
-// module-owned node answered `Workflow post-director-update was not found in the card or the shared
-// runtime`, and "save as card default" copied the module workflow into the top-level store.
-const moduleWorkflows = {
-  "post-director-update": {
-    schemaVersion: 3,
-    id: "post-director-update",
-    ownerModuleId: "world-narrative-coordinator",
-    kind: "module-external",
-    title: "Post director",
-    interface: { inputs: {}, exports: {} },
-    nodes: [{ id: "review", type: "agent", modelId: "authored-model" }, { id: "return", type: "workflow-return", dependsOn: ["review"], exports: {} }],
-  },
-  "post-director-review": {
-    schemaVersion: 3,
-    id: "post-director-update",
-    ownerModuleId: "narrative-memory",
-    kind: "module-external",
-    title: "Same id, other owner",
-    interface: { inputs: {}, exports: {} },
-    nodes: [{ id: "review", type: "agent", modelId: "other-owner-model" }, { id: "return", type: "workflow-return", dependsOn: ["review"], exports: {} }],
-  },
-};
-
-function testStoreWithModules(root, extra = {}) {
-  return createRpConfigStore(root, resolve(root, "cards", "demo"), {
-    secretCacheDirectory: resolve(root, "system-cache"),
-    resolveModuleWorkflow: async (ownerModuleId, workflowId) => {
-      if (workflowId !== "post-director-update") return null;
-      if (ownerModuleId === "world-narrative-coordinator") return structuredClone(moduleWorkflows["post-director-update"]);
-      if (ownerModuleId === "narrative-memory") return structuredClone(moduleWorkflows["post-director-review"]);
-      return null;
-    },
-    ...extra,
-  });
-}
-
-test("resolves a module workflow through its owner instead of the top-level store", async () => {
+test("resolves a module workflow through its owner and distinguishes colliding local IDs", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const store = testStoreWithModules(root);
+  await writeCard(root, [
+    { id: "world-narrative-coordinator", workflows: [moduleWorkflow("world-narrative-coordinator", "post-director-update", "Post director")] },
+    { id: "narrative-memory", workflows: [moduleWorkflow("narrative-memory", "post-director-update", "Same id, other owner", "other-owner-model")] },
+  ]);
+  const store = testStore(root);
   await store.ensure();
   const workflow = await store.getModuleWorkflow("world-narrative-coordinator", "post-director-update");
-  assert.equal(workflow.id, "post-director-update");
+  assert.equal(workflow.id, "world-narrative-coordinator/post-director-update");
   assert.equal(workflow.ownerModuleId, "world-narrative-coordinator");
-  // The same workflowId under another owner is a different definition and must not be substituted.
   const other = await store.getModuleWorkflow("narrative-memory", "post-director-update");
-  assert.equal(other.ownerModuleId, "narrative-memory");
+  assert.equal(other.id, "narrative-memory/post-director-update");
   assert.equal(other.title, "Same id, other owner");
-  await assert.rejects(() => store.getModuleWorkflow(null, "post-director-update"), /was not found in the card or the shared runtime/);
-  await assert.rejects(() => store.getModuleWorkflow("world-narrative-coordinator", "missing"), /was not found in the loaded card modules/);
-  await assert.rejects(() => store.getModuleWorkflow(null, "post-director-update"), /was not found in the card or the shared runtime/);
+  assert.equal((await store.getModuleWorkflow(null, "world-narrative-coordinator/post-director-update")).id, workflow.id);
+  await assert.rejects(() => store.getModuleWorkflow(null, "post-director-update"), /module-id\/component-id/);
+  await assert.rejects(() => store.getModuleWorkflow("world-narrative-coordinator", "missing"), /not registered in this card/);
+  assert.deepEqual((await store.listWorkflows()).map(item => item.id).sort(), ["narrative-memory/post-director-update", "world-narrative-coordinator/post-director-update"]);
 });
 
-test("saving a module workflow default writes an owner-scoped override, never a top-level copy", async () => {
+test("saves a module workflow override under its owner-scoped profile key and leaves source unchanged", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const store = testStoreWithModules(root);
+  const setup = await writeCard(root, [
+    { id: "world-narrative-coordinator", workflows: [moduleWorkflow("world-narrative-coordinator", "post-director-update", "Post director")] },
+    { id: "narrative-memory", workflows: [moduleWorkflow("narrative-memory", "post-director-update", "Same id, other owner", "other-owner-model")] },
+  ]);
+  const source = setup.modules["world-narrative-coordinator"].workflowFiles["post-director-update"];
+  const profileStore = await activeProfileStore(root);
+  const store = testStore(root, { profileStore });
   await store.ensure();
   const editable = await store.copyWorkflowToCard("post-director-update", "world-narrative-coordinator");
   editable.nodes.find(node => node.id === "review").modelId = "chosen-model";
   await store.saveCardWorkflow(editable);
-
-  const overridesPath = resolve(root, "cards", "demo", "module-workflow-overrides.json");
-  const overrides = JSON.parse(await readFile(overridesPath, "utf8"));
-  assert.deepEqual(Object.keys(overrides.workflows), ["world-narrative-coordinator/workflow/post-director-update"]);
-  await assert.rejects(() => readFile(resolve(root, "cards", "demo", "workflows", "post-director-update", "workflow.json"), "utf8"), /ENOENT/);
-
+  const profile = await profileStore.get("custom");
+  assert.deepEqual(Object.keys(profile.workflowOverrides), ["module/world-narrative-coordinator/workflow/post-director-update"]);
+  assert.equal(JSON.parse(await readFile(source, "utf8")).nodes.find(node => node.id === "review").modelId, "authored-model");
   const reloaded = await store.getModuleWorkflow("world-narrative-coordinator", "post-director-update");
   assert.equal(reloaded.nodes.find(node => node.id === "review").modelId, "chosen-model");
-  // The other owner keeps its authored definition.
   const untouched = await store.getModuleWorkflow("narrative-memory", "post-director-update");
   assert.equal(untouched.nodes.find(node => node.id === "review").modelId, "other-owner-model");
-  // And the top-level store still reports the module workflow as absent.
-  await assert.rejects(() => store.getWorkflow("post-director-update"), /was not found in the card or the shared runtime/);
+  await assert.rejects(() => store.getWorkflow("post-director-update"), /module-id\/component-id/);
+  await assert.rejects(readFile(resolve(setup.card, "workflows", "post-director-update", "workflow.json"), "utf8"), /ENOENT/);
 });
 
-test("keeps module workflows out of the top-level workflow store", async () => {
+test("a named override cannot rename a registered component or transfer it to another owner", async () => {
+  const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-identity-"));
+  await writeCard(root, [{ id: "scene", agents: [agentDefinition("scene", "writer")] }]);
+  const profileStore = await activeProfileStore(root, { agentOverrides: { "module/scene/agent/writer": { id: "other/writer", ownerModuleId: "other" } } });
+  const store = testStore(root, { profileStore });
+  await assert.rejects(store.getAgent("scene/writer"), /identity or ownership/);
+});
+
+test("rejects saving an unregistered module workflow and requires full top-level references", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
+  const setup = await writeCard(root, [{ id: "memory", workflows: [moduleWorkflow("memory", "registered")] }]);
   const store = testStore(root);
   await store.ensure();
-  await assert.rejects(() => store.saveCardWorkflow({
-    schemaVersion: 3,
-    id: "lookup",
-    ownerModuleId: "memory",
-    kind: "module-external",
-    interface: { inputs: {}, exports: {} },
-    nodes: [{ id: "return", type: "workflow-return", exports: {} }],
-  }), /cannot be resolved: the card has no feature-module registry/);
-  await assert.rejects(() => readFile(resolve(root, "cards", "demo", "workflows", "lookup", "workflow.json"), "utf8"), /ENOENT/);
+  await assert.rejects(() => store.saveCardWorkflow(moduleWorkflow("memory", "lookup")), /not registered in this card/);
+  assert.equal((await store.getWorkflow("memory/registered")).id, "memory/registered");
+  await assert.rejects(() => store.getWorkflow("registered"), /module-id\/component-id/);
+  await assert.rejects(readFile(resolve(setup.card, "workflows", "lookup", "workflow.json"), "utf8"), /ENOENT/);
 });
 
-test("applies an active named profile without rewriting authored Agent and model files", async () => {
+test("applies an active named profile without rewriting authored module Agent files", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
-  await profileStore.create({ id: "custom", name: "Custom", seed: {
-    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "custom", name: "Custom",
+  const setup = await writeCard(root, [{ id: "runtime", agents: [agentDefinition("runtime", "writer", { prompt: "authored" })], workflows: [moduleWorkflow("runtime", "run")] }]);
+  const profileStore = await activeProfileStore(root, {
     models: [{ schemaVersion: 1, id: "profile-model", name: "Profile", provider: "custom", model: "x", baseUrl: "https://example.test/v1" }],
-    agentOverrides: { "runtime/agent/writer": { prompt: "profile prompt" } }, workflowOverrides: {}, moduleOverrides: {},
-  } });
-  await profileStore.activate("custom");
-  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+    agentOverrides: { "module/runtime/agent/writer": { prompt: "profile prompt" } },
+  });
+  const store = testStore(root, { profileStore });
   await store.ensure();
-  await store.saveAgent({ schemaVersion: 1, id: "writer", name: "Writer", prompt: "authored", defaultModelId: "pi:current" }, { scope: "global" });
-  assert.equal((await store.getAgent("writer")).effective.prompt, "profile prompt");
+  assert.equal((await store.getAgent("runtime/writer")).effective.prompt, "profile prompt");
   assert.deepEqual((await store.listModels()).map(model => model.id), ["profile-model"]);
-  assert.equal(JSON.parse(await readFile(resolve(root, "agents", "writer", "agent.json"), "utf8")).prompt, "authored");
+  assert.equal(JSON.parse(await readFile(setup.modules.runtime.agentFiles.writer, "utf8")).prompt, "authored");
+  await assert.rejects(readFile(resolve(setup.card, "agents", "writer", "agent.json"), "utf8"), /ENOENT/);
 });
 
 test("stores workflow runtime policy inside the active configuration profile", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
-  await profileStore.create({ id: "custom", name: "Custom", seed: {
-    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "custom", name: "Custom",
-    models: [], agentOverrides: {}, workflowOverrides: {
-      runtimePolicy: { schemaVersion: 1, maxConcurrency: 4, modelFailure: { silentFallback: false, defaultFallbackModelId: null } },
-    }, moduleOverrides: {},
-  } });
-  await profileStore.activate("custom");
-  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+  const profileStore = await activeProfileStore(root, {
+    workflowOverrides: { runtimePolicy: { schemaVersion: 1, maxConcurrency: 4, modelFailure: { silentFallback: false, defaultFallbackModelId: null } } },
+  });
+  const store = testStore(root, { profileStore });
   await store.ensure();
   assert.equal((await store.getRuntimePolicy()).maxConcurrency, 4);
   await store.saveRuntimePolicy({ schemaVersion: 1, maxConcurrency: 7, modelFailure: { silentFallback: true, defaultFallbackModelId: "fallback" } });
@@ -247,18 +342,14 @@ test("stores workflow runtime policy inside the active configuration profile", a
 
 test("keeps incomplete profile model drafts out of runtime model listings", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
-  const profileStore = createConfigProfileStore({ rootDirectory: root, directory: resolve(root, "cards", "demo", "config-profiles"), scope: "card", ownerId: "demo", secretCacheDirectory: resolve(root, "system-cache") });
-  await profileStore.create({ id: "drafts", name: "Drafts", seed: {
-    schemaVersion: 1, kind: "pi-rp-config-profile", scope: "card", id: "drafts", name: "Drafts",
+  const profileStore = await activeProfileStore(root, {
     models: [
       { schemaVersion: 1, id: "unfinished", name: "Unfinished", provider: "custom", model: "" },
       { schemaVersion: 1, id: "ready", name: "Ready", provider: "custom", model: "ready-model" },
     ],
-    agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {},
-  } });
-  await profileStore.activate("drafts");
-  const store = createRpConfigStore(root, resolve(root, "cards", "demo"), { secretCacheDirectory: resolve(root, "system-cache"), profileStore });
+  });
+  const store = testStore(root, { profileStore });
   await store.ensure();
   assert.deepEqual((await store.listModels()).map(model => model.id), ["ready"]);
-  assert.equal((await profileStore.get("drafts")).models.length, 2);
+  assert.equal((await profileStore.get("custom")).models.length, 2);
 });

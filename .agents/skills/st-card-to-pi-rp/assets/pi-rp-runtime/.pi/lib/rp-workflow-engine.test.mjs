@@ -5,8 +5,8 @@ import test from "node:test";
 import { RpWorkflowEngine } from "./rp-workflow-engine.mjs";
 
 const flow = {
-  schemaVersion: 3,
-  id: "parallel",
+  schemaVersion: 4, ownerModuleId: "test",
+  id: "test/parallel",
   kind: "foreground",
   nodes: [
     { id: "a", type: "agent" },
@@ -55,27 +55,27 @@ test("runs parallel roots before narrative and finalization", async () => {
 test("a team node schedules independently configured member Agents without holding an outer model slot", async () => {
   const seen = [];
   const workflow = {
-    schemaVersion: 3,
-    id: "team-runtime",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-runtime",
     kind: "global-background",
     nodes: [{
       id: "meeting",
       type: "team",
       team: {
         schemaVersion: 1,
-        leader: { id: "leader", agentId: "leader-agent", modelId: "strong" },
-        secretary: { id: "secretary", agentId: "secretary-agent", modelId: "fast" },
+        leader: { id: "leader", agentId: "test/leader-agent", modelId: "strong" },
+        secretary: { id: "secretary", agentId: "test/secretary-agent", modelId: "fast" },
         experts: [], assistants: [],
       },
     }],
   };
   const engine = new RpWorkflowEngine({
-    resolveAgent: async id => ({ id, modelId: id === "leader-agent" ? "strong" : "fast", tools: [] }),
+    resolveAgent: async id => ({ id, modelId: id === "test/leader-agent" ? "strong" : "fast", tools: [] }),
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
     executor: async task => {
       if (task.node.type === "team") {
-        const leader = await task.invokeAgent({ executionId: "leader-step", agentId: "leader-agent", modelId: "strong", role: "leader", prompt: "analyze" });
-        const secretary = await task.invokeAgent({ executionId: "secretary-step", agentId: "secretary-agent", modelId: "fast", role: "secretary", prompt: "record" });
+        const leader = await task.invokeAgent({ executionId: "leader-step", agentId: "test/leader-agent", modelId: "strong", role: "leader", prompt: "analyze" });
+        const secretary = await task.invokeAgent({ executionId: "secretary-step", agentId: "test/secretary-agent", modelId: "fast", role: "secretary", prompt: "record" });
         return { output: [leader.output, secretary.output] };
       }
       seen.push([task.node.metadata.teamRole, task.agent.id, task.binding.modelId]);
@@ -85,24 +85,24 @@ test("a team node schedules independently configured member Agents without holdi
   const started = await engine.start(workflow, { id: "team-run" });
   const completed = await engine.wait(started.id);
   assert.equal(completed.status, "completed");
-  assert.deepEqual(seen, [["leader", "leader-agent", "strong"], ["secretary", "secretary-agent", "fast"]]);
+  assert.deepEqual(seen, [["leader", "test/leader-agent", "strong"], ["secretary", "test/secretary-agent", "fast"]]);
 });
 
 test("team preflight freezes member prompts before the first member call", async () => {
   let promptVersion = "original member prompt";
   let executedPrompt = null;
   const workflow = {
-    schemaVersion: 3,
-    id: "team-frozen-agent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-frozen-agent",
     kind: "global-background",
-    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent" }, secretary: { id: "secretary", agentId: "secretary-agent" }, experts: [], assistants: [] } }],
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader-agent" }, secretary: { id: "secretary", agentId: "test/secretary-agent" }, experts: [], assistants: [] } }],
   };
   const engine = new RpWorkflowEngine({
-    resolveAgent: async id => ({ id, prompt: promptVersion, promptFile: `prompts/agents/${id}.md`, modelId: "pi:current", tools: [] }),
+    resolveAgent: async id => ({ id, prompt: promptVersion, promptFile: `prompts/agents/${id.split("/").at(-1)}.md`, modelId: "pi:current", tools: [] }),
     executor: async task => {
       if (task.node.type === "team") {
         promptVersion = "changed after meeting preflight";
-        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", role: "leader", prompt: "phase prompt" });
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "test/leader-agent", role: "leader", prompt: "phase prompt" });
       } else executedPrompt = task.agent.prompt;
       return { output: {} };
     },
@@ -120,10 +120,10 @@ test("team preflight freezes effective model parameters before the first member 
   let providerModel = "original-provider-model";
   let usedModel = null;
   const workflow = {
-    schemaVersion: 3,
-    id: "team-frozen-model",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-frozen-model",
     kind: "global-background",
-    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent", modelId: "profile" }, secretary: { id: "secretary", agentId: "secretary-agent", modelId: "profile" }, experts: [], assistants: [] } }],
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader-agent", modelId: "profile" }, secretary: { id: "secretary", agentId: "test/secretary-agent", modelId: "profile" }, experts: [], assistants: [] } }],
   };
   const engine = new RpWorkflowEngine({
     resolveAgent: async id => ({ id, tools: [] }),
@@ -131,7 +131,7 @@ test("team preflight freezes effective model parameters before the first member 
     executor: async task => {
       if (task.node.type === "team") {
         providerModel = "edited-during-meeting";
-        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", modelId: "profile", role: "leader", prompt: "phase" });
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "test/leader-agent", modelId: "profile", role: "leader", prompt: "phase" });
       } else usedModel = task.model.model;
       return { output: {} };
     },
@@ -147,16 +147,16 @@ test("team preflight freezes effective model parameters before the first member 
 test("team preflight rejects a workflow ability whose adapted request violates the target contract", async () => {
   let teamExecuted = false;
   const workflow = {
-    schemaVersion: 3,
-    id: "team-workflow-ability-preflight",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-workflow-ability-preflight",
     kind: "global-background",
     nodes: [{
       id: "meeting",
       type: "team",
       team: {
         schemaVersion: 1,
-        leader: { id: "leader", agentId: "leader-agent" },
-        secretary: { id: "secretary", agentId: "secretary-agent" },
+        leader: { id: "leader", agentId: "test/leader-agent" },
+        secretary: { id: "secretary", agentId: "test/secretary-agent" },
         experts: [],
         assistants: [],
         baseRetrieval: {
@@ -173,8 +173,8 @@ test("team preflight rejects a workflow ability whose adapted request violates t
     }],
   };
   const target = {
-    schemaVersion: 3,
-    id: "retrieve",
+    schemaVersion: 4,
+    id: "memory/retrieve",
     ownerModuleId: "memory",
     kind: "module-external",
     interface: {
@@ -204,17 +204,17 @@ test("team preflight rejects a workflow ability whose adapted request violates t
 test("team retry model override applies only to the selected failed member", async () => {
   const seenModels = [];
   const workflow = {
-    schemaVersion: 3,
-    id: "team-member-retry-model",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-member-retry-model",
     kind: "global-background",
-    nodes: [{ id: "meeting", type: "team", retry: { maxAttempts: 1 }, team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent", modelId: "old-model" }, secretary: { id: "secretary", agentId: "secretary-agent", modelId: "old-model" }, experts: [], assistants: [] } }],
+    nodes: [{ id: "meeting", type: "team", retry: { maxAttempts: 1 }, team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader-agent", modelId: "old-model" }, secretary: { id: "secretary", agentId: "test/secretary-agent", modelId: "old-model" }, experts: [], assistants: [] } }],
   };
   const engine = new RpWorkflowEngine({
     resolveAgent: async id => ({ id, tools: [] }),
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
     executor: async task => {
       if (task.node.type === "team") {
-        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "leader-agent", modelId: "old-model", role: "leader", prompt: "phase" });
+        await task.invokeAgent({ executionId: "leader-call", memberId: "leader", freezeKey: "member:leader", agentId: "test/leader-agent", modelId: "old-model", role: "leader", prompt: "phase" });
         return { output: {} };
       }
       seenModels.push(task.binding.modelId);
@@ -238,16 +238,16 @@ test("a cancelled team rejects a late member result before publication", async (
   const gate = new Promise(resolve => { release = resolve; });
   let cancellationCode = null;
   const workflow = {
-    schemaVersion: 3,
-    id: "team-cancel",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-cancel",
     kind: "global-background",
-    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader-agent" }, secretary: { id: "secretary", agentId: "secretary-agent" }, experts: [], assistants: [] } }],
+    nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader-agent" }, secretary: { id: "secretary", agentId: "test/secretary-agent" }, experts: [], assistants: [] } }],
   };
   const engine = new RpWorkflowEngine({
     resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
     executor: async task => {
       if (task.node.type === "team") {
-        try { await task.invokeAgent({ executionId: "late", agentId: "leader-agent", role: "leader", prompt: "wait" }); }
+        try { await task.invokeAgent({ executionId: "late", agentId: "test/leader-agent", role: "leader", prompt: "wait" }); }
         catch (error) { cancellationCode = error.code; }
         return { output: "ignored" };
       }
@@ -266,7 +266,7 @@ test("a cancelled team rejects a late member result before publication", async (
 
 test("a team does not reacquire an outer scheduler slot after a workflow assistant returns", async () => {
   let slotsAfterChild = null;
-  const child = { schemaVersion: 3, id: "lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const child = { schemaVersion: 4, id: "demo/lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async () => child,
     resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
@@ -278,7 +278,7 @@ test("a team does not reacquire an outer scheduler slot after a workflow assista
       return { output: {} };
     },
   });
-  const workflow = { schemaVersion: 3, id: "team-slot", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader" }, secretary: { id: "secretary", agentId: "secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/team-slot", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader" }, secretary: { id: "secretary", agentId: "test/secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
   const run = await engine.start(workflow, { id: "team-slot-run" });
   await engine.wait(run.id);
   assert.equal(slotsAfterChild, 0);
@@ -293,7 +293,7 @@ test("a cancelled team cannot dispatch a workflow assistant after its gate reope
   const done = new Promise(resolve => { finished = resolve; });
   let childStarted = false;
   let cancellationCode = null;
-  const child = { schemaVersion: 3, id: "lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const child = { schemaVersion: 4, id: "demo/lookup", ownerModuleId: "demo", kind: "module-external", interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async () => child,
     resolveAgent: async id => ({ id, modelId: "pi:current", tools: [] }),
@@ -308,7 +308,7 @@ test("a cancelled team cannot dispatch a workflow assistant after its gate reope
       return { output: {} };
     },
   });
-  const workflow = { schemaVersion: 3, id: "team-cancel-child", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "leader" }, secretary: { id: "secretary", agentId: "secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/team-cancel-child", kind: "global-background", nodes: [{ id: "meeting", type: "team", team: { schemaVersion: 1, leader: { id: "leader", agentId: "test/leader" }, secretary: { id: "secretary", agentId: "test/secretary" }, experts: [], assistants: [] }, workflowCalls: ["demo/lookup"] }] };
   const run = await engine.start(workflow, { id: "team-cancel-child-run" });
   await ready;
   await engine.cancel(run.id, "user-stop");
@@ -323,7 +323,7 @@ test("global-background work can make progress when maxConcurrency is one", asyn
     policy: { maxConcurrency: 1 },
     executor: async () => ({ output: "done" }),
   });
-  const workflow = { schemaVersion: 3, id: "single-slot-background", kind: "global-background", nodes: [{ id: "work", type: "agent" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/single-slot-background", kind: "global-background", nodes: [{ id: "work", type: "agent" }] };
   const started = await engine.start(workflow, { id: "single-slot-background-run" });
   const completed = await Promise.race([
     engine.wait(started.id),
@@ -334,8 +334,8 @@ test("global-background work can make progress when maxConcurrency is one", asyn
 
 test("child workflows inherit the root scheduling class", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "scheduled-child",
+    schemaVersion: 4,
+    id: "demo/scheduled-child",
     ownerModuleId: "demo",
     kind: "module-external",
     interface: { inputs: {}, exports: {} },
@@ -347,11 +347,11 @@ test("child workflows inherit the root scheduling class", async () => {
       ? task.invokeWorkflow({ workflow: task.node.target, outputPaths: {} })
       : ({ output: {} }),
   });
-  const parent = { schemaVersion: 3, id: "scheduled-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/scheduled-child" }] };
+  const parent = { schemaVersion: 4, ownerModuleId: "test", id: "test/scheduled-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/scheduled-child" }] };
   const run = await engine.start(parent, { id: "scheduled-parent-run" });
   const completed = await engine.wait(run.id);
   assert.equal(completed.status, "completed");
-  const childRun = [...engine.runs.values()].find(entry => entry.workflow.id === "scheduled-child")?.run;
+  const childRun = [...engine.runs.values()].find(entry => entry.workflow.id === "demo/scheduled-child")?.run;
   assert.equal(childRun?.effectiveSchedulingKind, "global-background");
 });
 
@@ -367,7 +367,7 @@ test("a scheduler waiter observes cancellation before dispatch", async () => {
       return { output: "done" };
     },
   });
-  const workflow = { schemaVersion: 3, id: "scheduler-cancel", kind: "global-background", instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.request" }, nodes: [{ id: "work", type: "agent" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/scheduler-cancel", kind: "global-background", instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.request" }, nodes: [{ id: "work", type: "agent" }] };
   const first = await engine.start(workflow, { id: "scheduler-holder", payload: { request: "first" } });
   await new Promise(resolve => setImmediate(resolve));
   const second = await engine.start(workflow, { id: "scheduler-waiter", payload: { request: "second" } });
@@ -391,8 +391,8 @@ test("foreground-class work takes the next slot ahead of queued background work 
       return { output: "done" };
     },
   });
-  const background = id => ({ schemaVersion: 3, id, kind: "global-background", nodes: [{ id: "work", type: "agent" }] });
-  const foregroundClass = { schemaVersion: 3, id: "priority-turn", kind: "turn-background", nodes: [{ id: "work", type: "agent" }] };
+  const background = id => ({ schemaVersion: 4, ownerModuleId: "test", id, kind: "global-background", nodes: [{ id: "work", type: "agent" }] });
+  const foregroundClass = { schemaVersion: 4, ownerModuleId: "test", id: "test/priority-turn", kind: "turn-background", nodes: [{ id: "work", type: "agent" }] };
   const holder = await engine.start(background("priority-holder-flow"), { id: "priority-holder" });
   await new Promise(resolve => setImmediate(resolve));
   const queuedBackground = await engine.start(background("priority-background-flow"), { id: "priority-background" });
@@ -406,7 +406,7 @@ test("foreground-class work takes the next slot ahead of queued background work 
 test("terminal lifecycle finalization runs once for completion and cancellation", async () => {
   const finalized = [];
   const completedEngine = new RpWorkflowEngine({ executor: async () => ({ output: "ok" }), onRunTerminal: async ({ run }) => { finalized.push([run.id, run.status]); } });
-  const completeFlow = { schemaVersion: 3, id: "finalize-complete", kind: "turn-background", nodes: [{ id: "task", type: "code" }] };
+  const completeFlow = { schemaVersion: 4, ownerModuleId: "test", id: "test/finalize-complete", kind: "turn-background", nodes: [{ id: "task", type: "code" }] };
   const completeRun = await completedEngine.start(completeFlow, { id: "complete" });
   const complete = await completedEngine.wait(completeRun.id);
   assert.equal(complete.terminalFinalization.status, "completed");
@@ -414,7 +414,7 @@ test("terminal lifecycle finalization runs once for completion and cancellation"
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const cancelEngine = new RpWorkflowEngine({ executor: async () => { await gate; return { output: "late" }; }, onRunTerminal: async ({ run }) => { finalized.push([run.id, run.status]); } });
-  const cancelRun = await cancelEngine.start({ schemaVersion: 3, id: "finalize-cancel", kind: "global-background", nodes: [{ id: "task", type: "code" }] }, { id: "cancel" });
+  const cancelRun = await cancelEngine.start({ schemaVersion: 4, ownerModuleId: "test", id: "test/finalize-cancel", kind: "global-background", nodes: [{ id: "task", type: "code" }] }, { id: "cancel" });
   await new Promise(resolve => setImmediate(resolve));
   const cancelled = await cancelEngine.cancel(cancelRun.id, "stop");
   release();
@@ -428,7 +428,7 @@ test("an interrupted multiple-instance run restores with the unique key it was s
   // "instance key does not match its persisted input": the host skipped the run, left it non-terminal
   // on disk, and no retry could reach it. Observed with an interrupted near/world story candidate.
   const workflow = {
-    schemaVersion: 3, id: "restore-multiple", kind: "global-background",
+    schemaVersion: 4, ownerModuleId: "test", id: "test/restore-multiple", kind: "global-background",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 4 },
     nodes: [{ id: "write", type: "agent" }],
   };
@@ -441,7 +441,7 @@ test("an interrupted multiple-instance run restores with the unique key it was s
   interrupted.status = "running";
   // A child invocation (`calls.invoke`) computes the key without a unique id, so a multiple-mode
   // workflow without a dedupeKey gets a random suffix that only the persisted run records.
-  interrupted.instanceKey = `top-level/restore-multiple:${randomUUID()}`;
+  interrupted.instanceKey = `test/restore-multiple:${randomUUID()}`;
 
   const restoredEngine = new RpWorkflowEngine({ executor: async () => new Promise(() => {}) });
   const restored = await restoredEngine.restore(workflow, interrupted);
@@ -452,7 +452,7 @@ test("an interrupted multiple-instance run restores with the unique key it was s
   restoredEngine.cancel(restored.id, "test cleanup");
 });
 test("a failed terminal finalization is retried after restoring the terminal run", async () => {
-  const workflow = { schemaVersion: 3, id: "restore-finalization", kind: "global-background", nodes: [{ id: "task", type: "code" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/restore-finalization", kind: "global-background", nodes: [{ id: "task", type: "code" }] };
   const firstEngine = new RpWorkflowEngine({ executor: async () => ({ output: "ok" }), onRunTerminal: async () => { throw new Error("temporary finalizer failure"); } });
   const started = await firstEngine.start(workflow, { id: "restore-finalization-run" });
   const failedFinalization = await firstEngine.wait(started.id);
@@ -470,8 +470,8 @@ test("a failed terminal finalization is retried after restoring the terminal run
 test("a module terminal finalizer invokes one same-module internal workflow", async () => {
   const calls = [];
   const finalizer = {
-    schemaVersion: 3,
-    id: "release-operation",
+    schemaVersion: 4,
+    id: "demo/release-operation",
     ownerModuleId: "demo",
     kind: "module-internal",
     interface: {
@@ -489,8 +489,8 @@ test("a module terminal finalizer invokes one same-module internal workflow", as
     ],
   };
   const workflow = {
-    schemaVersion: 3,
-    id: "team-operation",
+    schemaVersion: 4,
+    id: "demo/team-operation",
     ownerModuleId: "demo",
     kind: "module-external",
     interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -498,16 +498,16 @@ test("a module terminal finalizer invokes one same-module internal workflow", as
     nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   const wrapper = {
-    schemaVersion: 3,
-    id: "team-operation-wrapper",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/team-operation-wrapper",
     kind: "global-background",
     nodes: [{ id: "call", type: "call", target: "demo/team-operation", arguments: { operationId: "operation-7" }, documents: {}, outputPaths: {} }],
   };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async reference => reference === "demo/release-operation" ? finalizer : reference === "demo/team-operation" ? workflow : null,
     executor: async ({ workflow: active, node, run, invokeWorkflow }) => {
-      if (active.id === "team-operation-wrapper") return invokeWorkflow({ workflow: node.target, arguments: node.arguments, outputPaths: {} });
-      if (active.id === "team-operation") return { output: { executionStatus: "failed", error: "meeting failed" } };
+      if (active.id === "test/team-operation-wrapper") return invokeWorkflow({ workflow: node.target, arguments: node.arguments, outputPaths: {} });
+      if (active.id === "demo/team-operation") return { output: { executionStatus: "failed", error: "meeting failed" } };
       if (node.id === "release") calls.push(structuredClone(run.arguments));
       return { output: {} };
     },
@@ -515,7 +515,7 @@ test("a module terminal finalizer invokes one same-module internal workflow", as
   const started = await engine.start(wrapper, { id: "team-operation-wrapper-run" });
   const failedWrapper = await engine.wait(started.id);
   assert.equal(failedWrapper.status, "failed");
-  const failed = engine.snapshot().find(run => run.workflowId === "team-operation");
+  const failed = engine.snapshot().find(run => run.workflowId === "demo/team-operation");
   assert.equal(failed?.status, "failed");
   assert.equal(failed?.terminalFinalization.status, "completed", failed?.terminalFinalization.error);
   assert.equal(failed?.terminalFinalization.workflow, "demo/release-operation");
@@ -525,7 +525,7 @@ test("a module terminal finalizer invokes one same-module internal workflow", as
 test("an explicitly idempotent start returns the active run for the same instance key", async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const workflow = { schemaVersion: 3, id: "idempotent", kind: "global-background", instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId" }, nodes: [{ id: "task", type: "code" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/idempotent", kind: "global-background", instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId" }, nodes: [{ id: "task", type: "code" }] };
   const engine = new RpWorkflowEngine({ executor: async () => { await gate; return { output: "done" }; } });
   const first = await engine.start(workflow, { id: "first", payload: { operationId: "stable" } });
   const replay = await engine.start(workflow, { id: "second", payload: { operationId: "stable" }, reuseActive: true });
@@ -544,7 +544,7 @@ test("stops for an explicit model choice after exhausted attempts", async () => 
 
 test("allows a user-selected model retry after automatic attempts are exhausted", async () => {
   let calls = 0;
-  const workflow = { schemaVersion: 3, id: "retryable", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/retryable", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
   const engine = new RpWorkflowEngine({
     executor: async task => {
       calls += 1;
@@ -563,7 +563,7 @@ test("allows a user-selected model retry after automatic attempts are exhausted"
 
 test("runs node output registration and data commits before marking the node complete", async () => {
   const order = [];
-  const workflow = { schemaVersion: 3, id: "commit-order", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/commit-order", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
   const engine = new RpWorkflowEngine({
     executor: async () => { order.push("execute"); return { output: "draft" }; },
     beforeNodeComplete: async ({ result }) => { order.push("commit"); return result; },
@@ -576,7 +576,7 @@ test("runs node output registration and data commits before marking the node com
 });
 
 test("a failed node-end commit fails the node instead of releasing downstream work", async () => {
-  const workflow = { schemaVersion: 3, id: "commit-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }, { id: "after", type: "code", dependsOn: ["task"] }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/commit-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }, { id: "after", type: "code", dependsOn: ["task"] }] };
   const engine = new RpWorkflowEngine({
     // The model answered; the node-end data commit is what failed afterwards.
     executor: async task => { task.markModelDispatched?.(); return { output: "draft" }; },
@@ -594,8 +594,8 @@ test("reports only unfinished opted-in turn-background nodes as turn blockers", 
   const blockingWait = new Promise(resolve => { releaseBlocking = resolve; });
   const nonblockingWait = new Promise(resolve => { releaseNonblocking = resolve; });
   const workflow = {
-    schemaVersion: 3,
-    id: "turn-archive",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/turn-archive",
     title: "Turn archive",
     kind: "turn-background",
     trigger: { type: "manual", blockNextTurnUntilReady: true },
@@ -634,7 +634,7 @@ test("reports only unfinished opted-in turn-background nodes as turn blockers", 
 });
 
 test("keeps a failed blocking workflow locked for model choice and releases it on cancellation", async () => {
-  const workflow = { schemaVersion: 3, id: "blocking-failure", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "agent", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/blocking-failure", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "agent", retry: { maxAttempts: 1 } }] };
   const engine = new RpWorkflowEngine({ executor: modelFailure() });
   const started = await engine.start(workflow, { id: "blocking-failure-run" });
   const awaiting = await engine.wait(started.id);
@@ -647,7 +647,7 @@ test("keeps a failed blocking workflow locked for model choice and releases it o
 test("records an explicit skip and releases the next turn without reporting success", async () => {
   let release;
   const waiting = new Promise(resolve => { release = resolve; });
-  const workflow = { schemaVersion: 3, id: "skippable-archive", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "code" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/skippable-archive", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "code" }] };
   const engine = new RpWorkflowEngine({ executor: async () => { await waiting; return { output: "late" }; } });
   const started = await engine.start(workflow, { id: "skippable-run" });
   const skipped = await engine.skip(started.id);
@@ -662,8 +662,8 @@ test("aggregates multiple blocking workflow instances until every one is release
   const waits = new Map();
   const executor = ({ workflow }) => new Promise(resolve => waits.set(workflow.id, resolve));
   const engine = new RpWorkflowEngine({ executor });
-  const first = await engine.start({ schemaVersion: 3, id: "archive-a", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "task", type: "code" }] }, { id: "run-a" });
-  const second = await engine.start({ schemaVersion: 3, id: "archive-b", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "task", type: "code" }] }, { id: "run-b" });
+  const first = await engine.start({ schemaVersion: 4, ownerModuleId: "test", id: "test/archive-a", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "task", type: "code" }] }, { id: "run-a" });
+  const second = await engine.start({ schemaVersion: 4, ownerModuleId: "test", id: "test/archive-b", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "task", type: "code" }] }, { id: "run-b" });
   assert.deepEqual(new Set(engine.blockingTurnRuns().map(item => item.runId)), new Set([first.id, second.id]));
   await engine.cancel(first.id);
   assert.deepEqual(engine.blockingTurnRuns().map(item => item.runId), [second.id]);
@@ -675,12 +675,12 @@ test("aggregates multiple blocking workflow instances until every one is release
 test("restores an interrupted blocking node as a visible blocker", async () => {
   let release;
   const waiting = new Promise(resolve => { release = resolve; });
-  const workflow = { schemaVersion: 3, id: "restored-archive", title: "Restored archive", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "code" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/restored-archive", title: "Restored archive", kind: "turn-background", trigger: { type: "manual", blockNextTurnUntilReady: true }, nodes: [{ id: "archive", type: "code" }] };
   const first = new RpWorkflowEngine({ executor: async () => { await waiting; return { output: "done" }; } });
   const started = await first.start(workflow, { id: "restore-run", turn: 4, dataReadViewId: "persisted-view", dataReadBatchIds: ["persisted-batch"] });
   while (first.snapshot()[0].nodes.archive.status !== "running") await new Promise(resolve => setImmediate(resolve));
   const saved = first.snapshot()[0];
-  assert.equal(saved.instanceKey, "top-level/restored-archive");
+  assert.equal(saved.instanceKey, "test/restored-archive");
   const restored = new RpWorkflowEngine({ executor: async () => ({ output: "unused" }) });
   const restoredRun = await restored.restore(workflow, saved);
   assert.equal(restoredRun.status, "awaiting-model-choice");
@@ -695,8 +695,8 @@ test("restores an interrupted blocking node as a visible blocker", async () => {
 
 test("a parent waits on the exact child model choice and resumes the original call after retry", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "model-choice-child",
+    schemaVersion: 4,
+    id: "demo/model-choice-child",
     ownerModuleId: "demo",
     kind: "module-external",
     interface: { inputs: { requestId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -708,15 +708,15 @@ test("a parent waits on the exact child model choice and resumes the original ca
     ],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "model-choice-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/model-choice-parent",
     kind: "global-background",
     writeLocks: [{ moduleId: "demo", collectionId: "state" }],
     nodes: [{ id: "call", type: "call", target: "demo/model-choice-child", arguments: { requestId: "request-1" }, outputPaths: {} }],
   };
   const competitor = {
-    schemaVersion: 3,
-    id: "model-choice-competitor",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/model-choice-competitor",
     kind: "global-background",
     writeLocks: [{ moduleId: "demo", collectionId: "state" }],
     nodes: [{ id: "work", type: "code" }],
@@ -771,8 +771,8 @@ test("a parent waits on the exact child model choice and resumes the original ca
 
 test("restored child-wait metadata reconnects the parent after a targeted child retry", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "restored-model-choice-child",
+    schemaVersion: 4,
+    id: "demo/restored-model-choice-child",
     ownerModuleId: "demo",
     kind: "module-external",
     interface: { inputs: { requestId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -783,7 +783,7 @@ test("restored child-wait metadata reconnects the parent after a targeted child 
       { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} },
     ],
   };
-  const parent = { schemaVersion: 3, id: "restored-model-choice-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/restored-model-choice-child", arguments: { requestId: "request-1" }, outputPaths: {} }] };
+  const parent = { schemaVersion: 4, ownerModuleId: "test", id: "test/restored-model-choice-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "demo/restored-model-choice-child", arguments: { requestId: "request-1" }, outputPaths: {} }] };
   const makeEngine = () => new RpWorkflowEngine({
     resolveWorkflow: async () => child,
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
@@ -815,8 +815,8 @@ test("restored child-wait metadata reconnects the parent after a targeted child 
 
 test("a call node waits for a module workflow while releasing its scheduler slot", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "lookup",
+    schemaVersion: 4,
+    id: "lore/lookup",
     ownerModuleId: "lore",
     kind: "module-external",
     interface: { inputs: {}, exports: { document: { format: "markdown" } } },
@@ -826,8 +826,8 @@ test("a call node waits for a module workflow while releasing its scheduler slot
     ],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "caller",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/caller",
     kind: "turn-background",
     nodes: [{ id: "lookup", type: "call", target: "lore/lookup", outputPaths: { document: "lore.md" } }],
   };
@@ -852,16 +852,16 @@ test("a call node waits for a module workflow while releasing its scheduler slot
 
 test("top-level and module workflows with the same id have independent instance limits", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "agent-image-generation",
+    schemaVersion: 4,
+    id: "comfy-image-generation/agent-image-generation",
     ownerModuleId: "comfy-image-generation",
     kind: "module-external",
     interface: { inputs: {}, exports: {} },
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "agent-image-generation",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/agent-image-generation",
     kind: "turn-background",
     nodes: [{ id: "generate", type: "call", target: "comfy-image-generation/agent-image-generation", outputPaths: {} }],
   };
@@ -881,8 +881,8 @@ test("top-level and module workflows with the same id have independent instance 
 
 test("supports bounded multi-level calls through module-external workflows", async () => {
   const leaf = {
-    schemaVersion: 3,
-    id: "snapshot",
+    schemaVersion: 4,
+    id: "state/snapshot",
     ownerModuleId: "state",
     kind: "module-external",
     interface: { inputs: {}, exports: { document: { format: "markdown" } } },
@@ -892,8 +892,8 @@ test("supports bounded multi-level calls through module-external workflows", asy
     ],
   };
   const middle = {
-    schemaVersion: 3,
-    id: "resolve",
+    schemaVersion: 4,
+    id: "combat/resolve",
     ownerModuleId: "combat",
     kind: "module-external",
     interface: { inputs: {}, exports: { report: { format: "markdown" } } },
@@ -904,8 +904,8 @@ test("supports bounded multi-level calls through module-external workflows", asy
     ],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "turn",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/turn",
     kind: "turn-background",
     nodes: [{ id: "combat", type: "call", target: "combat/resolve", outputPaths: { report: "combat.md" } }],
   };
@@ -915,26 +915,26 @@ test("supports bounded multi-level calls through module-external workflows", asy
     resolveWorkflow: reference => workflows.get(reference) || null,
     executor: async task => {
       if (task.node.type === "call") return { output: await task.invokeWorkflow({ workflow: task.node.target, outputPaths: task.node.outputPaths }) };
-      if (task.workflow.id === "resolve" && task.node.id === "query-state") {
+      if (task.workflow.id === "combat/resolve" && task.node.id === "query-state") {
         const result = await task.invokeWorkflow({ workflow: "state/snapshot", outputPaths: { document: "state.md" } });
         assert.deepEqual(result.outputs, { document: "state.md" });
         return { output: result.outputs };
       }
       if (task.node.type === "workflow-return") {
-        return { output: { outputs: task.workflow.id === "snapshot" ? { document: "state.md" } : { report: "combat.md" } } };
+        return { output: { outputs: task.workflow.id === "state/snapshot" ? { document: "state.md" } : { report: "combat.md" } } };
       }
       return { output: "built" };
     },
   });
-  const trigger = { type: "after-workflow", workflowId: "standard-rp" };
+  const trigger = { type: "after-workflow", workflowId: "test/standard-rp" };
   const started = await engine.start(parent, { id: "multi-level-parent", trigger });
   const completed = await engine.wait(started.id);
   assert.equal(completed.status, "completed");
   assert.deepEqual(completed.nodes.combat.output.outputs, { report: "combat.md" });
-  const leafRun = engine.snapshot().find(run => run.workflowId === "snapshot");
-  const middleRun = engine.snapshot().find(run => run.workflowId === "resolve");
+  const leafRun = engine.snapshot().find(run => run.workflowId === "state/snapshot");
+  const middleRun = engine.snapshot().find(run => run.workflowId === "combat/resolve");
   assert.equal(leafRun.callContext.depth, 2);
-  assert.deepEqual(leafRun.callContext.stack, ["top-level/turn", "combat/resolve", "state/snapshot"]);
+  assert.deepEqual(leafRun.callContext.stack, ["test/turn", "combat/resolve", "state/snapshot"]);
   assert.deepEqual(middleRun.trigger, trigger);
   assert.deepEqual(leafRun.trigger, trigger);
 });
@@ -942,8 +942,8 @@ test("supports bounded multi-level calls through module-external workflows", asy
 test("completed child data batches become visible only to later causal child calls", async () => {
   let readerBatches = null;
   const parent = {
-    schemaVersion: 3,
-    id: "causal-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/causal-parent",
     kind: "global-background",
     nodes: [
       { id: "write", type: "code", workflowCalls: ["state/write"] },
@@ -951,7 +951,7 @@ test("completed child data batches become visible only to later causal child cal
     ],
   };
   const child = id => ({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id,
     ownerModuleId: "state",
     kind: "module-external",
@@ -966,12 +966,12 @@ test("completed child data batches become visible only to later causal child cal
     onRunStart: async ({ run }) => run.callContext ? null : { dataReadViewId: "root-view", dataReadBatchIds: [] },
     resolveWorkflow: async reference => workflows.get(reference),
     executor: async task => {
-      if (task.workflow.id === "causal-parent") {
+      if (task.workflow.id === "test/causal-parent") {
         await task.invokeWorkflow({ workflow: task.node.id === "write" ? "state/write" : "state/read" });
-      } else if (task.node.id === "work" && task.workflow.id === "write") {
+      } else if (task.node.id === "work" && task.workflow.id === "state/write") {
         task.run.nodes[task.node.id].dataReadBatchIds.push("batch-from-writer");
         task.run.dataReadBatchIds.push("batch-from-writer");
-      } else if (task.node.id === "work" && task.workflow.id === "read") {
+      } else if (task.node.id === "work" && task.workflow.id === "state/read") {
         readerBatches = [...task.run.dataReadBatchIds];
       }
       return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
@@ -990,8 +990,8 @@ test("parallel sibling calls keep independent read views until their explicit jo
   let parallelReaderBatches = null;
   let joinedReaderBatches = null;
   const parent = {
-    schemaVersion: 3,
-    id: "parallel-causal-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/parallel-causal-parent",
     kind: "global-background",
     nodes: [
       { id: "writer", type: "code", workflowCalls: ["state/write"] },
@@ -1000,7 +1000,7 @@ test("parallel sibling calls keep independent read views until their explicit jo
     ],
   };
   const child = id => ({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id,
     ownerModuleId: "state",
     kind: "module-external",
@@ -1013,15 +1013,15 @@ test("parallel sibling calls keep independent read views until their explicit jo
     onRunStart: async ({ run }) => run.callContext ? null : { dataReadViewId: "root-view", dataReadBatchIds: [] },
     resolveWorkflow: async reference => workflows.get(reference),
     executor: async task => {
-      if (task.workflow.id === "parallel-causal-parent") await task.invokeWorkflow({ workflow: targets[task.node.id] });
-      else if (task.node.id === "work" && task.workflow.id === "write") {
+      if (task.workflow.id === "test/parallel-causal-parent") await task.invokeWorkflow({ workflow: targets[task.node.id] });
+      else if (task.node.id === "work" && task.workflow.id === "state/write") {
         await readerStarted;
         task.run.nodes[task.node.id].dataReadBatchIds.push("parallel-writer-batch");
         task.run.dataReadBatchIds.push("parallel-writer-batch");
-      } else if (task.node.id === "work" && task.workflow.id === "read") {
+      } else if (task.node.id === "work" && task.workflow.id === "state/read") {
         parallelReaderBatches = [...task.run.dataReadBatchIds];
         releaseWriter();
-      } else if (task.node.id === "work" && task.workflow.id === "inspect") joinedReaderBatches = [...task.run.dataReadBatchIds];
+      } else if (task.node.id === "work" && task.workflow.id === "state/inspect") joinedReaderBatches = [...task.run.dataReadBatchIds];
       return { output: task.node.type === "workflow-return" ? { outputs: {} } : {} };
     },
   });
@@ -1034,8 +1034,8 @@ test("parallel sibling calls keep independent read views until their explicit jo
 
 test("serializes module-internal workflows per owning module", async () => {
   const update = {
-    schemaVersion: 3,
-    id: "update",
+    schemaVersion: 4,
+    id: "state/update",
     ownerModuleId: "state",
     kind: "module-internal",
     interface: { inputs: {}, exports: {} },
@@ -1045,7 +1045,7 @@ test("serializes module-internal workflows per owning module", async () => {
     ],
   };
   const parent = id => ({
-    schemaVersion: 3,
+    schemaVersion: 4, ownerModuleId: "test",
     id,
     kind: "turn-background",
     nodes: [{ id: "update", type: "call", target: "state/update", outputPaths: {} }],
@@ -1075,13 +1075,13 @@ test("serializes module-internal workflows per owning module", async () => {
   assert.equal(leftResult.status, "completed");
   assert.equal(rightResult.status, "completed");
   assert.equal(maximumActiveMutations, 1);
-  assert.equal(engine.snapshot().filter(run => run.workflowId === "update").length, 2);
+  assert.equal(engine.snapshot().filter(run => run.workflowId === "state/update").length, 2);
 });
 
 test("persists recovery-required nodes and resumes the same run after restart", async () => {
   const workflow = {
-    schemaVersion: 3,
-    id: "recoverable-operation",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/recoverable-operation",
     kind: "global-background",
     nodes: [{ id: "external", type: "code" }],
   };
@@ -1108,14 +1108,14 @@ test("persists recovery-required nodes and resumes the same run after restart", 
 
 test("parent recovery reuses the recovered child workflow instead of starting the side effect again", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "remote-child",
+    schemaVersion: 4,
+    id: "remote/remote-child",
     ownerModuleId: "remote",
     kind: "module-internal",
     interface: { inputs: {}, exports: {} },
     nodes: [{ id: "submit", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["submit"], exports: {} }],
   };
-  const parent = { schemaVersion: 3, id: "remote-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "remote/remote-child", outputPaths: {} }] };
+  const parent = { schemaVersion: 4, ownerModuleId: "test", id: "test/remote-parent", kind: "global-background", nodes: [{ id: "call", type: "call", target: "remote/remote-child", outputPaths: {} }] };
   let childAttempts = 0;
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async () => child,
@@ -1135,7 +1135,7 @@ test("parent recovery reuses the recovered child workflow instead of starting th
   const completed = await engine.wait(started.id);
   assert.equal(completed.status, "completed");
   assert.equal(childAttempts, 2);
-  assert.equal(engine.snapshot().filter(run => run.workflowId === "remote-child").length, 1);
+  assert.equal(engine.snapshot().filter(run => run.workflowId === "remote/remote-child").length, 1);
 });
 
 test("textFile freezes resolved content for child retries and fingerprints content rather than the path", async () => {
@@ -1145,14 +1145,14 @@ test("textFile freezes resolved content for child retries and fingerprints conte
   let reads = 0;
   const received = [];
   const child = {
-    schemaVersion: 3, id: "retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
+    schemaVersion: 4, id: "memory/retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
     interface: { inputs: { request: { type: "text", required: true } }, exports: {} },
     nodes: [
       { id: "search", type: "agent", retry: { maxAttempts: 2 } },
       { id: "return", type: "workflow-return", dependsOn: ["search"], exports: {} },
     ],
   };
-  const parent = { schemaVersion: 3, id: "text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
+  const parent = { schemaVersion: 4, ownerModuleId: "test", id: "test/text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: () => child,
     readCallTextFile: ({ workflow, run, node, path }) => {
@@ -1198,11 +1198,11 @@ test("textFile freezes resolved content for child retries and fingerprints conte
 test("invalid textFile calls fail before dispatch and unauthorized calls never read the file", async () => {
   let reads = 0;
   const child = {
-    schemaVersion: 3, id: "retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
+    schemaVersion: 4, id: "memory/retrieve", ownerModuleId: "memory", kind: "module-external", agentCallable: true,
     interface: { inputs: { request: { type: "text", required: true } }, exports: {} },
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   };
-  const parent = { schemaVersion: 3, id: "invalid-text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
+  const parent = { schemaVersion: 4, ownerModuleId: "test", id: "test/invalid-text-file-parent", kind: "global-background", nodes: [{ id: "writer", type: "agent", workflowCalls: ["memory/retrieve"] }] };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: () => child,
     readCallTextFile: ({ path }) => {
@@ -1231,8 +1231,8 @@ test("invalid textFile calls fail before dispatch and unauthorized calls never r
 
 test("a state-dependent child can disable completed-call reuse", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "lease-check",
+    schemaVersion: 4,
+    id: "lease/lease-check",
     ownerModuleId: "lease",
     kind: "module-internal",
     interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -1241,8 +1241,8 @@ test("a state-dependent child can disable completed-call reuse", async () => {
     nodes: [{ id: "acquire", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["acquire"], exports: {} }],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "lease-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/lease-parent",
     kind: "global-background",
     nodes: [{ id: "call-twice", type: "code", workflowCalls: ["lease/lease-check"] }],
   };
@@ -1250,7 +1250,7 @@ test("a state-dependent child can disable completed-call reuse", async () => {
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async () => child,
     executor: async task => {
-      if (task.workflow.id === "lease-parent") {
+      if (task.workflow.id === "test/lease-parent") {
         const request = { workflow: "lease/lease-check", arguments: { operationId: "operation-1" }, outputPaths: {} };
         await task.invokeWorkflow(request);
         await task.invokeWorkflow(request);
@@ -1265,12 +1265,12 @@ test("a state-dependent child can disable completed-call reuse", async () => {
   const completed = await engine.wait(started.id);
   assert.equal(completed.status, "completed");
   assert.equal(acquisitions, 2);
-  assert.equal(engine.snapshot().filter(run => run.workflowId === "lease-check").length, 2);
+  assert.equal(engine.snapshot().filter(run => run.workflowId === "lease/lease-check").length, 2);
 });
 
 test("allows parallel module-internal workflows on distinct declared collections", async () => {
   const child = (id, collectionId) => ({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id,
     ownerModuleId: "director",
     kind: "module-internal",
@@ -1280,7 +1280,7 @@ test("allows parallel module-internal workflows on distinct declared collections
   });
   const privateFlow = child("private-update", "private-state");
   const deepFlow = child("deep-update", "deep-workbench");
-  const parent = (id, target) => ({ schemaVersion: 3, id, kind: "turn-background", nodes: [{ id: "call", type: "call", target, outputPaths: {} }] });
+  const parent = (id, target) => ({ schemaVersion: 4, ownerModuleId: "test", id, kind: "turn-background", nodes: [{ id: "call", type: "call", target, outputPaths: {} }] });
   let active = 0;
   let maximum = 0;
   const engine = new RpWorkflowEngine({
@@ -1307,8 +1307,8 @@ test("allows parallel module-internal workflows on distinct declared collections
 
 test("an Agent call requires both exact node exposure and agentCallable", async () => {
   const child = {
-    schemaVersion: 3,
-    id: "lookup",
+    schemaVersion: 4,
+    id: "lore/lookup",
     ownerModuleId: "lore",
     kind: "module-external",
     agentCallable: false,
@@ -1316,8 +1316,8 @@ test("an Agent call requires both exact node exposure and agentCallable", async 
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "agent-caller",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/agent-caller",
     kind: "turn-background",
     nodes: [{ id: "writer", type: "agent", workflowCalls: ["lore/lookup"], retry: { maxAttempts: 1 } }],
   };
@@ -1335,7 +1335,7 @@ test("an Agent call requires both exact node exposure and agentCallable", async 
 
 test("classifies a non-model node failure as deterministic instead of a model failure", async () => {
   // A code node never calls a model, so offering "retry with another model" would be useless.
-  const workflow = { schemaVersion: 3, id: "code-failure", kind: "turn-background", nodes: [{ id: "task", type: "code", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/code-failure", kind: "turn-background", nodes: [{ id: "task", type: "code", retry: { maxAttempts: 1 } }] };
   const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("script exploded"); } });
   const started = await engine.start(workflow, { id: "code-failure-run" });
   const settled = await engine.wait(started.id);
@@ -1347,7 +1347,7 @@ test("classifies a non-model node failure as deterministic instead of a model fa
 test("classifies an Agent failure before any model call as deterministic", async () => {
   // Staging inputs, resolving an Agent profile, or reading a handoff can fail before the model is
   // asked anything. Swapping models cannot fix any of those.
-  const workflow = { schemaVersion: 3, id: "agent-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/agent-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
   const engine = new RpWorkflowEngine({ executor: async () => { throw new Error("handoff artifact is missing"); } });
   const started = await engine.start(workflow, { id: "agent-staging-failure-run" });
   const settled = await engine.wait(started.id);
@@ -1356,7 +1356,7 @@ test("classifies an Agent failure before any model call as deterministic", async
 });
 
 test("an Agent profile resolution failure becomes a terminal node failure", async () => {
-  const workflow = { schemaVersion: 3, id: "agent-profile-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", agentId: "missing", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/agent-profile-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", agentId: "missing", retry: { maxAttempts: 1 } }] };
   const engine = new RpWorkflowEngine({
     resolveAgent: async () => { throw new Error("Agent profile is missing"); },
     executor: async () => { throw new Error("executor must not run"); },
@@ -1371,7 +1371,7 @@ test("an Agent profile resolution failure becomes a terminal node failure", asyn
 });
 
 test("a terminal foreground failure cannot be retried as a detached old turn", async () => {
-  const workflow = { schemaVersion: 3, id: "terminal-foreground", kind: "foreground", nodes: [
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/terminal-foreground", kind: "foreground", nodes: [
     { id: "task", type: "agent", retry: { maxAttempts: 1 }, outputs: { narrative: { path: "story.md", format: "narrative" } } },
     { id: "done", type: "turn-finalize", dependsOn: ["task"], narrative: { fromNode: "task", output: "narrative" } },
   ] };
@@ -1389,7 +1389,7 @@ test("a terminal foreground failure cannot be retried as a detached old turn", a
 
 test("keeps a genuine model failure replaceable by another model", async () => {
   // The executor reports the dispatch, so the failure is the model's and another model may help.
-  const workflow = { schemaVersion: 3, id: "model-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/model-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
   const engine = new RpWorkflowEngine({ executor: async task => { task.markModelDispatched?.(); throw new Error("provider is offline"); } });
   const started = await engine.start(workflow, { id: "model-failure-run" });
   const settled = await engine.wait(started.id);
@@ -1400,7 +1400,7 @@ test("keeps a genuine model failure replaceable by another model", async () => {
 test("re-arms the model dispatch flag for every retry attempt", async () => {
   // Attempt one fails after its model call, the retry fails while staging. The retry verdict must
   // come from its own attempt, not from the attempt that already reached a model.
-  const workflow = { schemaVersion: 3, id: "retry-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/retry-staging-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
   let attempt = 0;
   const engine = new RpWorkflowEngine({
     executor: async task => {
@@ -1423,8 +1423,8 @@ test("re-arms the model dispatch flag for every retry attempt", async () => {
 test("treats a coded configuration failure on an agent node as deterministic", async () => {
   // The agent node would call a workflow this engine cannot resolve, which is decided by the
   // runtime before any model call: a model swap cannot fix it.
-  const child = { schemaVersion: 3, id: "missing", ownerModuleId: "demo", kind: "module-external", agentCallable: true, interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
-  const workflow = { schemaVersion: 3, id: "agent-config-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 }, workflowCalls: ["demo/missing"] }] };
+  const child = { schemaVersion: 4, id: "demo/missing", ownerModuleId: "demo", kind: "module-external", agentCallable: true, interface: { inputs: {}, exports: {} }, nodes: [{ id: "return", type: "workflow-return", exports: {} }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/agent-config-failure", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 }, workflowCalls: ["demo/missing"] }] };
   const engine = new RpWorkflowEngine({
     resolveWorkflow: reference => (reference === "demo/missing" ? undefined : child),
     executor: task => task.invokeWorkflow({ workflow: "demo/missing" }, { agent: true }),
@@ -1441,7 +1441,7 @@ test("a node-end commit refused by the card's own declarations is deterministic"
   // actions, the node's commit policy, or a missing processor. Nothing about them is the model's,
   // and no retry can alter them, so the panel must not offer a model swap or silently retry.
     for (const code of ["permission_denied", "action_not_allowed", "best_effort_not_allowed", "missing_handler", "invalid_processor_result", "agent_delivery_finalize_failed"]) {
-    const workflow = { schemaVersion: 3, id: `commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+    const workflow = { schemaVersion: 4, ownerModuleId: "test", id: `test/commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
     const engine = new RpWorkflowEngine({
       executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
       beforeNodeComplete: async () => { throw Object.assign(new Error(`commit refused: ${code}`), { code }); },
@@ -1459,7 +1459,7 @@ test("a node-end commit refused by state or by the model's own data stays on the
   // batch, so the automatic attempts must survive. `data_schema_invalid` belongs here on purpose —
   // the offending data is the model's output.
   for (const code of ["revision_conflict", "expected_revision_required", "duplicate_record", "data_schema_invalid", "commit_failed"]) {
-    const workflow = { schemaVersion: 3, id: `commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
+    const workflow = { schemaVersion: 4, ownerModuleId: "test", id: `test/commit-${code}`, kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 2 } }] };
     const engine = new RpWorkflowEngine({
       executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
       beforeNodeComplete: async () => { throw Object.assign(new Error(`commit refused: ${code}`), { code }); },
@@ -1473,7 +1473,7 @@ test("a node-end commit refused by state or by the model's own data stays on the
 });
 
 test("reports where a failure happened so the panel can offer the right retry", { timeout: 5000 }, async () => {
-  const workflow = { schemaVersion: 3, id: "commit-origin", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/commit-origin", kind: "turn-background", nodes: [{ id: "task", type: "agent" }] };
   const engine = new RpWorkflowEngine({
     executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
     beforeNodeComplete: async () => { throw Object.assign(new Error("Record X revision conflict."), { code: "revision_conflict" }); },
@@ -1493,7 +1493,7 @@ test("reports where a failure happened so the panel can offer the right retry", 
 test("retrying a node clears the previous failure's cause and code", { timeout: 5000 }, async () => {
   // The panel reads these fields, so a stale cause beside a fresh attempt would describe the wrong
   // retry — the marks must disappear with the error.
-  const workflow = { schemaVersion: 3, id: "commit-recovery", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
+  const workflow = { schemaVersion: 4, ownerModuleId: "test", id: "test/commit-recovery", kind: "turn-background", nodes: [{ id: "task", type: "agent", retry: { maxAttempts: 1 } }] };
   let attempt = 0;
   const engine = new RpWorkflowEngine({
     executor: async task => { task.markModelDispatched?.(); return { output: "batch" }; },
@@ -1529,8 +1529,8 @@ test("a throwing onChange neither hangs waiters nor escapes the scheduler", { ti
     },
   });
   const workflow = {
-    schemaVersion: 3,
-    id: "change-failure",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/change-failure",
     kind: "turn-background",
     nodes: [{ id: "task", type: "code" }],
   };

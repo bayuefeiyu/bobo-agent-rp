@@ -13,7 +13,7 @@
         "coverageRecordType": "memory.archive-coverage", "startTurnPath": "/startTurn", "endTurnPath": "/endTurn"
       },
       "action": {
-        "workflowRegionId": "memory-workflows", "workflowId": "narrative-memory-range-repair",
+        "workflowRegionId": "memory-workflows", "workflowId": "narrative-memory-range-repair-entry",
         "startTurnParameter": "startTurn", "endTurnParameter": "endTurn", "operationParameter": "operation", "operationValue": "repair"
       }
     },
@@ -51,15 +51,15 @@
       "id": "memory-workflows", "type": "workflow-controls", "title": "手动归档与维护",
       "description": "这里只能启动模块静态列出的后台工作流。", "spoiler": true,
       "workflows": [
-        { "id": "narrative-memory-archive", "title": "立即检查并归档", "description": "按当前冷却和保护设置检查可归档范围。", "confirm": "启动记忆归档工作流？", "parameters": [] },
-        { "id": "narrative-memory-compression", "title": "手动压缩事件目录", "description": "若设置允许，将对当前有效事件目录执行语义压缩。", "confirm": "启动事件目录压缩？", "parameters": [] },
-        { "id": "narrative-memory-range-repair", "title": "修复或补充回合范围", "description": "重新审视用户选择的已完成回合；可处理系统提醒，也可主动补充系统未发现的问题。", "confirm": "启动所选回合范围的两级记忆处理？", "parameters": [
+        { "id": "narrative-memory-archive-entry", "title": "立即检查并归档", "description": "按当前冷却和保护设置检查可归档范围。", "confirm": "启动记忆归档工作流？", "parameters": [] },
+        { "id": "narrative-memory-compression-entry", "title": "手动压缩事件目录", "description": "若设置允许，将对当前有效事件目录执行语义压缩。", "confirm": "启动事件目录压缩？", "parameters": [] },
+        { "id": "narrative-memory-range-repair-entry", "title": "修复或补充回合范围", "description": "重新审视用户选择的已完成回合；可处理系统提醒，也可主动补充系统未发现的问题。", "confirm": "启动所选回合范围的两级记忆处理？", "parameters": [
           { "name": "operation", "label": "处理方式", "type": "select", "required": true, "options": ["repair", "supplement"], "default": "repair", "help": "repair用于复核矛盾或遗漏；supplement不预设旧记录错误，只主动补充。" },
           { "name": "startTurn", "label": "开始回合", "type": "integer", "required": true, "minimum": 1 },
           { "name": "endTurn", "label": "结束回合", "type": "integer", "required": true, "minimum": 1 },
           { "name": "focus", "label": "补充要求", "type": "textarea", "required": false, "help": "可说明希望重点复核的人物、关系、事件或其他内容；不会扩大回合范围。" }
         ] },
-        { "id": "narrative-memory-maintenance", "title": "限定记录维护", "description": "提供任务类型和目标 ID；工作流不会扩展到未指定记录。", "confirm": "启动限定维护工作流？", "parameters": [
+        { "id": "narrative-memory-maintenance-entry", "title": "限定记录维护", "description": "提供任务类型和目标 ID；工作流不会扩展到未指定记录。", "confirm": "启动限定维护工作流？", "parameters": [
           { "name": "maintenanceRequest", "label": "维护请求 JSON", "type": "json", "required": true, "default": { "taskType": "repair", "targetIds": [] }, "help": "格式：{\"taskType\":\"repair\",\"targetIds\":[\"记录ID\"]}" }
         ] }
       ]

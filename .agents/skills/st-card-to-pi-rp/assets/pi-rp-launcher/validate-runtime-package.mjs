@@ -13,7 +13,7 @@ export async function validateRuntimePackage(cardDirectory) {
   const lock = JSON.parse(await readFile(join(card, "runtime-lock.json"), "utf8"));
   const launch = JSON.parse(await readFile(join(card, "runtime", "launch.json"), "utf8"));
   if (!safeId.test(manifest.id) || lock.cardId !== manifest.id || launch.cardId !== manifest.id || lock.schemaVersion !== 1 || launch.schemaVersion !== 1) errors.push("Card launch identity or schema is invalid.");
-  if (lock.packageFormat !== 1 || lock.launchProtocolVersion !== 1 || !/^\d+\.\d+\.\d+$/.test(lock.runtimeVersion)) errors.push("Card package or launch protocol is incompatible.");
+  if (lock.packageFormat !== 2 || lock.launchProtocolVersion !== 1 || !/^\d+\.\d+\.\d+$/.test(lock.runtimeVersion)) errors.push("Card package or launch protocol is incompatible.");
   if (launch.engine?.name !== "@earendil-works/pi-coding-agent" || !/^\d+\.\d+\.\d+$/.test(launch.engine?.testedVersion) || !Number.isInteger(launch.engine?.testedNodeMajor) || launch.engine.testedNodeMajor < 20 || !/^\d+\.\d+\.\d+$/.test(lock.testedNodeVersion) || Number(lock.testedNodeVersion.split(".")[0]) !== launch.engine.testedNodeMajor) errors.push("Card engine compatibility declaration is invalid.");
   if (!Array.isArray(lock.externalDependencies) || !lock.externalDependencies.some(item => item?.name === launch.engine?.name && item?.testedVersion === launch.engine?.testedVersion)) errors.push("Card external engine dependency is missing.");
   if (!lock.files || typeof lock.files !== "object" || Array.isArray(lock.files)) errors.push("Runtime file inventory is missing.");
@@ -30,11 +30,40 @@ export async function validateRuntimePackage(cardDirectory) {
     } catch (error) { errors.push(`Runtime dependency is missing: ${file} (${error.code || error.message})`); }
   }
   const cardFiles = new Set(Object.keys(lock.files || {}));
-  for (const file of cardFiles) {
-    if (!file.endsWith(".json") || !(/^(agents|workflows|features|defaults)\//.test(file))) continue;
-    let document;
-    try { document = JSON.parse(await readFile(join(card, file), "utf8")); }
-    catch { continue; }
+  const components = [], agents = new Set(), workflows = new Set();
+  const validPath = value => typeof value === "string" && value && !value.includes("\\") && !value.startsWith("/") && !value.split("/").some(part => !part || part === "." || part === "..") && isInside(card, resolve(card, value));
+  for (const path of manifest.feature_modules || []) {
+    if (!validPath(path) || !cardFiles.has(path)) { errors.push(`Missing module manifest: ${path}`); continue; }
+    const module = JSON.parse(await readFile(join(card, path), "utf8"));
+    const prefix = path.slice(0, path.lastIndexOf("/") + 1);
+    if (module.schemaVersion !== 7 || !safeId.test(module.id)) errors.push(`Invalid module manifest: ${path}`);
+    for (const [field, registry] of [["agentFiles", agents], ["workflowFiles", workflows]]) {
+      if (!Array.isArray(module[field])) { errors.push(`Missing ${field}: ${path}`); continue; }
+      for (const local of module[field]) {
+        const file = prefix + local;
+        if (!validPath(local) || !cardFiles.has(file)) { errors.push(`Missing module component: ${file}`); continue; }
+        const document = JSON.parse(await readFile(join(card, file), "utf8"));
+        const ref = document.id?.includes("/") ? document.id : `${module.id}/${document.id}`;
+        if (document.ownerModuleId !== module.id || ref.split("/").length !== 2 || ref.split("/")[0] !== module.id || !safeId.test(ref.split("/")[1])) errors.push(`Invalid component owner: ${file}`);
+        if (field === "workflowFiles" && document.schemaVersion !== 4) errors.push(`Invalid workflow schema: ${file}`);
+        if (registry.has(ref)) errors.push(`Duplicate component: ${ref}`);
+        registry.add(ref);
+        components.push({ file, prefix, owner: module.id, document });
+      }
+    }
+  }
+  for (const file of cardFiles) if (/^(agents|workflows|prompts\/(agents|workflows|modules))\//.test(file)) errors.push(`Unowned component: ${file}`);
+  // Model heads/tails remain public card-relative sources, unlike owned component prompts.
+  let models = { profiles: [] };
+  if (cardFiles.has("defaults/model-profiles.json")) {
+    try { models = JSON.parse(await readFile(join(card, "defaults/model-profiles.json"), "utf8")); }
+    catch (error) { errors.push(`Invalid model profile defaults: ${error.code || error.message}`); }
+  }
+  for (const profile of models.profiles || []) for (const key of ["headPromptFile", "tailPromptFile"]) {
+    const path = profile[key];
+    if (path != null && (!validPath(path) || !path.startsWith("prompts/") || !cardFiles.has(path))) errors.push(`Missing or invalid public model prompt: ${String(path)}`);
+  }
+  for (const {file, prefix, owner, document} of components) {
     const visit = (value, path) => {
       if (Array.isArray(value)) return value.forEach((item, index) => visit(item, `${path}[${index}]`));
       if (!value || typeof value !== "object") return;
@@ -43,10 +72,11 @@ export async function validateRuntimePackage(cardDirectory) {
         const label = `${path}.${key}`;
         if (key === "promptFile") {
           const normalized = typeof child === "string" ? child.replaceAll("\\", "/") : "";
-          if (!normalized.startsWith("prompts/") || normalized.includes("/../") || normalized.endsWith("/..") || child.includes("\\")) errors.push(`Invalid card prompt reference ${String(child)} at ${label}`);
-          else if (!cardFiles.has(normalized)) errors.push(`Missing card prompt reference ${child} at ${label}`);
+          if (!validPath(child) || !normalized.startsWith("prompts/")) errors.push(`Invalid module prompt reference ${String(child)} at ${label}`);
+          else if (!cardFiles.has(prefix + normalized)) errors.push(`Missing module prompt reference ${child} at ${label}`);
         }
-        if (key === "agentId" && typeof child === "string" && safeId.test(child) && !cardFiles.has(`agents/${child}/agent.json`)) errors.push(`Missing card Agent ${child} at ${label}`);
+        if (key === "agentId" && typeof child === "string" && !agents.has(child.includes("/") ? child : `${owner}/${child}`)) errors.push(`Missing module Agent ${child} at ${label}`);
+        if (key === "entryFile" && (!validPath(child) || !cardFiles.has(prefix + child))) errors.push(`Missing module entry file ${String(child)} at ${label}`);
         visit(child, label);
       }
     };

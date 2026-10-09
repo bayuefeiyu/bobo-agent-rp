@@ -1,12 +1,227 @@
 {
-  "schemaVersion": 3, "id": "pre-director-update", "ownerModuleId": "world-narrative-coordinator", "title": "前置导演调整", "description": "根据本轮玩家输入和正文节点已取得的资料，轻量调整私有状态与当前指导；不写归档交接。", "kind": "module-internal", "agentCallable": true,
-  "interface": { "inputs": { "context": { "type": "document", "required": true, "formats": ["document-set", "document-workspace-snapshot"], "kind": "directory", "description": "正文节点已准备的全部本轮资料、记忆检索结果和查询上下文。" } }, "exports": {} },
-  "revision": "1", "defaults": { "agentId": "world-narrative-daily-director", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 }, "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state" }],
+  "schemaVersion": 4,
+  "id": "pre-director-update",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "前置导演调整",
+  "description": "根据本轮玩家输入和正文节点已取得的资料，轻量调整私有状态与当前指导；不写归档交接。",
+  "kind": "module-internal",
+  "agentCallable": true,
+  "interface": {
+    "inputs": {
+      "context": {
+        "type": "document",
+        "required": true,
+        "formats": [
+          "document-set",
+          "document-workspace-snapshot"
+        ],
+        "kind": "directory",
+        "description": "正文节点已准备的全部本轮资料、记忆检索结果和查询上下文。"
+      }
+    },
+    "exports": {}
+  },
+  "revision": "1",
+  "defaults": {
+    "agentId": "world-narrative-coordinator/world-narrative-daily-director",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "private-state"
+    }
+  ],
   "nodes": [
-    { "id": "prepare-private", "type": "call", "target": "world-narrative-coordinator/prepare-private-context", "arguments": {}, "documents": {}, "outputPaths": { "context": "director-private" }, "outputs": { "context": { "path": "director-private", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } },
-    { "id": "prepare-author-future", "type": "call", "target": "card-context-library/export-context", "arguments": { "categories": ["director-future"] }, "documents": {}, "outputPaths": { "context": "author-future" }, "outputs": { "context": { "path": "author-future", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } },
-    { "id": "adjust", "type": "agent", "agentId": "world-narrative-daily-director", "dependsOn": ["prepare-private", "prepare-author-future"], "context": { "mode": "previous-output", "fromNodes": ["prepare-private", "prepare-author-future"] }, "promptFile": "prompts/modules/world-narrative-coordinator/workflows/pre-director-update/adjust.md", "outputs": {"result": {"path": "director-adjustment.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["operations"], "properties": {"operations": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"}, "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "documentWorkspace": true, "callInputs": ["context"] } },
-    { "id": "commit", "type": "code", "dependsOn": ["adjust"], "context": { "mode": "previous-output", "fromNodes": ["adjust"] }, "outputs": {}, "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/commit-agent-batch.mjs", "sourceNode": "adjust", "allowedCollections": ["private-state"], "bindingMode": "user" } },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["commit"], "exports": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+    {
+      "id": "prepare-private",
+      "type": "call",
+      "target": "world-narrative-coordinator/prepare-private-context",
+      "arguments": {},
+      "documents": {},
+      "outputPaths": {
+        "context": "director-private"
+      },
+      "outputs": {
+        "context": {
+          "path": "director-private",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    },
+    {
+      "id": "prepare-author-future",
+      "type": "call",
+      "target": "card-context-library/export-context",
+      "arguments": {
+        "categories": [
+          "director-future"
+        ]
+      },
+      "documents": {},
+      "outputPaths": {
+        "context": "author-future"
+      },
+      "outputs": {
+        "context": {
+          "path": "author-future",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    },
+    {
+      "id": "adjust",
+      "type": "agent",
+      "agentId": "world-narrative-coordinator/world-narrative-daily-director",
+      "dependsOn": [
+        "prepare-private",
+        "prepare-author-future"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-private",
+          "prepare-author-future"
+        ]
+      },
+      "promptFile": "prompts/workflows/pre-director-update/adjust.md",
+      "outputs": {
+        "result": {
+          "path": "director-adjustment.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "operations"
+            ],
+            "properties": {
+              "operations": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        }
+      ],
+      "workflowCalls": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "callInputs": [
+          "context"
+        ]
+      }
+    },
+    {
+      "id": "commit",
+      "type": "code",
+      "dependsOn": [
+        "adjust"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "adjust"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/commit-agent-batch.mjs",
+        "sourceNode": "adjust",
+        "allowedCollections": [
+          "private-state"
+        ],
+        "bindingMode": "user"
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit"
+      ],
+      "exports": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
   ]
 }

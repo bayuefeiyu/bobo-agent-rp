@@ -85,6 +85,7 @@ function frozenModelSnapshot(model) {
 }
 
 export class RpWorkflowEngine {
+  /** @param {{executor:Function,resolveAgent:Function,resolveModel:Function,resolveWorkflow:Function,readCallTextFile?:Function,policy?:object,onRunStart?:(request:any)=>Promise<any>,onChange?:(run:any,workflow:any)=>Promise<void>,beforeNodeComplete?:(request:any)=>Promise<any>,onNodeComplete?:(request:any)=>Promise<any>,onRunTerminal?:(run:any,workflow:any)=>Promise<void>,nodeHistory?:(workflowId:string,nodeId:string)=>number|null}} options */
   constructor({ executor, resolveAgent, resolveModel, resolveWorkflow, readCallTextFile, policy = {}, onRunStart = async () => null, onChange = async () => {}, beforeNodeComplete = async ({ result }) => result, onNodeComplete = async () => null, onRunTerminal = async () => null, nodeHistory = () => null }) {
     if (typeof executor !== "function") throw new Error("RpWorkflowEngine requires an executor.");
     this.executor = executor;
@@ -302,7 +303,7 @@ export class RpWorkflowEngine {
     return structuredClone(entry.run);
   }
 
-  async recover(runId, nodeId = null) {
+  async recover(runId, nodeId = /** @type {string | null} */ (null)) {
     const entry = this.runs.get(runId);
     if (!entry) throw new Error(`Unknown workflow run: ${runId}`);
     const recoverable = Object.values(entry.run.nodes).filter(state => state.status === "awaiting-recovery" && (!nodeId || state.id === nodeId));
@@ -729,7 +730,7 @@ export class RpWorkflowEngine {
     const parentStack = Array.isArray(parentEntry.run.callContext?.stack) ? parentEntry.run.callContext.stack : [];
     const callerIdentity = parentEntry.workflow.kind.startsWith("module-")
       ? canonicalWorkflowRef(parentEntry.workflow)
-      : `top-level/${parentEntry.workflow.id}`;
+      : canonicalWorkflowRef(parentEntry.workflow);
     const stack = parentStack.length ? [...parentStack] : [callerIdentity];
     const targetReference = canonicalWorkflowRef(normalizedTarget);
     if (stack.includes(targetReference)) throw Object.assign(new Error(`Workflow call cycle detected at ${targetReference}.`), { code: "workflow_call_cycle" });

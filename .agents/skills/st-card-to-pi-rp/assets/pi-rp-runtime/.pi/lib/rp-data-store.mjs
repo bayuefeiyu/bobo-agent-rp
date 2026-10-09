@@ -95,7 +95,7 @@ function partitionName(record, contract, collectionId) {
 }
 
 export class RpDataStore {
-  constructor({ sessionDirectory, modules, initialOverrides = {}, playerName = null }) {
+  constructor({ sessionDirectory, modules, initialOverrides = {}, playerName = /** @type {string | null} */ (null) }) {
     this.sessionDirectory = resolve(sessionDirectory);
     this.modules = new Map(modules.map(module => [module.contract.moduleId, module]));
     this.initialOverrides = initialOverrides && typeof initialOverrides === "object" && !Array.isArray(initialOverrides) ? structuredClone(initialOverrides) : {};

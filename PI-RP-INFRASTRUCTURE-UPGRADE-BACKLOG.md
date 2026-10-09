@@ -2,6 +2,8 @@
 
 更新时间：2026-09-13
 
+**版本引用说明**：各条目"涉及系统"里的协议版本号（例如 "Module v6"、"Workflow v3"）记录的是**该条目实施当时**的契约版本，保留原文不改写。**当前**权威版本是 Module v7 与 Workflow v4（`schemaVersion: 4`），规范见 [.agents/skills/design-pi-rp-data/references/protocol.md](.agents/skills/design-pi-rp-data/references/protocol.md)，当前能力与限制见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+
 ## 用途
 
 本文件只登记已经由用户确认、适合在 Pi RP 顶层框架解决的升级需求，包括功能模块系统、统一数据协议、Workflow、Agent 工具、上下文、产物路由和公共运行时能力。

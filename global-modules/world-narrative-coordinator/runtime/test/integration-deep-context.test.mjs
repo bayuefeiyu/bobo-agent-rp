@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { execute as runDeepIfNeeded } from "../../integration/runtime/run-deep-if-needed.mjs";
+import { execute as runDeepIfNeeded } from "../run-deep-if-needed.mjs";
 
 /**
  * The real `deep-state` contract, read from the module's own schema and data-contract files.

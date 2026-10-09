@@ -4,6 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parents[2]
 
 
 class ConversionSkillContractTests(unittest.TestCase):
@@ -30,9 +31,12 @@ class ConversionSkillContractTests(unittest.TestCase):
             self.assertIn(phrase, skill)
 
     def test_document_workspace_is_generic_agent_capability(self):
-        runtime = (ROOT / "assets" / "pi-rp-runtime" / ".pi" / "extensions" / "pi-rp-web.ts").read_text(encoding="utf-8")
+        runtime_root = ROOT / "assets" / "pi-rp-runtime" / ".pi"
+        runtime = "\n".join(path.read_text(encoding="utf-8") for path in sorted(runtime_root.rglob("*"))
+                            if path.suffix in (".ts", ".mjs") and not path.name.endswith(".test.mjs"))
         workflow_contract = (ROOT / "references" / "workflow-system.md").read_text(encoding="utf-8")
-        workflow_root = ROOT / "assets" / "pi-rp-runtime" / "workflows"
+        module_root = REPO_ROOT / "global-modules" / "narrative-controls"
+        workflow_root = module_root / "workflows"
         default_workflows = [
             json.loads((workflow_root / "standard-rp" / "workflow.json").read_text(encoding="utf-8")),
             json.loads((workflow_root / "advanced-memory-rp" / "workflow.json").read_text(encoding="utf-8")),
@@ -58,12 +62,15 @@ class ConversionSkillContractTests(unittest.TestCase):
             self.assertTrue(all(node.get("workspaceHandoff", {}).get("include") for node in prepared_outputs))
 
     def test_advanced_memory_workflow_keeps_analysis_in_the_calling_agent(self):
-        workflow = json.loads((ROOT / "assets" / "pi-rp-runtime" / "workflows" / "advanced-memory-rp" / "workflow.json").read_text(encoding="utf-8"))
+        module_root = REPO_ROOT / "global-modules" / "narrative-controls"
+        workflow = json.loads((module_root / "workflows" / "advanced-memory-rp" / "workflow.json").read_text(encoding="utf-8"))
         writer = next(node for node in workflow["nodes"] if node["id"] == "write-narrative")
         call_targets = [call if isinstance(call, str) else call["target"] for call in writer["workflowCalls"]]
         self.assertIn("narrative-memory/narrative-memory-retrieve", call_targets)
-        self.assertIn("自然语言Markdown记忆查询清单", writer["prompt"])
-        self.assertIn("需要推理的结论", writer["prompt"])
+        prompt = (module_root / writer["promptFile"]).read_text(encoding="utf-8") if writer.get("promptFile") else writer["prompt"]
+        self.assertIn("把情景分析写入工作区的 Markdown 文档", prompt)
+        self.assertIn("同一文档后面接着写记忆查询清单", prompt)
+        self.assertIn("根据创作指导和要求，进行剧情规划、情节设计", prompt)
         self.assertNotIn("narrative-memory/narrative-memory-creative-context", json.dumps(workflow, ensure_ascii=False))
         timeline = next(node for node in workflow["nodes"] if node["id"] == "prepare-event-timeline")
         self.assertEqual(timeline["target"], "narrative-memory/narrative-memory-reference-snapshot")

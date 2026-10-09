@@ -3,9 +3,20 @@
   "id": "world-narrative-story-reviewer",
   "name": "非正文故事统审导演",
   "description": "在后置导演工作流的第二次Agent调用中统审并必要时完整改写并行候选。",
-  "promptFile": "prompts/modules/world-narrative-coordinator/agents/world-narrative-story-reviewer.md",
-  "tools": ["edit", "write", "read", "rp_data_query", "rp_data_get"],
-  "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"],
+  "promptFile": "prompts/agents/world-narrative-story-reviewer.md",
+  "tools": [
+    "edit",
+    "write",
+    "read",
+    "rp_data_query",
+    "rp_data_get"
+  ],
+  "contextPermissions": [
+    "workspace:node",
+    "workflow:scoped-output",
+    "card:modules"
+  ],
   "outputMode": "json",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-narrative-coordinator"
 }

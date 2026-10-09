@@ -36,7 +36,9 @@ export async function listDataReceipts(sessionDirectory) {
   return receipts;
 }
 
-export async function inspectDataImpact(sessionDirectory, { messageId, revision = null, allowedModuleIds = null } = {}) {
+/** @param {string} sessionDirectory
+ * @param {{messageId?:string, revision?:number|null, allowedModuleIds?:string[]|null}} options */
+export async function inspectDataImpact(sessionDirectory, { messageId, revision = /** @type {number | null} */ (null), allowedModuleIds = /** @type {string[] | null} */ (null) } = {}) {
   if (typeof messageId !== "string" || !messageId) throw new Error("Impact inspection requires a messageId.");
   if (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) throw new Error("Impact inspection revision must be a positive integer or null.");
   const allowed = Array.isArray(allowedModuleIds) ? new Set(allowedModuleIds) : null;
@@ -79,7 +81,7 @@ export async function inspectDataImpact(sessionDirectory, { messageId, revision 
   };
 }
 
-export async function inspectDataIntegrity(sessionDirectory, { messages = [], allowedModuleIds = null } = {}) {
+export async function inspectDataIntegrity(sessionDirectory, { messages = /** @type {import("./rp-host-types.ts").RecordEnvelope[]} */ ([]), allowedModuleIds = /** @type {string[] | null} */ (null) } = {}) {
   if (!Array.isArray(messages)) throw new Error("Data integrity inspection requires an authoritative message array.");
   const currentMessages = new Map();
   for (const message of messages) {

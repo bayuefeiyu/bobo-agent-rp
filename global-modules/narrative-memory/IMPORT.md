@@ -1,6 +1,6 @@
 # 导入边界
 
-将本目录复制为目标卡的 `features/narrative-memory/`，但把顶层 `prompts/` 映射到卡片 `prompts/modules/narrative-memory/`，不在 `features/` 下保留第二份；在卡的 `manifest.feature_modules` 中注册 `features/narrative-memory/module.json`，并复制所需的 `agents/` 到卡的顶层目录。模块工作流保留在模块内，由 `module.json.workflowFiles` 注册；需要手动前端入口时，另行复制或保留公共运行时中的同名顶层包装工作流。复制后的内容归目标卡所有，不与本全局源包自动同步。
+用户确认导入后，将全局源包 `global-modules/narrative-memory/` 完整复制到目标卡的 `features/narrative-memory/`，并在卡的功能模块清单中注册该模块。`agents/`、`prompts/`、`workflows/`、`runtime/`、`documents/` 与 `module.json` 都留在模块目录内，不把提示词、Agent 或工作流复制到卡片根目录，也不建立根级包装副本。模块 manifest 使用 schema 7，以 `agentFiles` 和 `workflowFiles` 注册全部自有 Agent 与工作流；每个工作流使用 schema 4 并声明 `ownerModuleId`，Agent、工作流目标和触发器引用使用 `narrative-memory/<id>` 这类全限定 ID，`promptFile` 与 `entryFile` 保持模块相对路径。归档、压缩、维护和范围修复的手动入口分别使用模块内带 `-entry` 后缀的包装工作流，底层工作流仍保留不带后缀的 ID，全部通过 `module.json` 注册。复制后的内容归目标卡所有，不与本全局源包自动同步。
 
 `runtime/test/package.test.mjs` 同时支持本全局源码布局与卡内安装布局：源码态自动使用转换资产中的 `.pi/lib`，独立卡使用卡内 `runtime/engine/lib`，旧卡兼容所属 `play/.pi/lib`。其他测试布局可用绝对路径环境变量 `PI_RP_RUNTIME_LIB` 指定运行库。复制模块时须保留同目录的 `runtime-test-runtime.mjs`；其唯一维护源位于根 Skill 的 `assets/module-testing/`，由 `sync_template_assets.mjs` 生成到各模块。转换回归会把模块复制到两种临时卡布局后运行，防止重新引入源码树相对路径。
 

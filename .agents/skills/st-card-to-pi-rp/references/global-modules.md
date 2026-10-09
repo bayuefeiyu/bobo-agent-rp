@@ -6,7 +6,7 @@ Project-global modules are reusable feature-module packages under:
 <project-root>/global-modules/<module-id>/module.json
 ```
 
-They use the same module v6/workflow v3 package structure as card-local modules. Data/hybrid packages additionally use data-contract v1; resource/hybrid packages use resource catalog v1. They are not `.pi/skills`, converter assets, modules embedded in another card, or live session data.
+They use the same module v7/workflow v4 package structure as card-local modules. Data/hybrid packages additionally use data-contract v1; resource/hybrid packages use resource catalog v1. They are not `.pi/skills`, converter assets, modules embedded in another card, or live session data.
 
 ## Preselection before the formal proposal
 
@@ -28,13 +28,13 @@ The formal proposal discusses only the selected set in implementation detail. Fo
 
 ## Import semantics
 
-After formal confirmation, copy each selected package into `features/<module-id>/`, mapping its top-level authored `prompts/` tree to the card's `prompts/modules/<module-id>/` instead of leaving a second copy under `features/`. Never make a card depend on the mutable project-global directory at runtime. Keep the global source unchanged.
+After formal confirmation, copy each selected package intact from `global-modules/<module-id>/` into `features/<module-id>/`. Preserve its owned Agents, workflows, prompts, scripts, documents, data, and frontend resources together. Never make a card depend on the mutable project-global directory at runtime. Keep the global source unchanged.
 
 The copied package becomes card-owned. Later card conversion or customization never modifies the project-global source, and later source changes never update the card copy implicitly. Do not place promotion, upstreaming, or reusable-candidate notes into the card package.
 
 Validate the copied package as an ordinary card-local module, then make only confirmed card-specific adaptations. Preserve reusable runtime behavior. Put card-specific prompt text in the imported module's card-local skill, initialize only source-supported state, and update manifest paths, workflow grants, context order, and display order for the card.
 
-Copy the module's `agents/` profiles into the card's matching `agents/<id>/` locations when its owned workflows reference them. Their `promptFile` values, and those of module Agent／team nodes, resolve against the card root, so `global-modules/<module-id>/prompts/agents/` and `prompts/workflows/` must be mapped to `prompts/modules/<module-id>/agents/` and `prompts/modules/<module-id>/workflows/` rather than left only inside `features/`. Module workflows remain inside `features/<module-id>/workflows/` and are registered only through `module.json.workflowFiles`; do not copy or splice them into top-level workflows. Generate or copy any selected top-level orchestration separately under the card's `workflows/`, using explicit `call` nodes and top-level trigger/blocking policy. Report collisions before overwriting and record every copied path.
+Register Agents and every workflow kind only through module.json `agentFiles` and `workflowFiles`. All component definitions declare the same ownerModuleId. promptFile and entryFile are module-relative, while runtime references are module-id/component-id; configuration keys are module/<owner>/agent|workflow/<local>. Entry workflows and callable workflows share this ownership rule but retain their different trigger/return/permission behavior. Do not flatten any component into card-root agents/, workflows/, or prompts/modules/. Report owner/component collisions before overwriting and record copied paths. Public engine/tools, shared system/model/common prompts, and cross-module conversion snippets remain in the public layer. Module organization does not imply independent execution.
 
 When IDs or collection ownership collide with a source-derived module, stop before formal import and resolve whether to configure, merge, rename, or skip. A substantial card-specific schema change is a distinct module with `basedOn`; do not keep two modules authoritative for the same state.
 
@@ -42,7 +42,7 @@ Record the global source path/version when available, copied/adapted files, gene
 
 ## Reconciling copied workflows with the installed module set
 
-A copied top-level workflow must match the modules **this** card installs. Validation rejects any `workflowCalls` binding or module `call` target that names an uninstalled module, so per card:
+A copied module-owned entry workflow must match the modules **this** card installs. Validation rejects any `workflowCalls` binding or module `call` target that names an uninstalled module, so per card:
 
 - generate those declarations from the installed set rather than copying the template's unconditional list;
 - drop a node whose only purpose is an absent optional integration, and synchronise everything that referred to it — `dependsOn`, downstream `context.fromNodes`, `documentIndex` entries, `workspaceHandoff.include`, and any snapshot output declared from that node;
@@ -80,11 +80,17 @@ When `local-scene-narrative` or `world-scope-narrative` is selected **without** 
 
 | Path | What it means for this card |
 | --- | --- |
-| **Install the orchestrator** | Add `world-narrative-coordinator` (which requires `narrative-memory` and the `director-future` category) and copy its integration template. Delegation timing, guidance, review, publication, archive capture and the cross-module conflict check all come from the director. |
+| **Install the orchestrator** | Add `world-narrative-coordinator` (which requires `narrative-memory` and the `director-future` category) and copy its module-owned integration workflows. Delegation timing, guidance, review, publication, archive capture and the cross-module conflict check all come from the director. |
 | **Decouple inside this card** | Keep the module without the orchestrator and write the orchestration yourself: decide when a story is written, author the guidance, choose whether and how candidates are reviewed, and write the publish and archive path (or accept that stories are never archived). The reference size is the shipped six-node `director-post-with-narratives` template. |
 
 State the risk for the second path explicitly — no world-logic review, no deep-director subjects, no cross-module hard-conflict check — and record the user's choice in the proposal and `conversion-report.md`. Decoupling is a legitimate outcome; an unresolved silence is not.
 
+## Switchable creative requirements integration
+
+The full narrative-controls module owns the narrative-writer Agent, standard-rp and advanced-memory-rp entry workflows, recent-story preparation, and creative-requirements switches. Follow [switchable-prompts.md](switchable-prompts.md) and its IMPORT.md. Preserve every declared option as isolated module documents; only confirm/adapt initial selections. Keep selected requirements with ordinary static creative guidelines at the same level; narration receives only the composed document set, never the option sources. If another narrative implementation is chosen, place its complete Agent/workflow/resources in its own module and explicitly adapt integrations. Hiding or omitting the switch frontend must not leave loose narrative components.
+
 ## World narrative coordinator integration
 
-When the user selects `world-narrative-coordinator`, require both `card-context-library` and `narrative-memory`; fail the proposal/validation if either is declined or unavailable. Read the module's `IMPORT.md` and generate card-specific top-level pre-director, post-director, deep wrapper, after-opening bootstrap, manual maintenance, and manual integrity-repair workflows. Integration templates carry two placeholder IDs that must be replaced with this card's real workflow IDs — `DIRECTOR_ENABLED_FOREGROUND_ID` (the foreground narrative workflow) and `DIRECTOR_POST_WORKFLOW_ID` (the chosen post-director workflow); an unreplaced placeholder is syntactically valid but never matches, so the triggered workflow would silently never run, and validation rejects the reference. Do not expose `director-future` to ordinary narrative context exports. Preserve author-future prose verbatim where possible and store only stable document/anchor references in dynamic story-plan records.
+When the user selects `world-narrative-coordinator`, require both `card-context-library` and `narrative-memory`; fail the proposal/validation if either is declined or unavailable. Read its IMPORT.md and adapt its owned pre-director, post-director, deep-wrapper, after-opening, maintenance, and integrity-repair entry workflows inside features/world-narrative-coordinator/workflows/. Bind trigger.workflowId and source-document mappings to this card's actual fully qualified foreground/post entry workflow references. Keep director-integrity-repair-entry (manual entry) separate from director-integrity-repair (callable child). Never generate unregistered root workflows. Do not expose director-future to ordinary narrative context exports. Preserve author-future prose and store only stable document/anchor references in dynamic story-plan records.
+
+The director is a hybrid package with isolated prompt-option resources and chat-local prompt preferences. Follow its `DIRECTOR-CONTROLS.md`: copy all presets and audience comments, keep “other requirements” last with only authored default/player custom, and adapt initial choices only within the confirmed proposal. The supported runtime freezes selected content and filters document annotations by Agent ID before adding it to that Agent's prompt; do not copy the resulting director policy into ordinary static context, narration prompts, or memory. No per-node distribution configuration is required.

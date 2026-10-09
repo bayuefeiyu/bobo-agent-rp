@@ -14,9 +14,11 @@ A profile is a named, non-secret overlay. Its `scope` is `global` in repository 
   "agentOverrides": {},
   "workflowOverrides": {},
   "moduleOverrides": {},
-  "compatibility": { "moduleProtocol": 6, "workflowProtocol": 3 }
+  "compatibility": { "moduleProtocol": 7, "workflowProtocol": 4 }
 }
 ```
+
+`agentOverrides` keys use `module/<owner>/agent/<local>` and `workflowOverrides` keys use `module/<owner>/workflow/<local>`. These are the only component override forms; there is no unqualified fallback. Agents and workflows come from the module registry and keep their source under the module package (`global-modules/<id>/` or an imported card `features/<id>/`). Without an active profile, saving updates the existing module `componentFile`; it cannot create an unregistered component. With an active profile, saving writes the selected override and leaves the module source unchanged. The common engine, tools, system models, and cross-module prompt templates remain public host resources; there is no `module-workflow-overrides.json` layer.
 
 Profile IDs are stable filesystem-safe identifiers. Renaming changes only `name`. Duplicating creates a new ID and does not copy credentials. Deleting a profile also deletes its project-local credential slots after explicit UI confirmation.
 

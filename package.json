@@ -1,0 +1,31 @@
+{
+  "name": "bobo-agent-rp",
+  "private": true,
+  "version": "0.0.0",
+  "description": "开发与验证入口。仅用于本仓库开发：不是卡包运行时依赖，根 node_modules 不会被复制进任何卡包。",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "verify": "node scripts/verify.mjs",
+    "verify:integration": "node scripts/verify.mjs --mode=integration",
+    "verify:all": "node scripts/verify.mjs --mode=all",
+    "verify:list": "node scripts/verify.mjs --list",
+    "verify:acceptance": "node scripts/verify.mjs --suite=acceptance",
+    "typecheck": "node scripts/typecheck.mjs",
+    "typecheck:extension": "node scripts/typecheck-extension.mjs",
+    "test:engine": "node scripts/verify.mjs --suite=engine",
+    "test:web": "node scripts/verify.mjs --suite=web",
+    "test:modules": "node scripts/verify.mjs --suite=modules",
+    "test:tools": "node scripts/verify.mjs --suite=tools",
+    "test:python": "node scripts/verify.mjs --suite=python",
+    "check:generated": "node scripts/verify.mjs --suite=generated",
+    "check:release": "node scripts/verify.mjs --suite=release"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typebox": "1.3.27",
+    "typescript": "5.9.3"
+  }
+}

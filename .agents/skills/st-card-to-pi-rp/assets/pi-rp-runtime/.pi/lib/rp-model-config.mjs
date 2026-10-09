@@ -45,7 +45,10 @@ export function normalizeModelProfile(value) {
 export function normalizeAgentProfile(value) {
   const input = object(value, "agent profile");
   if (input.schemaVersion !== 1) throw new Error("agent profile schemaVersion must be 1.");
-  const agentId = id(input.id, "agent profile id");
+  const ownerModuleId = id(input.ownerModuleId, "agent owner module id");
+  const localId = input.id?.includes("/") ? input.id.split("/")[1] : input.id;
+  const agentId = `${ownerModuleId}/${id(localId, "agent profile id")}`;
+  if (input.id?.includes("/") && input.id !== agentId) throw new Error("Agent reference does not match its owner module.");
   const tools = Array.isArray(input.tools) ? [...new Set(input.tools.filter(tool => typeof tool === "string" && tool.trim()).map(tool => tool.trim()))] : [];
   const permissions = Array.isArray(input.contextPermissions)
     ? [...new Set(input.contextPermissions.filter(item => typeof item === "string" && item.trim()).map(item => item.trim()))]
@@ -53,6 +56,7 @@ export function normalizeAgentProfile(value) {
   return {
     schemaVersion: 1,
     id: agentId,
+    ownerModuleId,
     name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : agentId,
     description: typeof input.description === "string" ? input.description.trim() : "",
     prompt: typeof input.prompt === "string" && input.prompt.trim() ? input.prompt.trim() : null,
@@ -98,7 +102,7 @@ export function moveModelTailToEnd(messages, modelTail, timestamp = Date.now()) 
   }];
 }
 
-export function composeWorkflowNodeDynamicContext({ workflowKind, turn, recentCompleteTurns, recentContext, callContext, documentWorkspace, handoffMirrorRoots = [], customContext }) {
+export function composeWorkflowNodeDynamicContext({ workflowKind, turn, recentCompleteTurns, recentContext, callContext, documentWorkspace, handoffMirrorRoots = /** @type {string[]} */ ([]), customContext }) {
   return [
     Number.isSafeInteger(turn) ? `Turn: ${turn}` : "",
     workflowKind === "foreground" && Number.isSafeInteger(turn) && recentContext ? `Most recent ${recentCompleteTurns} complete turns:\n${recentContext}` : "",

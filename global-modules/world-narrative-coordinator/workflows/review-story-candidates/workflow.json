@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "review-story-candidates",
   "ownerModuleId": "world-narrative-coordinator",
   "title": "统审非正文故事候选",
@@ -8,40 +8,195 @@
   "agentCallable": false,
   "interface": {
     "inputs": {
-      "turn-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot"], "description": "含本轮正文和受控资料的后置快照。" },
-      "local-candidate": { "type": "document", "required": false, "kind": "directory", "formats": ["story-candidate"], "description": "近场候选。" },
-      "world-candidate": { "type": "document", "required": false, "kind": "directory", "formats": ["story-candidate"], "description": "广域候选。" }
+      "turn-context": {
+        "type": "document",
+        "required": true,
+        "kind": "directory",
+        "formats": [
+          "document-workspace-snapshot"
+        ],
+        "description": "含本轮正文和受控资料的后置快照。"
+      },
+      "local-candidate": {
+        "type": "document",
+        "required": false,
+        "kind": "directory",
+        "formats": [
+          "story-candidate"
+        ],
+        "description": "近场候选。"
+      },
+      "world-candidate": {
+        "type": "document",
+        "required": false,
+        "kind": "directory",
+        "formats": [
+          "story-candidate"
+        ],
+        "description": "广域候选。"
+      }
     },
-    "exports": { "reviewed": { "format": "reviewed-story-set", "kind": "directory", "description": "按模块分目录的已审核完整发布包；被扣留者仅写状态。" } }
+    "exports": {
+      "reviewed": {
+        "format": "reviewed-story-set",
+        "kind": "directory",
+        "description": "按模块分目录的已审核完整发布包；被扣留者仅写状态。"
+      }
+    }
   },
   "revision": "1",
-  "defaults": { "agentId": "world-narrative-story-reviewer", "modelId": "pi:current", "context": { "mode": "fixed" } },
-  "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
-  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state" }],
+  "defaults": {
+    "agentId": "world-narrative-coordinator/world-narrative-story-reviewer",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "private-state"
+    }
+  ],
   "nodes": [
     {
       "id": "review",
       "type": "agent",
-      "agentId": "world-narrative-story-reviewer",
-      "promptFile": "prompts/modules/world-narrative-coordinator/workflows/review-story-candidates/review.md",
-      "outputs": {"result": {"path": "review-decisions.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["decisions"], "properties": {"decisions": {"type": "object"}, "directorBatch": {"type": "object"}}}}}, "delivery": {"primaryOutput": "result"},
-      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }],
+      "agentId": "world-narrative-coordinator/world-narrative-story-reviewer",
+      "promptFile": "prompts/workflows/review-story-candidates/review.md",
+      "outputs": {
+        "result": {
+          "path": "review-decisions.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "decisions"
+            ],
+            "properties": {
+              "decisions": {
+                "type": "object"
+              },
+              "directorBatch": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        }
+      ],
       "workflowCalls": [],
-      "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "documentWorkspace": true, "callInputs": ["turn-context", "local-candidate", "world-candidate"] }
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "callInputs": [
+          "turn-context",
+          "local-candidate",
+          "world-candidate"
+        ]
+      }
     },
     {
       "id": "assemble",
       "type": "code",
-      "dependsOn": ["review"],
-      "context": { "mode": "previous-output", "fromNodes": ["review"] },
-      "outputs": { "reviewed": { "path": "reviewed", "format": "reviewed-story-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "reviewed" }] },
-      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } }],
+      "dependsOn": [
+        "review"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "review"
+        ]
+      },
+      "outputs": {
+        "reviewed": {
+          "path": "reviewed",
+          "format": "reviewed-story-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "reviewed"
+          }
+        ]
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        }
+      ],
       "workflowCalls": [],
-      "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/assemble-reviewed-stories.mjs", "sourceNode": "review", "callInputs": ["local-candidate", "world-candidate"] }
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/assemble-reviewed-stories.mjs",
+        "sourceNode": "review",
+        "callInputs": [
+          "local-candidate",
+          "world-candidate"
+        ]
+      }
     },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["assemble"], "exports": { "reviewed": { "fromNode": "assemble", "output": "reviewed" } }, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "assemble"
+      ],
+      "exports": {
+        "reviewed": {
+          "fromNode": "assemble",
+          "output": "reviewed"
+        }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
   ]
 }

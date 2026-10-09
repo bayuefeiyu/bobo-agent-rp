@@ -1,0 +1,33 @@
+[
+  {
+    "protocolVersion": 2,
+    "id": "director-prompt-preferences",
+    "moduleId": "world-narrative-coordinator",
+    "collectionId": "prompt-preferences",
+    "recordType": "director.prompt-preferences",
+    "dataSchemaVersion": 1,
+    "sequence": 0,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-10-08T00:00:00.000Z",
+    "updatedAt": "2026-10-08T00:00:00.000Z",
+    "binding": {
+      "messageId": null,
+      "turn": 0
+    },
+    "data": {
+      "selections": {
+        "protagonist-treatment": {
+          "optionId": "none",
+          "customText": ""
+        },
+        "other-requirements": {
+          "optionId": "default",
+          "customText": ""
+        }
+      }
+    },
+    "note": null,
+    "provenance": {}
+  }
+]

@@ -1,0 +1,158 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selections"
+  ],
+  "properties": {
+    "selections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pacing",
+        "player-speech",
+        "other-requirements",
+        "word-count",
+        "output-language",
+        "input-mode"
+      ],
+      "properties": {
+        "pacing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "none",
+                "conservative",
+                "adventurous",
+                "highly-adventurous",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "other-requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "default",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "player-speech": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "none",
+                "no-speech",
+                "general",
+                "free",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "word-count": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "up-to-800",
+                "800-1500",
+                "at-least-1500",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "output-language": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "chinese",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "input-mode": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "properties": {
+            "optionId": {
+              "type": "string",
+              "enum": [
+                "full-expansion",
+                "partial-expansion",
+                "continue"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        }
+      }
+    }
+  }
+}

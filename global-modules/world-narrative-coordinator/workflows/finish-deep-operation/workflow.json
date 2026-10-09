@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "finish-deep-operation",
   "ownerModuleId": "world-narrative-coordinator",
   "title": "收尾深度导演运行",
@@ -8,21 +8,72 @@
   "agentCallable": false,
   "interface": {
     "inputs": {
-      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
-      "terminalStatus": { "type": "parameter", "required": true, "valueType": "string" },
-      "terminalError": { "type": "parameter", "required": false, "valueType": "any" }
+      "operationId": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "string"
+      },
+      "terminalStatus": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "string"
+      },
+      "terminalError": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "any"
+      }
     },
     "exports": {}
   },
   "revision": "1",
-  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 4, "dedupeKey": "$.operationId" },
-  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4,
+    "dedupeKey": "$.operationId"
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "deep-workbench"
+    }
+  ],
   "nodes": [
     {
-      "id": "finish", "type": "code",
-      "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }],
-      "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/finish-deep-operation.mjs", "argumentInputs": ["operationId", "terminalStatus", "terminalError"] }
+      "id": "finish",
+      "type": "code",
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "deep-workbench",
+          "capabilities": [
+            "director.deep.write"
+          ],
+          "views": [
+            "deep-director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "metadata": {
+        "entryFile": "runtime/workflow/finish-deep-operation.mjs",
+        "argumentInputs": [
+          "operationId",
+          "terminalStatus",
+          "terminalError"
+        ]
+      }
     },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["finish"], "exports": {} }
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "finish"
+      ],
+      "exports": {}
+    }
   ]
 }

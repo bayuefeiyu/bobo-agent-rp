@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "narrative-writer",
+  "name": "正文创作 Agent",
+  "description": "依据卡片固定设定、当前输入和已选记录创作本轮玩家可见正文。",
+  "tools": [
+    "edit",
+    "write",
+    "read",
+    "rp_call"
+  ],
+  "promptFile": "prompts/agents/narrative-writer.md",
+  "contextPermissions": [
+    "card:fixed",
+    "chat:selected",
+    "modules:selected",
+    "workspace:public"
+  ],
+  "outputMode": "text",
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "narrative-controls"
+}

@@ -3,8 +3,10 @@ import { execFile } from "node:child_process";
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCardComponents } from "../assets/pi-rp-runtime/.pi/lib/rp-module-registry.mjs";
 
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const developmentRuntime = JSON.parse(await readFile(resolve(skillRoot, "../../../scripts/development-runtime.json"), "utf8"));
 const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function git(args, cwd) {
@@ -47,7 +49,7 @@ async function files(root) {
 }
 
 async function compileAgentPreferenceIncludes(cardRoot, templateRoot) {
-  const promptRoot = join(cardRoot, "prompts");
+  const promptRoot = cardRoot;
   const preferenceRoot = resolve(templateRoot, "assets", "prompt-templates", "agent-preferences");
   const includePattern = /\{\{include:([^{}\r\n]+)\}\}/g;
   for (const file of await files(promptRoot)) {
@@ -105,12 +107,12 @@ export async function packageCardRuntime({ sourceCard, targetCard, templateRoot 
     await copyTree(join(runtime, ".pi", "extensions"), join(engine, "extensions"));
     await copyTree(join(runtime, ".pi", "lib"), join(engine, "lib"), { filter: (path, entry) => entry.isDirectory() || !entry.name.endsWith(".test.mjs") });
     await copyTree(join(runtime, ".pi", "skills"), join(engine, "skills"));
-    await copyTree(join(runtime, "agents"), join(tmp, "agents"), { preserve: true });
     await copyTree(join(runtime, "prompts"), join(tmp, "prompts"), { preserve: true });
     await compileAgentPreferenceIncludes(tmp, templateRoot);
+    await loadCardComponents(tmp);
     await copyTree(join(runtime, "settings"), join(tmp, "defaults"), { preserve: true });
-    if (!await exists(join(tmp, "web", "server.mjs"))) await copyTree(web, join(tmp, "web"), { filter: (path, entry) => entry.isDirectory() || entry.name !== "test" && !entry.name.endsWith(".test.mjs") });
-    const engineInfo = { name: "@earendil-works/pi-coding-agent", testedVersion: "0.86.0", testedNodeMajor: Number(process.versions.node.split(".")[0]) };
+    if (!await exists(join(tmp, "web", "server.mjs"))) await copyTree(web, join(tmp, "web"), { filter: (path, entry) => entry.name !== "test" && !entry.name.endsWith(".test.mjs") });
+    const engineInfo = { ...developmentRuntime.engine, testedNodeMajor: Number(process.versions.node.split(".")[0]) };
     await writeFile(join(tmp, "runtime", "launch.json"), `${JSON.stringify({ schemaVersion: 1, cardId: manifest.id, entry: "runtime/engine/extensions/pi-rp-web.ts", skills: ["runtime/engine/skills/play-pi-rp/SKILL.md", "runtime/engine/skills/play-pi-rp-web/SKILL.md"], engine: engineInfo }, null, 2)}\n`);
     for (const required of ["prompts/system/base.md", "prompts/system/tools.json", "defaults/common.json", "defaults/model-profiles.json", "defaults/workflow-runtime.json", "web/server.mjs", "runtime/engine/extensions/pi-rp-web.ts"]) {
       if (!await exists(join(tmp, required))) throw new Error(`Card package is missing ${required}`);
@@ -123,7 +125,7 @@ export async function packageCardRuntime({ sourceCard, targetCard, templateRoot 
     }
     const revision = sourceRevision || await git(["rev-parse", "HEAD"], templateRoot);
     const workingTreeDirty = Boolean(await git(["status", "--porcelain"], templateRoot));
-    await writeFile(join(tmp, "runtime-lock.json"), `${JSON.stringify({ schemaVersion: 1, cardId: manifest.id, packageFormat: 1, runtimeVersion: "1.0.0", launchProtocolVersion: 1, testedNodeVersion: process.versions.node, externalDependencies: [{ name: engineInfo.name, testedVersion: engineInfo.testedVersion }], sourceRevision: revision, workingTreeDirty, files: hashes }, null, 2)}\n`);
+    await writeFile(join(tmp, "runtime-lock.json"), `${JSON.stringify({ schemaVersion: 1, cardId: manifest.id, packageFormat: 2, runtimeVersion: "1.0.0", launchProtocolVersion: 1, testedNodeVersion: process.versions.node, externalDependencies: [{ name: engineInfo.name, testedVersion: engineInfo.testedVersion }], sourceRevision: revision, workingTreeDirty, files: hashes }, null, 2)}\n`);
     await rename(tmp, target);
     return { cardId: manifest.id, target, fileCount: Object.keys(hashes).length };
   } catch (error) {

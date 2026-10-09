@@ -45,7 +45,7 @@ export function selectPrompts(total, model, exclusive = false) {
   return exclusive ? (model.length ? model : total) : [...total, ...model];
 }
 
-export function assembleInitialContext({ baseSystem, prefix = [], agent = [], card = [], player = [], history = [], current, tail = [] }) {
+export function assembleInitialContext({ baseSystem, prefix = /** @type {Array<{role:string,content:string}>} */ ([]), agent = /** @type {Array<{role:string,content:string}>} */ ([]), card = /** @type {Array<{role:string,content:string}>} */ ([]), player = /** @type {Array<{role:string,content:string}>} */ ([]), history = /** @type {Array<{role:string,content:string}>} */ ([]), current, tail = /** @type {Array<{role:string,content:string}>} */ ([]) }) {
   const messages = [...prefix, ...agent, ...card, ...player, ...history, ...(current ? [current] : []), ...tail];
   const system = [baseSystem];
   const conversation = [];

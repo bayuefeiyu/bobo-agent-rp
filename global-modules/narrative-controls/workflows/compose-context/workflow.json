@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 4,
+  "id": "compose-context",
+  "ownerModuleId": "narrative-controls",
+  "title": "准备正文创作资料",
+  "description": "将当前选中的创作准则与普通静态资料组成同一份目录快照。",
+  "kind": "module-external",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "static-context": {
+        "type": "document",
+        "required": true,
+        "kind": "directory",
+        "formats": [
+          "document-set"
+        ],
+        "description": "普通静态创作资料目录。"
+      }
+    },
+    "exports": {
+      "context": {
+        "kind": "directory",
+        "format": "document-set",
+        "description": "包含当前创作要求的普通创作资料快照。"
+      }
+    }
+  },
+  "revision": "1",
+  "defaults": {
+    "agentId": null,
+    "modelId": null,
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 10
+  },
+  "nodes": [
+    {
+      "id": "compose",
+      "type": "code",
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {
+        "context": {
+          "path": "context",
+          "kind": "directory",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-controls",
+          "collectionId": "settings",
+          "capabilities": [
+            "narrative.preferences.read"
+          ],
+          "views": [
+            "processor"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 200000
+          }
+        }
+      ],
+      "workflowCalls": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/compose-context.mjs",
+        "callInputs": [
+          "static-context"
+        ]
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "compose"
+      ],
+      "exports": {
+        "context": {
+          "fromNode": "compose",
+          "output": "context"
+        }
+      }
+    }
+  ]
+}

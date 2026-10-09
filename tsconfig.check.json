@@ -1,0 +1,30 @@
+{
+  "//": "边界类型检查配置：只做 --noEmit 检查，不输出编译产物。",
+  "//coverage": "覆盖 Pi 宿主边界 ExtensionAPI / ExtensionContext，以及 pi-rp-web.ts 对公共运行库 .mjs 的调用关系。不使用整文件 ts-nocheck。",
+  "//host": "Pi 宿主由开发设备安装，types/pi-rp-host.d.ts 提供边界声明。typebox 作为开发依赖固定到已验证宿主所用版本；卡内运行时仍由 Pi 加载宿主的 typebox。@types/node 由 scripts/typecheck.mjs 解析并注入临时配置，不含机器绝对路径。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["types/pi-rp-host.d.ts"]
+    }
+  },
+  "include": [
+    "types/pi-rp-host.d.ts",
+    "types/pi-rp-boundary-check.ts",
+    ".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/**/*.ts"
+  ]
+}

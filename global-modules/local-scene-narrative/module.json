@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "id": "local-scene-narrative",
   "moduleKind": "hybrid",
   "basedOn": null,
@@ -13,9 +13,12 @@
   "frontendViewFile": "frontend-view.json",
   "skillFile": "skill/SKILL.md",
   "workflowFiles": [
-    "workflows/prepare-story-context/workflow.json",
     "workflows/create-story-candidate/workflow.json",
-    "workflows/publish-reviewed-story/workflow.json",
-    "workflows/export-recent-stories/workflow.json"
+    "workflows/export-recent-stories/workflow.json",
+    "workflows/prepare-story-context/workflow.json",
+    "workflows/publish-reviewed-story/workflow.json"
+  ],
+  "agentFiles": [
+    "agents/local-narrative-writer/agent.json"
   ]
 }

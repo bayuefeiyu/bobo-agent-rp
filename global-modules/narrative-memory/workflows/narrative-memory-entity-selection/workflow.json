@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "narrative-memory-entity-selection",
   "title": "叙事记忆实体数量与随机选择",
   "description": "供作者层工作流复用的确定性实体count/sample入口；不返回实体完整内容。",
@@ -50,7 +50,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/entity-select.mjs"
+        "entryFile": "runtime/workflow/entity-select.mjs"
       }
     },
     {

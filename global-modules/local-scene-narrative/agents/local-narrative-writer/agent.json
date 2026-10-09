@@ -3,9 +3,19 @@
   "id": "local-narrative-writer",
   "name": "近场叙事创作 Agent",
   "description": "把指定近场委托创作为完整候选故事。",
-  "promptFile": "prompts/modules/local-scene-narrative/agents/local-narrative-writer.md",
-  "tools": ["edit", "read", "write", "rp_call"],
-  "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"],
+  "promptFile": "prompts/agents/local-narrative-writer.md",
+  "tools": [
+    "edit",
+    "read",
+    "write",
+    "rp_call"
+  ],
+  "contextPermissions": [
+    "workspace:node",
+    "workflow:scoped-output",
+    "card:modules"
+  ],
   "outputMode": "text",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "local-scene-narrative"
 }

@@ -1,12 +1,15 @@
-# Card feature modules v6
+# Card feature modules v7
 
-Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md) first. For ownership, retrieval, mutation, and workflow-access decisions, follow the sibling [data-design Skill](../../design-pi-rp-data/SKILL.md). This reference covers only conversion-specific module placement. A module is an authored data owner and capability provider. It may contain multiple collections and record types; it no longer owns a separate storage protocol, retrieval policy, catalog, post-narrative-output engine, or variable transport.
+Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md) first. For ownership, retrieval, mutation, and workflow-access decisions, follow the sibling [data-design Skill](../../design-pi-rp-data/SKILL.md). This reference covers conversion-specific module placement. A module is the smallest functional organization and delivery unit, owning its Agents, workflows, prompts, scripts, and resources. Data/hybrid modules may contain multiple collections and record types; resource-only modules need no invented session data. All modules use the common storage, retrieval, delivery, and variable protocols rather than creating their own engine.
 
 ## Layout
 
 ```text
 features/<module-id>/
 ├── module.json
+├── agents/<agent-id>/agent.json
+├── prompts/agents/ and prompts/workflows/
+├── documents/                    # module-owned resources, including switch sources
 ├── data-contract.json
 ├── collections/<collection-id>/initial/
 ├── frontend-view.json
@@ -19,9 +22,9 @@ features/<module-id>/
 
 `skill/SKILL.md` must open with YAML frontmatter carrying a one-line `name` and a one-line `description`; the runtime reads that description into every Agent's fixed module routing and refuses to open the card when it is missing. See [validation.md](validation.md#loadable-skill-headers) for the exact contract.
 
-A project-global package may additionally carry `dependencies.json` next to `module.json` when something outside the module drives it; see [global-modules.md](global-modules.md) for that record and the conversion-time choice it exists to disclose. It is a project-global source record, not part of the module v6 contract, and validation never reads it.
+A project-global package may additionally carry `dependencies.json` next to `module.json` when something outside the module drives it; see [global-modules.md](global-modules.md) for that record and the conversion-time choice it exists to disclose. It is a project-global source record, not part of the module v7 contract, and validation never reads it.
 
-Use the exact module v6 shape from the unified protocol. `moduleKind` distinguishes data, resource, and hybrid ownership. `workflowFiles` lists the module's complete internal/external workflows. Data/hybrid modules use `data-contract.json` for collections, record types, storage, indexes, searchable fields, Agent return views, actions, and capabilities. Resource/hybrid modules use resource catalog v1 for static authored document delivery without fake session data. A substantial card customization receives a distinct module ID and may identify its origin through `basedOn`.
+Use the exact module v7 shape from the unified protocol. `moduleKind` distinguishes data, resource, and hybrid ownership. `agentFiles` registers every owned Agent and `workflowFiles` registers all owned workflow kinds, including foreground/background entry workflows and internal/external callable workflows. Prompt/script paths are module-relative; runtime references are module-id/component-id. Keep the complete global-modules directory together when importing it under features/. Data/hybrid modules use `data-contract.json` for collections, record types, storage, indexes, searchable fields, Agent return views, actions, and capabilities. Resource/hybrid modules use resource catalog v1 for static authored document delivery without fake session data. A substantial card customization receives a distinct module ID and may identify its origin through `basedOn`.
 
 ## Data freedom and indexes
 

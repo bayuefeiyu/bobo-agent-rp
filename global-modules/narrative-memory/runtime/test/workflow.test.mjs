@@ -53,7 +53,7 @@ test("archive and range repair each use one Agent with the original task and cat
     assert.equal(agents.length, 1, workflowId);
     const [agent] = agents;
     assert.equal(agent.id, agentNodeId);
-    assert.equal(agent.agentId, "narrative-memory-archive-editor");
+    assert.equal(agent.agentId, "narrative-memory/narrative-memory-archive-editor");
     assert.deepEqual(agent.dependsOn, ["prepare-reference-snapshot", taskNodeId]);
     assert.deepEqual(agent.context.fromNodes, ["prepare-reference-snapshot", taskNodeId]);
     assert.ok(workflow.nodes.find(node => node.id === commitNodeId).dependsOn.includes(agentNodeId));

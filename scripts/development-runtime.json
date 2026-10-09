@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "_comment": "开发运行时基线。这是已验证宿主版本与 Node 基线的唯一权威来源；打包器读取本文件生成 launch/lock 元数据，不再散落版本字面量。已打包的卡仍使用自己冻结的声明。",
+  "engine": {
+    "name": "@earendil-works/pi-coding-agent",
+    "testedVersion": "0.86.0"
+  },
+  "node": {
+    "baselineMajor": 20,
+    "developmentMajor": 24,
+    "verifiedVersion": "24.14.0"
+  },
+  "python": {
+    "minimumMajor": 3,
+    "requiredModules": [
+      "yaml"
+    ]
+  }
+}

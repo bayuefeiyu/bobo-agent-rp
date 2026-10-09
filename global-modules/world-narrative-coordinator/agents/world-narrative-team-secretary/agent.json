@@ -3,9 +3,12 @@
   "id": "world-narrative-team-secretary",
   "name": "世界叙事会议秘书",
   "description": "整理协助请求、会议草稿、定稿与知识扩展文档。",
-  "promptFile": "prompts/modules/world-narrative-coordinator/agents/world-narrative-team-secretary.md",
+  "promptFile": "prompts/agents/world-narrative-team-secretary.md",
   "tools": [],
-  "contextPermissions": ["workspace:node"],
+  "contextPermissions": [
+    "workspace:node"
+  ],
   "outputMode": "text",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-narrative-coordinator"
 }

@@ -11,12 +11,11 @@ play/cards/<card-id>/
 ├── settings.json
 ├── defaults/
 ├── prompts/
-│   ├── agents/
-│   ├── workflows/
-│   └── modules/
-│       └── <module-id>/
-│           ├── agents/
-│           └── workflows/
+│   ├── system/                 # public common SYSTEM and tool prompts
+│   ├── model-heads/            # public model head prompts
+│   ├── model-tails/            # public model tail prompts
+│   ├── prefix/                 # public common prefix prompts
+│   └── tail/                   # public common tail prompts
 ├── source/
 │   ├── original.*
 │   ├── extracted.json
@@ -31,18 +30,20 @@ play/cards/<card-id>/
 │   │   ├── skill/
 │   │   └── workflows/
 │   └── <other-module-id>/
+│       ├── module.json
+│       ├── agents/
+│       ├── prompts/
+│       ├── workflows/
+│       ├── runtime/
+│       ├── documents/
+│       └── ...                 # the complete selected module package
 ├── context/
 │   ├── retrieval-policy.json
 │   └── skill/SKILL.md          # required only for Agent-enabled message retrieval
 ├── runtime/
 │   ├── launch.json
-│   ├── engine/                # card-owned Pi extension, libraries and gameplay Skills
-│   ├── context-processors/
-│   └── workflow/               # card-owned support scripts for top-level code nodes
-├── agents/
-│   └── <agent-id>/agent.json  # complete card-owned Agent baseline; optional override.json
-├── workflows/
-│   └── <workflow-id>/workflow.json
+│   ├── engine/                 # card-owned Pi extension, libraries and gameplay Skills
+│   └── context-processors/     # card-owned deterministic processors
 ├── openings/
 ├── web/
 │   ├── public/
@@ -65,9 +66,9 @@ Copy the standard Web view into `web/`; it belongs to this card and may later be
 
 The play root holds the lightweight selector and session storage. Each independent card owns its Pi RP runtime, complete Agent definitions, prompts, behavior defaults, Web frontend and card settings. The card's `defaults/common.json` supplies initial player and display values; user changes are recorded in `settings.json`, and avatars belong to the card. When frontend modules exist, runtime adds `settings.featureModules` with an `order` array and a `hidden` array. This record is a player-facing display preference only and must never be used to assemble Agent context. Credentials remain in the operating-system cache.
 
-Selected workflow templates are copied under the card and become card-owned definitions. `settings.activeWorkflowId` selects the foreground workflow. Every referenced Agent needs a complete `agent.json` in the card; a card-specific `override.json` may additionally change its fields. Missing card-owned definitions are errors. Read [workflow-system.md](workflow-system.md) before creating either structure.
+Selected foreground and background entry workflows are copied with their owning module and remain card-owned definitions. They retain their authored triggers, and `settings.activeWorkflowId` stores the fully qualified selected foreground ID such as `narrative-controls/standard-rp`. Every referenced Agent needs a complete module-owned `agent.json` registered by its module manifest; a named configuration profile may change its fields under the exact `module/<owner>/agent/<local>` key. Missing card-owned definitions are errors. Read [workflow-system.md](workflow-system.md) before creating either structure.
 
-Every authored Agent prompt and Agent／team node task is a card-owned Markdown file referenced by `promptFile`. Common definitions use `prompts/agents/` and `prompts/workflows/`; imported modules use `prompts/modules/<module-id>/agents/` and `prompts/modules/<module-id>/workflows/`. Runtime compatibility with legacy inline `prompt` remains, but new card definitions do not duplicate the same text in JSON.
+Every authored Agent prompt and Agent／team node task is a Markdown file in its owning module, referenced by a module-relative `promptFile` such as `prompts/agents/<id>.md` or `prompts/workflows/<workflow>/<node>.md`. Module runtime code uses module-relative `entryFile` paths such as `runtime/<script>.mjs`; no module prompt, Agent, workflow, or runtime file is copied to a card-root directory. Root `prompts/` contains only public common prompts and model heads/tails. New card definitions require file-backed prompts.
 
 ## Manifest
 
@@ -88,7 +89,8 @@ Use UTF-8 JSON so the validation script can parse it without additional dependen
   "context_policy": "context/retrieval-policy.json",
   "context_processors": [],
   "feature_modules": [
-    "features/card-context-library/module.json"
+    "features/card-context-library/module.json",
+    "features/narrative-controls/module.json"
   ],
   "openings": [
     {
@@ -126,20 +128,22 @@ The baseline `context/retrieval-policy.json` is:
 
 When the message policy enables Agent retrieval, add `"context_skill": "context/skill/SKILL.md"` to the manifest. That skill owns the author's activation, `rp_message_query` selection, and non-activation guidance. A code-only card does not need it. Message catalogs are derived runtime aids and are never Agent-authored data.
 
-`feature_modules` is required and always includes `card-context-library`. Module v6 distinguishes `data`, `resource`, and `hybrid` packages. Resource-only modules own static authored files and workflows without inventing session collections; data and hybrid modules use data-contract v1. Every source-required output outside the main narrative remains a frontend data-module record type produced by an ordinary workflow node. Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one.
+`feature_modules` is required and always includes `card-context-library`. Module schema 7 distinguishes `data`, `resource`, and `hybrid` packages and every kind declares both `agentFiles` and `workflowFiles` in `module.json`. Each owned workflow uses schema 4, declares its `ownerModuleId`, and keeps `promptFile`/`entryFile` module-relative; Agent, workflow, and trigger references use fully qualified `module-id/local-id` values. Resource-only modules own static authored files and workflows without inventing session collections; data and hybrid modules use data-contract v1. Every source-required output outside the main narrative remains a frontend data-module record type produced by an ordinary workflow node. Read the authoritative [unified data protocol](../../design-pi-rp-data/references/protocol.md), [feature-modules.md](feature-modules.md), and [variables.md](variables.md) before creating one.
+
+`narrative-controls` is a complete正文 feature module when selected: it owns `narrative-writer`, the `narrative-controls/standard-rp` and `narrative-controls/advanced-memory-rp` foreground entries, and `prepare-recent-narrative-stories`. It is not an isolated optional control panel. If it is declined, the card must install or create another module-owned foreground entry that supplies the full narrative path; no card may leave controls without a valid foreground implementation. `comfy-image-generation`, `narrative-memory`, and `world-narrative-coordinator` follow the same intact-module rule, including their module-local Agents, workflows, runtime components, documents, and any `-entry` wrappers.
 
 `design_invariants` is optional and declares what *this* card promises about its own design, so validation can check the card against its declaration rather than against a shipped template:
 
 ```json
 "design_invariants": {
-  "foregroundWorkflow": "standard-rp",
+  "foregroundWorkflow": "narrative-controls/standard-rp",
   "requiresCardContextResources": true,
   "requiresEffectiveMemoryTimeline": true,
   "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"]
 }
 ```
 
-`foregroundWorkflow` names a card-local foreground workflow and is required whenever another key is present; `requiresCardContextResources` requires a call to `card-context-library/export-context`; `requiresEffectiveMemoryTimeline` requires the effective memory timeline to be prepared before that export; `requiresNarrativeAgentCallable` lists module-workflow references every narrative Agent in that workflow must expose. Declared invariants are validated as errors, and a card that declares none is left alone — a renamed, replaced, or decoupled foreground workflow is legitimate. Write the declaration for a card built on the shipped templates, as described in [validation.md](validation.md).
+`foregroundWorkflow` names the selected fully qualified module foreground workflow and is required whenever another key is present; `requiresCardContextResources` requires a call to `card-context-library/export-context`; `requiresEffectiveMemoryTimeline` requires the effective memory timeline to be prepared before that export; `requiresNarrativeAgentCallable` lists module-workflow references every narrative Agent in that workflow must expose. Declared invariants are validated as errors, and a card that declares none is left alone — a renamed, replaced, or decoupled foreground module is legitimate. Write the declaration for a card built on the shipped templates, as described in [validation.md](validation.md).
 
 `context_processors` is required and contains card-relative processor JSON paths, or `[]` when the card has no deterministic dynamic prompt behavior. Processors run before narrative generation, after fixed card/player/primary-character context and before retrieved message history and upstream workflow output. Module data enters only through the processor's declared `dataQueries` or the active node's authorized data tools. Their authored `contextOrder` controls processor order and is unrelated to Web settings. Read [ejs-conversion.md](ejs-conversion.md) for the strict version 2 contract.
 

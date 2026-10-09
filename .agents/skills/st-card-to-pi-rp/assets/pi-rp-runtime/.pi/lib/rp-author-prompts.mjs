@@ -1,3 +1,4 @@
+import { moduleFile } from "./rp-module-registry.mjs";
 import { parseRolePrompt, readPromptFile, selectPrompts } from "./rp-node-context.mjs";
 import { renderCardText } from "./rp-card-text.mjs";
 import { resolve } from "node:path";
@@ -15,20 +16,25 @@ async function promptFileFromCardOrRoot(active, path) {
   if (cardContent !== null || active.isolatedRuntime === true) return cardContent;
   const rootContent = await optionalPromptFile(active.context.cwd, path);
   if (rootContent !== null) return rootContent;
-  const moduleMatch = path.match(/^prompts\/modules\/([^/]+)\/(.+)$/);
-  if (!moduleMatch) return null;
-  return optionalPromptFile(resolve(active.context.cwd, "global-modules", moduleMatch[1]), `prompts/${moduleMatch[2]}`);
+  return null;
+}
+
+async function ownedPrompt(active, owner, path) {
+  const module = active.featureModules.find(item => item.id === owner);
+  if (!module) throw new Error(`Prompt owner module ${owner} is unavailable.`);
+  await moduleFile(module.moduleDirectory, path);
+  return readPromptFile(module.moduleDirectory, path);
 }
 
 export async function playNodePrompt(active, node) {
   const nodeText = node.promptFile
-    ? await promptFileFromCardOrRoot(active, node.promptFile)
+    ? await ownedPrompt(active, node.ownerModuleId, node.promptFile)
     : node.prompt || node.description || "";
   if (node.promptFile && nodeText === null) throw new Error(`Missing node prompt file: ${node.promptFile}`);
   return renderCardText(nodeText, active.playerName, node.promptFile || `node ${node.id} prompt`);
 }
 
-export async function playPromptSources(active, profile, agent, node, workspace, tools) {
+export async function playPromptSources(active, profile, agent, node, workspace, tools, requirements = "") {
   const fromCardOrRoot = path => promptFileFromCardOrRoot(active, path);
   const authored = (value, label) => renderCardText(value, active.playerName, label);
   const optionsText = await fromCardOrRoot("prompts/context-options.json");
@@ -49,15 +55,21 @@ export async function playPromptSources(active, profile, agent, node, workspace,
   if (profile?.tailPromptFile && modelTailText === null) throw new Error(`Missing model tail prompt file: ${profile.tailPromptFile}`);
   const modelPrefix = parseRolePrompt(authored(modelPrefixText, profile?.headPromptFile || "model headPrompt"), roles.modelPrefixRole || "system");
   const modelTail = parseRolePrompt(authored(modelTailText, profile?.tailPromptFile || "model tailPrompt"), roles.modelTailRole || "user");
-  const agentText = agent?.promptFile ? await fromCardOrRoot(agent.promptFile) : agent?.prompt || "";
+  const agentText = agent?.promptFile ? await ownedPrompt(active, agent.ownerModuleId, agent.promptFile) : agent?.prompt || "";
   if (agent?.promptFile && agentText === null) throw new Error(`Missing Agent prompt file: ${agent.promptFile}`);
   const fullNodeText = await playNodePrompt(active, node);
   const taskStages = parseTaskStages(fullNodeText, node.promptFile || `node ${node.id} prompt`);
+  const agentPrompts = parseRolePrompt(authored(agentText, agent?.promptFile || "Agent prompt"), roles.agentRole || "system");
+  if (requirements.trim()) {
+    const content = authored(requirements, "selected Agent requirements");
+    if (agentPrompts.length) agentPrompts.at(-1).content += `\n\n${content}`;
+    else agentPrompts.push({ role: roles.agentRole || "system", content });
+  }
   return {
     baseSystem,
     prefix: selectPrompts(totalPrefix, modelPrefix, options.prefixExclusive === true),
     tail: selectPrompts(totalTail, modelTail, options.tailExclusive === true),
-    agent: parseRolePrompt(authored(agentText, agent?.promptFile || "Agent prompt"), roles.agentRole || "system"),
+    agent: agentPrompts,
     nodeText: taskStages.initialText,
     fullNodeText,
     taskStages,

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "narrative-memory-source-capture",
   "title": "叙事记忆来源捕获",
   "description": "每轮确定性保存已经适配的其他模块资料；导入卡时必须接入实际来源节点和静态权限。",
@@ -50,7 +50,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/capture-sources.mjs"
+        "entryFile": "runtime/workflow/capture-sources.mjs"
       }
     },
     {

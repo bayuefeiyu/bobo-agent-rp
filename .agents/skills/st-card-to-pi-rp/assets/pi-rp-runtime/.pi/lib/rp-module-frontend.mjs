@@ -1,7 +1,7 @@
 import { capabilityAllows, isSafeDataId, recordTypeDefinition } from "./rp-data-contracts.mjs";
 
 const LEGACY_TYPES = new Set(["text", "markdown", "json", "key-value", "list", "table", "image-generation"]);
-const INTERACTIVE_TYPES = new Set(["record-browser", "story-browser", "settings-form", "workflow-controls", "integrity-alerts"]);
+const INTERACTIVE_TYPES = new Set(["record-browser", "story-browser", "settings-form", "prompt-controls", "workflow-controls", "integrity-alerts"]);
 const FIELD_TYPES = new Set(["text", "textarea", "integer", "number", "boolean", "select", "json"]);
 
 function object(value, label) {
@@ -138,6 +138,13 @@ export function normalizeModuleFrontendView(value, contract) {
       if (pageSize < 1 || pageSize > 100 || indexMaxCharacters < 1000 || indexMaxCharacters > 200000 || fullMaxCharacters < 1000 || fullMaxCharacters > 1000000) throw new Error(`frontend region ${index} has invalid story budgets.`);
       return { ...base, collectionId: region.collectionId, recordTypes: indexTypes, indexView: region.indexView, fullView: region.fullView, readCapability: region.readCapability, pageSize, indexMaxCharacters, fullMaxCharacters, allowSeriesGrouping: region.allowSeriesGrouping === true, allowOpenAuthoritySource: region.allowOpenAuthoritySource === true, empty: typeof region.empty === "string" ? region.empty : "暂无故事。" };
     }
+    if (region.type === "prompt-controls") {
+      exact(region, ["id", "type", "title", "description", "spoiler", "collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "controlsFile"], ["id", "type", "title", "collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "controlsFile"], `frontend region ${index}`);
+      ensureRecordTarget(contract, { ...region, recordTypes: [region.recordType] }, `frontend region ${index}`, { update: true });
+      id(region.recordId, `frontend region ${index}.recordId`);
+      if (typeof region.controlsFile !== "string" || !region.controlsFile.endsWith(".json") || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(region.controlsFile) || region.controlsFile.split("/").some(part => !part || part === "..")) throw new Error("controlsFile must be a safe module-relative JSON file.");
+      return { ...base, collectionId: region.collectionId, recordType: region.recordType, recordId: region.recordId, view: region.view, readCapability: region.readCapability, updateCapability: region.updateCapability, controlsFile: region.controlsFile };
+    }
     if (region.type === "settings-form") {
       exact(region, ["id", "type", "title", "description", "spoiler", "collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "fields", "submitLabel"], ["id", "type", "title", "collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "fields"], `frontend region ${index}`);
       ensureRecordTarget(contract, { ...region, recordTypes: [region.recordType] }, `frontend region ${index}`, { update: true });
@@ -210,7 +217,7 @@ export function normalizeModuleFrontendView(value, contract) {
   return { schemaVersion: 2, regions };
 }
 
-export function frontendRegion(module, regionId, expectedType = null) {
+export function frontendRegion(module, regionId, expectedType = /** @type {string | null} */ (null)) {
   const region = module?.view?.regions?.find(item => item?.id === regionId);
   if (!region || (expectedType && region.type !== expectedType)) throw new Error(`Frontend region ${regionId} is not declared for module ${module?.id || "unknown"}.`);
   return region;

@@ -22,17 +22,18 @@ import {
 
 test("normalizes a dynamic team node without assigning it one outer Agent or model", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "team-background",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{
       id: "meeting",
       type: "team",
       team: {
         schemaVersion: 1,
-        leader: { id: "leader", agentId: "leader-agent" },
-        secretary: { id: "secretary", agentId: "secretary-agent" },
-        experts: [{ id: "expert", agentId: "expert-agent", modelId: "model-strong" }],
+        leader: { id: "leader", agentId: "test/leader-agent" },
+        secretary: { id: "secretary", agentId: "test/secretary-agent" },
+        experts: [{ id: "expert", agentId: "test/expert-agent", modelId: "model-strong" }],
         assistants: [],
         agenda: { normalRounds: 1, maxRounds: 2 },
         budgets: { preparation: 8, discussion: 8, coordination: 4, closing: 4, draft: 2, review: 4, revision: 2 },
@@ -46,21 +47,22 @@ test("normalizes a dynamic team node without assigning it one outer Agent or mod
 });
 
 test("rejects team configuration on ordinary nodes and missing team configuration on team nodes", () => {
-  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 3, id: "missing-team", kind: "turn-background", nodes: [{ id: "meeting", type: "team" }] }), /declare team exactly/);
-  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 3, id: "wrong-team", kind: "turn-background", nodes: [{ id: "task", type: "code", team: { leader: {}, secretary: {} } }] }), /agentId/);
+  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 4, id: "missing-team", ownerModuleId: "test", kind: "turn-background", nodes: [{ id: "meeting", type: "team" }] }), /declare team exactly/);
+  assert.throws(() => normalizeWorkflowDefinition({ schemaVersion: 4, id: "wrong-team", ownerModuleId: "test", kind: "turn-background", nodes: [{ id: "task", type: "code", team: { leader: {}, secretary: {} } }] }), /agentId/);
 });
 
 test("team workflow assistants require an exact node call authorization", () => {
   const definition = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "team-ability-call",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{
       id: "meeting",
       type: "team",
       team: {
-        leader: { id: "leader", agentId: "leader-agent" },
-        secretary: { id: "secretary", agentId: "secretary-agent" },
+        leader: { id: "leader", agentId: "test/leader-agent" },
+        secretary: { id: "secretary", agentId: "test/secretary-agent" },
         assistants: [{ id: "lookup", kind: "workflow", target: "memory/lookup" }],
       },
     }],
@@ -72,7 +74,7 @@ test("team workflow assistants require an exact node call authorization", () => 
 
 test("document-workspace agents receive read by default and require explicit input declarations", () => {
   const definition = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "document-task",
     ownerModuleId: "docs",
     kind: "module-internal",
@@ -93,8 +95,9 @@ test("document-workspace agents receive read by default and require explicit inp
 
 test("supports after-opening triggers and caller-selected query budgets", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "opening-bootstrap",
+    ownerModuleId: "test",
     kind: "turn-background",
     trigger: { type: "after-opening", blockNextTurnUntilReady: true },
     writeLocks: [{ moduleId: "director", collectionId: "private-state" }],
@@ -112,7 +115,7 @@ test("supports after-opening triggers and caller-selected query budgets", () => 
 
 test("rejects an explicit empty lock list on module-internal workflows", () => {
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "unsafe-internal",
     ownerModuleId: "director",
     kind: "module-internal",
@@ -124,7 +127,7 @@ test("rejects an explicit empty lock list on module-internal workflows", () => {
 
 test("allows keyed module-internal instances only with exact collection locks", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "render",
     ownerModuleId: "images",
     kind: "module-internal",
@@ -138,7 +141,7 @@ test("allows keyed module-internal instances only with exact collection locks", 
   assert.throws(() => resolveInstanceKey(workflow, {}), /did not resolve to a stable value/);
 
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "unsafe-render",
     ownerModuleId: "images",
     kind: "module-internal",
@@ -149,8 +152,9 @@ test("allows keyed module-internal instances only with exact collection locks", 
 });
 
 const foreground = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   id: "standard-rp",
+  ownerModuleId: "test",
   kind: "foreground",
   nodes: [
     { id: "world", type: "agent" },
@@ -162,27 +166,33 @@ const foreground = {
 
 test("normalizes a foreground DAG and exposes parallel roots", () => {
   const workflow = normalizeWorkflowDefinition(foreground);
+  assert.equal(workflow.ownerModuleId, "test");
+  assert.equal(workflow.id, "test/standard-rp");
+  assert.throws(() => normalizeWorkflowDefinition({ ...foreground, ownerModuleId: undefined }), /workflow.ownerModuleId/);
   const run = createWorkflowRun(workflow, { id: "run-1", turn: 1 });
   assert.deepEqual(readyWorkflowNodes(workflow, run).map(node => node.id), ["world", "character"]);
 });
 
 test("authorizes declared runtime services only on code nodes", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "random-code",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "judge", type: "code", runtimeServices: ["random"] }],
   });
   assert.deepEqual(workflow.nodes[0].runtimeServices, ["random"]);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "random-agent",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "judge", type: "agent", runtimeServices: ["random"] }],
   }), /only for code nodes/);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "unknown-service",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "judge", type: "code", runtimeServices: ["fortune"] }],
   }), /unsupported services/);
@@ -217,8 +227,9 @@ test("stores successful node token usage on the node and attempt", () => {
 
 test("sums every recorded attempt when the workflow finishes", () => {
   const workflow = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "usage-total",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [
       { id: "analyze", type: "agent" },
@@ -254,8 +265,9 @@ test("waits for user model choice after the third failed attempt", () => {
 
 test("supports route conditions and skips the inactive branch", () => {
   const workflow = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "branching",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [
       { id: "gate", type: "gate" },
@@ -272,8 +284,9 @@ test("supports route conditions and skips the inactive branch", () => {
 
 test("normalizes a code-node output field used as its route", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "code-branching",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [
       { id: "prepare", type: "code", routeFromOutput: "route" },
@@ -285,14 +298,16 @@ test("normalizes a code-node output field used as its route", () => {
   assert.equal(resolveCodeNodeRoute(workflow.nodes[0], {}), null);
   assert.throws(() => resolveCodeNodeRoute(workflow.nodes[0], { route: "not a safe route" }), /invalid workflow route/);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "bad-code-route",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "prepare", type: "code", routeFromOutput: "not a safe field" }],
   }), /routeFromOutput/);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "agent-code-route",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "prepare", type: "agent", routeFromOutput: "route" }],
   }), /only for code nodes/);
@@ -300,14 +315,16 @@ test("normalizes a code-node output field used as its route", () => {
 
 test("turn-background trigger blocking is opt-in and rejected for other workflow kinds", () => {
   const ordinary = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "ordinary-background",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "task", type: "code" }],
   });
   const blocking = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "blocking-background",
+    ownerModuleId: "test",
     kind: "turn-background",
     trigger: { type: "manual", blockNextTurnUntilReady: true },
     nodes: [{ id: "task", type: "code" }],
@@ -315,8 +332,9 @@ test("turn-background trigger blocking is opt-in and rejected for other workflow
   assert.equal(ordinary.trigger.blockNextTurnUntilReady, false);
   assert.equal(blocking.trigger.blockNextTurnUntilReady, true);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "global-background",
+    ownerModuleId: "test",
     kind: "global-background",
     trigger: { type: "manual", blockNextTurnUntilReady: true },
     nodes: [{ id: "task", type: "code" }],
@@ -325,21 +343,23 @@ test("turn-background trigger blocking is opt-in and rejected for other workflow
 
 test("uses keyed multi-instance identities for independent characters", () => {
   const workflow = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "character-analysis",
+    ownerModuleId: "test",
     kind: "global-background",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 6, dedupeKey: "$.characterId" },
     nodes: [{ id: "analyze", type: "agent" }],
   };
-  assert.equal(workflowRuntimeIdentity(workflow), "top-level/character-analysis");
-  assert.equal(resolveInstanceKey(workflow, { characterId: "alice" }), "top-level/character-analysis:alice");
-  assert.equal(resolveInstanceKey(workflow, { characterId: "bob" }), "top-level/character-analysis:bob");
+  assert.equal(workflowRuntimeIdentity(workflow), "test/character-analysis");
+  assert.equal(resolveInstanceKey(workflow, { characterId: "alice" }), "test/character-analysis:alice");
+  assert.equal(resolveInstanceKey(workflow, { characterId: "bob" }), "test/character-analysis:bob");
 });
 
 test("rejects the removed narrative node type", () => {
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "bad",
+    ownerModuleId: "test",
     kind: "global-background",
     nodes: [{ id: "story", type: "narrative" }],
   }), /Unsupported workflow node type/);
@@ -347,8 +367,9 @@ test("rejects the removed narrative node type", () => {
 
 test("workflow authors statically declare narrative authority while legacy nodes stay conservative", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "directed-story",
+    ownerModuleId: "test",
     kind: "foreground",
     defaults: { agentId: "writer" },
     nodes: [
@@ -368,8 +389,9 @@ test("workflow authors statically declare narrative authority while legacy nodes
   assert.equal(run.nodes["legacy-code"].narrativeSource.layer, "unspecified");
   assert.equal(run.sourceReferences[0].revision, 2);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "forged-author",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "worker", type: "agent", narrativeSource: { layer: "authorial", producerKind: "agent" } }],
   }), /only layer and characterId/);
@@ -377,8 +399,9 @@ test("workflow authors statically declare narrative authority while legacy nodes
 
 test("normalizes node outputs, scoped module access, and explicit node-end commits", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "data-update",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{
       id: "update",
@@ -397,8 +420,9 @@ test("normalizes node outputs, scoped module access, and explicit node-end commi
 
 test("normalizes explicit file and directory workspace handoffs", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "handoff",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{
       id: "prepare",
@@ -426,8 +450,9 @@ test("normalizes explicit file and directory workspace handoffs", () => {
 
 test("rejects implicit, missing, short-lived, and overlapping workspace handoffs", () => {
   const base = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "bad-handoff",
+    ownerModuleId: "test",
     kind: "turn-background",
   };
   assert.throws(() => normalizeWorkflowDefinition({
@@ -460,8 +485,9 @@ test("rejects implicit, missing, short-lived, and overlapping workspace handoffs
 
 test("rejects node-end commit targets that are not explicitly declared", () => {
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "bad-output",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "update", type: "agent", dataCommit: { onNodeEnd: [{ output: "missing" }] } }],
   }), /unknown output/);
@@ -469,7 +495,7 @@ test("rejects node-end commit targets that are not explicitly declared", () => {
 
 test("normalizes module workflows with explicit interfaces and a standard return", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "retrieve-context",
     ownerModuleId: "memory",
     kind: "module-external",
@@ -491,7 +517,7 @@ test("normalizes module workflows with explicit interfaces and a standard return
 
 test("module workflow interfaces preserve ordinary directory exports", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "export-folder",
     ownerModuleId: "resources",
     kind: "module-external",
@@ -507,7 +533,7 @@ test("module workflow interfaces preserve ordinary directory exports", () => {
 
 test("module document inputs declare whether they accept files or directories", () => {
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "consume-folder",
     ownerModuleId: "resources",
     kind: "module-external",
@@ -523,7 +549,7 @@ test("module document inputs declare whether they accept files or directories", 
   assert.equal(workflow.interface.inputs.request.kind, "file");
   assert.equal(workflow.interface.inputs.bundle.kind, "directory");
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "bad-input-kind",
     ownerModuleId: "resources",
     kind: "module-external",
@@ -534,7 +560,7 @@ test("module document inputs declare whether they accept files or directories", 
 
 test("enforces node call lists, Agent exposure, and module call layering", () => {
   const external = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "query",
     ownerModuleId: "lore",
     kind: "module-external",
@@ -543,7 +569,7 @@ test("enforces node call lists, Agent exposure, and module call layering", () =>
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   });
   const internal = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "update",
     ownerModuleId: "state",
     kind: "module-internal",
@@ -552,15 +578,16 @@ test("enforces node call lists, Agent exposure, and module call layering", () =>
     nodes: [{ id: "return", type: "workflow-return", exports: {} }],
   });
   const top = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "top",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "worker", type: "agent", workflowCalls: ["lore/query"] }],
   });
   assert.equal(assertWorkflowCallAllowed(top, top.nodes[0], external, { agent: true }), "lore/query");
   assert.throws(() => assertWorkflowCallAllowed(top, top.nodes[0], internal, { agent: true }), /not callable by Agents/);
   const moduleCaller = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "compose",
     ownerModuleId: "combat",
     kind: "module-external",
@@ -572,7 +599,7 @@ test("enforces node call lists, Agent exposure, and module call layering", () =>
 
 test("validates module call inputs and exact caller-selected export paths", () => {
   const target = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "lookup",
     ownerModuleId: "lore",
     kind: "module-external",
@@ -608,7 +635,7 @@ test("validates module call inputs and exact caller-selected export paths", () =
 
 test("validates declared workflow parameter value types", () => {
   const target = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "typed",
     ownerModuleId: "lore",
     kind: "module-external",
@@ -625,7 +652,7 @@ test("validates declared workflow parameter value types", () => {
 
 test("applies fixed and allowed argument policy to dynamic workflow calls", () => {
   const target = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "export-context",
     ownerModuleId: "card-context-library",
     kind: "module-external",
@@ -657,7 +684,7 @@ test("applies fixed and allowed argument policy to dynamic workflow calls", () =
 
 test("authorizes one bounded automatic document snapshot input", () => {
   const target = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "pre-review",
     ownerModuleId: "director",
     kind: "module-internal",
@@ -666,8 +693,9 @@ test("authorizes one bounded automatic document snapshot input", () => {
     nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   const caller = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "foreground",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "director/pre-review", documentSnapshotInput: "context", maxCalls: 1 }] }],
   });
@@ -680,8 +708,9 @@ test("a node declares which of its dynamic calls this turn must actually obtain"
   // The workflow author decides whether a missing retrieval is a degradation or a hard stop; the
   // runtime only enforces the declaration, so the field has to be explicit and cross-checked.
   const workflow = normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "foreground",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{
       id: "write",
@@ -692,20 +721,22 @@ test("a node declares which of its dynamic calls this turn must actually obtain"
   });
   assert.deepEqual(workflow.nodes[0].requiredCalls, ["memory/retrieve"]);
   assert.deepEqual(normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "foreground",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "memory/retrieve" }] }],
   }).nodes[0].requiredCalls, [], "omitting the declaration keeps every call optional");
 
-  const build = node => () => normalizeWorkflowDefinition({ schemaVersion: 3, id: "foreground", kind: "turn-background", nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "memory/retrieve" }], ...node }] });
+  const build = node => () => normalizeWorkflowDefinition({ schemaVersion: 4, id: "foreground", ownerModuleId: "test", kind: "turn-background", nodes: [{ id: "write", type: "agent", workflowCalls: [{ target: "memory/retrieve" }], ...node }] });
   assert.throws(build({ requiredCalls: ["memory/other"] }), /requiredCalls references undeclared workflowCalls target memory\/other/);
   assert.throws(build({ requiredCalls: ["memory/retrieve", "memory/retrieve"] }), /must not contain duplicate workflow references/);
   assert.throws(build({ requiredCalls: "memory/retrieve" }), /requiredCalls must be an array/);
   assert.throws(build({ requiredCalls: ["retrieve"] }), /must use module-id\/workflow-id/);
   assert.throws(() => normalizeWorkflowDefinition({
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: "foreground",
+    ownerModuleId: "test",
     kind: "turn-background",
     nodes: [{ id: "work", type: "code", requiredCalls: ["memory/retrieve"] }],
   }), /requiredCalls is supported only for agent and team nodes/);

@@ -43,10 +43,16 @@ LOCAL_TEMP = ROOT / "local-development-records" / "temp"
 FIXTURE = LOCAL_TEMP / "card-validation"
 SOURCE_FIXTURE = LOCAL_TEMP / "module-source-validation"
 MODULE_IDS = ["card-context-library", "narrative-memory", "local-scene-narrative",
-              "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation"]
-INTEGRATION = ROOT / "global-modules" / "world-narrative-coordinator" / "integration" / "workflows"
-PLACEHOLDERS = {"DIRECTOR_ENABLED_FOREGROUND_ID": "standard-rp",
-                "DIRECTOR_POST_WORKFLOW_ID": "director-post-turn"}
+              "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation", "narrative-controls"]
+DIRECTOR_MODULE_ID = "world-narrative-coordinator"
+TRIGGER_WORKFLOW_DEFAULTS = {
+    "director-archive-source-capture": "world-narrative-coordinator/director-post-turn",
+    "director-deep-wrapper": "world-narrative-coordinator/director-post-turn",
+    "director-opening-deep-wrapper": "world-narrative-coordinator/director-opening-bootstrap",
+    "director-post-turn": "narrative-controls/advanced-memory-rp",
+    "director-post-with-narratives": "narrative-controls/advanced-memory-rp",
+}
+INVALID_TRIGGER_WORKFLOW = "world-narrative-coordinator/missing-trigger-workflow"
 
 failures: list[str] = []
 
@@ -71,7 +77,39 @@ def write_json(path: Path, value) -> None:
 
 def module_source(module_id: str) -> Path:
     global_path = ROOT / "global-modules" / module_id
-    return global_path if global_path.is_dir() else ASSETS / module_id
+    if global_path.is_dir():
+        return global_path
+    if module_id == "card-context-library":
+        return ASSETS / "card-context-library"
+    raise SystemExit(f"missing shipped module source: {module_id}")
+
+
+def module_fixture_root(module_id: str) -> Path:
+    return FIXTURE / "features" / module_id
+
+
+def module_workflow_path(module_id: str, workflow_id: str) -> Path:
+    return module_fixture_root(module_id) / "workflows" / workflow_id / "workflow.json"
+
+
+def workflow_path(workflow_id: str) -> Path:
+    """Resolve a local workflow ID to its owning module's fixture path."""
+    if "/" in workflow_id:
+        module_id, local_id = workflow_id.split("/", 1)
+    elif workflow_id in {"standard-rp", "advanced-memory-rp", "compose-context"}:
+        module_id, local_id = "narrative-controls", workflow_id
+    elif workflow_id.startswith("narrative-memory-"):
+        module_id, local_id = "narrative-memory", workflow_id
+    elif workflow_id.startswith("director-") or workflow_id in {
+        "begin-deep-operation", "commit-deep-operation", "deep-director-planning",
+        "deep-director-team-planning", "finish-deep-operation", "materialize-guidance",
+        "post-director-update", "pre-director-update", "prepare-private-context",
+        "review-story-candidates",
+    }:
+        module_id, local_id = DIRECTOR_MODULE_ID, workflow_id
+    else:
+        raise KeyError(f"unknown fixture workflow owner: {workflow_id}")
+    return module_workflow_path(module_id, local_id)
 
 
 def run_cli(card: Path) -> list[str]:
@@ -111,7 +149,7 @@ def design_warnings(card: Path) -> list[str]:
 def build_fixture() -> None:
     if FIXTURE.exists():
         shutil.rmtree(FIXTURE)
-    for directory in ("features", "workflows", "source", "openings", "core", "context"):
+    for directory in ("features", "source", "openings", "core", "context"):
         (FIXTURE / directory).mkdir(parents=True)
 
     feature_modules, frontend_ids = [], []
@@ -120,9 +158,6 @@ def build_fixture() -> None:
         feature_modules.append(f"features/{module_id}/module.json")
         if load(FIXTURE / "features" / module_id / "module.json").get("frontendViewFile"):
             frontend_ids.append(module_id)
-
-    for directory in sorted(p for p in (ASSETS / "pi-rp-runtime" / "workflows").iterdir() if p.is_dir()):
-        shutil.copytree(directory, FIXTURE / "workflows" / directory.name)
 
     write_json(FIXTURE / "manifest.json", {
         "schema_version": 2, "id": "fixture-card", "name": "夹具卡", "cover": None,
@@ -135,7 +170,7 @@ def build_fixture() -> None:
     })
     write_json(FIXTURE / "settings.json", {
         "schemaVersion": 1, "cardId": "fixture-card",
-        "settings": {"activeWorkflowId": "standard-rp",
+        "settings": {"activeWorkflowId": "narrative-controls/standard-rp",
                      "featureModules": {"order": sorted(frontend_ids), "hidden": []}},
     })
     write_json(FIXTURE / "provenance.json", {"schema_version": 1, "source_units": [], "generated_passages": []})
@@ -148,35 +183,29 @@ def build_fixture() -> None:
     (FIXTURE / "unresolved.md").write_text("# 未决内容\n\n无。\n", encoding="utf-8")
     (FIXTURE / "conversion-report.md").write_text("# 转换报告\n\n夹具。\n", encoding="utf-8")
     for web_file in ("server.mjs", "public/index.html", "public/app.js", "public/markdown.js",
-                     "public/module-json.js", "public/styles.css"):
+                     "public/module-json.js", "public/prompt-controls.js", "public/styles.css"):
         target = FIXTURE / "web" / web_file
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("// fixture\n", encoding="utf-8")
 
-    # Card support scripts and prompts come from their single respective sources.
-    card_runtime = ASSETS / "card-runtime"
-    if card_runtime.is_dir():
-        shutil.copytree(card_runtime, FIXTURE, dirs_exist_ok=True)
-    shutil.copytree(ASSETS / "pi-rp-runtime" / "prompts", FIXTURE / "prompts", dirs_exist_ok=True)
-    for module_id in MODULE_IDS:
-        module_prompts = module_source(module_id) / "prompts"
-        if module_prompts.is_dir():
-            shutil.copytree(module_prompts, FIXTURE / "prompts" / "modules" / module_id)
-            shutil.rmtree(FIXTURE / "features" / module_id / "prompts")
+    # Each shipped package is installed intact below features/<module-id>. This keeps its
+    # prompts, Agents, workflows, and runtime files owned by the module that declares them.
 
 
 def install_integration(replace: bool) -> None:
-    for source in sorted(p for p in INTEGRATION.iterdir() if p.is_dir()):
-        target = FIXTURE / "workflows" / source.name
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(source, target)
-        if replace:
-            path = target / "workflow.json"
-            text = path.read_text(encoding="utf-8")
-            for token, value in PLACEHOLDERS.items():
-                text = text.replace(token, value)
-            path.write_text(text, encoding="utf-8")
+    """Exercise unresolved trigger references without flattening module workflows.
+
+    The shipped director workflows now live in the coordinator module and carry executable
+    defaults. The old integration templates used placeholders; model that negative case by
+    deliberately installing an invalid qualified target, then restore the real defaults.
+    """
+    for workflow_id, default in TRIGGER_WORKFLOW_DEFAULTS.items():
+        path = module_workflow_path(DIRECTOR_MODULE_ID, workflow_id)
+        document = load(path)
+        trigger = document.get("trigger")
+        if isinstance(trigger, dict) and trigger.get("type") == "after-workflow":
+            trigger["workflowId"] = default if replace else INVALID_TRIGGER_WORKFLOW
+        write_json(path, document)
 
 
 def build_source_fixture() -> list[str]:
@@ -199,7 +228,7 @@ def source_errors(paths: list[str]) -> list[str]:
 
 def count_advanced_bindings() -> int:
     total = 0
-    for path in sorted((FIXTURE / "workflows").glob("*/workflow.json")):
+    for path in sorted((FIXTURE / "features").glob("*/workflows/*/workflow.json")):
         for node in load(path).get("nodes", []):
             for binding in node.get("workflowCalls", []) or []:
                 if isinstance(binding, dict) and ({"maxCalls", "documentSnapshotInput"} & set(binding)):
@@ -209,14 +238,15 @@ def count_advanced_bindings() -> int:
 
 print("== building fixture from shipped assets ==")
 build_fixture()
-print(f"modules={len(MODULE_IDS)} workflows={len(list((FIXTURE / 'workflows').iterdir()))}")
+workflow_count = sum(len(load(module_fixture_root(module_id) / "module.json").get("workflowFiles", [])) for module_id in MODULE_IDS)
+print(f"modules={len(MODULE_IDS)} workflows={workflow_count}")
 
 print()
 print("== shipped templates must validate cleanly ==")
 baseline = run_cli(FIXTURE)
 report("complete fixture card has no unexpected errors", baseline)
 
-prompt_path = FIXTURE / "prompts" / "modules" / "comfy-image-generation" / "agents" / "image-prompt-writer.md"
+prompt_path = FIXTURE / "features" / "comfy-image-generation" / "prompts" / "agents" / "image-prompt-writer.md"
 prompt_stash = FIXTURE / ".stash-image-prompt-writer.md"
 shutil.move(str(prompt_path), str(prompt_stash))
 report("negative: a missing card-owned promptFile target must fail",
@@ -240,16 +270,22 @@ foreground_total = sorted(kind_id for kind_id, kind in V.workflow_kinds(FIXTURE)
 print(f"        （夹具含 {len(foreground_total)} 个前台工作流：{foreground_total}）")
 
 broken = json.loads(json.dumps(settings_original))
-broken["settings"]["activeWorkflowId"] = "narrative-memory-archive"
+broken["settings"]["activeWorkflowId"] = "narrative-memory/narrative-memory-archive"
 write_json(settings_path, broken)
 report("negative: a non-foreground target must fail",
        [e for e in run_cli(FIXTURE) if "activeWorkflowId" in e], expect_empty=False)
 
-alt = FIXTURE / "workflows" / "fixture-alt"
-shutil.copytree(FIXTURE / "workflows" / "standard-rp", alt)
+alt = FIXTURE / "features" / "narrative-controls" / "workflows" / "fixture-alt"
+shutil.copytree(FIXTURE / "features" / "narrative-controls" / "workflows" / "standard-rp", alt)
 alt_json = load(alt / "workflow.json")
 alt_json["id"], alt_json["title"] = "fixture-alt", "夹具备用前台"
 write_json(alt / "workflow.json", alt_json)
+
+narrative_controls_manifest_path = FIXTURE / "features" / "narrative-controls" / "module.json"
+narrative_controls_manifest_original = narrative_controls_manifest_path.read_text(encoding="utf-8")
+narrative_controls_manifest = load(narrative_controls_manifest_path)
+narrative_controls_manifest["workflowFiles"].append("workflows/fixture-alt/workflow.json")
+write_json(narrative_controls_manifest_path, narrative_controls_manifest)
 
 broken = json.loads(json.dumps(settings_original))
 broken["settings"].pop("activeWorkflowId", None)
@@ -259,10 +295,15 @@ report("negative: multiple foreground workflows without the field must fail",
 
 shutil.rmtree(alt)
 stash = FIXTURE / ".stash-advanced-memory-rp"
-shutil.move(str(FIXTURE / "workflows" / "advanced-memory-rp"), str(stash))
+narrative_controls_manifest = load(narrative_controls_manifest_path)
+narrative_controls_manifest["workflowFiles"].remove("workflows/fixture-alt/workflow.json")
+narrative_controls_manifest["workflowFiles"].remove("workflows/advanced-memory-rp/workflow.json")
+write_json(narrative_controls_manifest_path, narrative_controls_manifest)
+shutil.move(str(FIXTURE / "features" / "narrative-controls" / "workflows" / "advanced-memory-rp"), str(stash))
 report("positive: a single foreground workflow needs no explicit field",
        [e for e in run_cli(FIXTURE) if "activeWorkflowId" in e])
-shutil.move(str(stash), str(FIXTURE / "workflows" / "advanced-memory-rp"))
+shutil.move(str(stash), str(FIXTURE / "features" / "narrative-controls" / "workflows" / "advanced-memory-rp"))
+narrative_controls_manifest_path.write_text(narrative_controls_manifest_original, encoding="utf-8")
 write_json(settings_path, settings_original)
 
 print()
@@ -281,7 +322,7 @@ print("== trigger documents must resolve against the source workflow's outputs =
 # RC-06: the converted wrapper kept `metadata.triggerInputs: ["story-context"]` after its post
 # -director integration was swapped for one whose review node produced no such output, so the whole
 # wrapper normalized as invalid. The reference is structurally checkable at conversion time.
-deep_wrapper = FIXTURE / "workflows" / "director-deep-wrapper" / "workflow.json"
+deep_wrapper = module_workflow_path(DIRECTOR_MODULE_ID, "director-deep-wrapper")
 deep_original = deep_wrapper.read_text(encoding="utf-8")
 deep_document = json.loads(deep_original)
 report("positive: the shipped deep wrapper resolves its trigger document",
@@ -326,11 +367,11 @@ report("negative: a node reading an unmapped trigger input must fail",
 # delegation plan. Re-pointing the wrapper at it — the conversion mistake that produced RC-06 —
 # keeps a syntactically valid mapping that can never resolve, so it must be rejected.
 broken = json.loads(deep_original)
-broken["trigger"]["workflowId"] = "director-post-with-narratives"
+broken["trigger"]["workflowId"] = "world-narrative-coordinator/director-post-with-narratives"
 broken["trigger"]["documents"]["story-context"] = {"fromNode": "post-director", "output": "story-context"}
 write_json(deep_wrapper, broken)
 report("negative: pointing the wrapper at an integration without that output must fail",
-       [e for e in run_cli(FIXTURE) if "trigger.documents.story-context.output must reference an output declared by director-post-with-narratives/post-director" in e],
+       [e for e in run_cli(FIXTURE) if "trigger.documents.story-context.output must reference an output declared by world-narrative-coordinator/director-post-with-narratives/post-director" in e],
        expect_empty=False)
 deep_wrapper.write_text(deep_original, encoding="utf-8")
 report("positive: restoring the shipped wrapper clears the trigger-document findings",
@@ -359,7 +400,7 @@ DEEP_RUNTIME_CALLS = {
     ],
 }
 for wrapper_id, expected in DEEP_RUNTIME_CALLS.items():
-    wrapped = load(FIXTURE / "workflows" / wrapper_id / "workflow.json")
+    wrapped = load(module_workflow_path(DIRECTOR_MODULE_ID, wrapper_id))
     declared = wrapped["nodes"][0].get("workflowCalls", [])
     missing = [target for target in expected if target not in declared]
     report(f"{wrapper_id} authorizes every call its script makes", missing)
@@ -372,7 +413,7 @@ print("== nodes that write a record must be able to read the whole record ==")
 # produce a valid update: the batch is rejected by the record schema, so the failure the node was
 # recording is lost and the operation stays open. This is the shape of the run-3 stuck-operation bug.
 for wrapper_id in DEEP_RUNTIME_CALLS:
-    wrapper_path = FIXTURE / "workflows" / wrapper_id / "workflow.json"
+    wrapper_path = module_workflow_path(DIRECTOR_MODULE_ID, wrapper_id)
     wrapper_original = wrapper_path.read_text(encoding="utf-8")
     narrowed = load(wrapper_path)
     for node in narrowed["nodes"]:
@@ -393,7 +434,7 @@ print("== a node that reads a staged trigger document must declare it ==")
 # only for the ids the node declares. `dispatch-story-candidate.mjs` reads `trigger/turn-context`
 # unconditionally, so dropping the declaration reproduces the real turn-1 dispatch failure
 # (`ENOENT … dispatch-local/trigger/turn-context`) at conversion time instead of during play.
-post_workflow = FIXTURE / "workflows" / "director-post-with-narratives" / "workflow.json"
+post_workflow = module_workflow_path(DIRECTOR_MODULE_ID, "director-post-with-narratives")
 post_original = post_workflow.read_text(encoding="utf-8")
 undeclared = load(post_workflow)
 for node in undeclared["nodes"]:
@@ -461,10 +502,10 @@ report("positive: restored module workflows report no call errors",
 
 print()
 print("== code node entries must exist inside the card ==")
-installed = FIXTURE / "runtime" / "workflow" / "prepare-recent-narrative-stories.mjs"
+installed = FIXTURE / "features" / "narrative-controls" / "runtime" / "prepare-recent-narrative-stories.mjs"
 if not installed.is_file():
-    failures.append("fixture did not install the card-runtime asset")
-    print("[FAIL] fixture did not install the card-runtime asset")
+    failures.append("fixture did not install the narrative-controls runtime asset")
+    print("[FAIL] fixture did not install the narrative-controls runtime asset")
 else:
     stash = FIXTURE / ".stash-entry.mjs"
     shutil.move(str(installed), str(stash))
@@ -500,8 +541,8 @@ target_workflow.write_text(target_original, encoding="utf-8")
 
 source_entry = SOURCE_FIXTURE / "narrative-memory" / "workflows" / "narrative-memory-range-repair" / "workflow.json"
 source_entry_original = source_entry.read_text(encoding="utf-8")
-source_entry.write_text(source_entry_original.replace("features/narrative-memory/runtime/workflow/prepare-range-repair.mjs",
-                                                      "features/narrative-memory/runtime/workflow/prepare-range-repair-missing.mjs"),
+source_entry.write_text(source_entry_original.replace("runtime/workflow/prepare-range-repair.mjs",
+                                                      "runtime/workflow/prepare-range-repair-missing.mjs"),
                         encoding="utf-8")
 report("negative: a module entry file missing from its own package must fail",
        [e for e in source_errors(source_paths) if "metadata.entryFile" in e], expect_empty=False)
@@ -559,7 +600,7 @@ report("the shipped card emits only the known fixture warning",
 
 def set_node_field(workflow_name: str, node_id: str, field: str, value) -> str:
     """Return the original text of one fixture workflow with a node field replaced."""
-    path = FIXTURE / "workflows" / workflow_name / "workflow.json"
+    path = workflow_path(workflow_name)
     original = path.read_text(encoding="utf-8")
     document = json.loads(original)
     for node in document["nodes"]:
@@ -573,7 +614,7 @@ def set_node_field(workflow_name: str, node_id: str, field: str, value) -> str:
 
 
 def restore(workflow_name: str, original: str) -> None:
-    (FIXTURE / "workflows" / workflow_name / "workflow.json").write_text(original, encoding="utf-8")
+    workflow_path(workflow_name).write_text(original, encoding="utf-8")
 
 
 standard_original = set_node_field("standard-rp", "prepare-card-context", "type", "code")
@@ -587,7 +628,7 @@ report("positive: the shipped workflow reports no design warning", design_warnin
 manifest_path = FIXTURE / "manifest.json"
 manifest_original = load(manifest_path)
 declared = json.loads(json.dumps(manifest_original))
-declared["design_invariants"] = {"foregroundWorkflow": "standard-rp", "requiresCardContextResources": True}
+declared["design_invariants"] = {"foregroundWorkflow": "narrative-controls/standard-rp", "requiresCardContextResources": True}
 write_json(manifest_path, declared)
 report("positive: a declared invariant the card satisfies reports no error", run_cli(FIXTURE))
 
@@ -606,7 +647,7 @@ report("positive: the violated convention is not an error while undeclared", run
 
 declared = json.loads(json.dumps(manifest_original))
 declared["design_invariants"] = {
-    "foregroundWorkflow": "advanced-memory-rp",
+    "foregroundWorkflow": "narrative-controls/advanced-memory-rp",
     "requiresEffectiveMemoryTimeline": True,
     "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"],
 }
@@ -624,13 +665,13 @@ report("negative: a declared Agent callable requirement fails when the narrative
 restore("advanced-memory-rp", advanced_original)
 
 declared = json.loads(json.dumps(manifest_original))
-declared["design_invariants"] = {"foregroundWorkflow": "standard-rp", "requiresNarativeAgentCallable": []}
+declared["design_invariants"] = {"foregroundWorkflow": "narrative-controls/standard-rp", "requiresNarativeAgentCallable": []}
 write_json(manifest_path, declared)
 report("negative: an unknown invariant field must fail",
        [e for e in run_cli(FIXTURE) if "design_invariants" in e], expect_empty=False)
 
 declared = json.loads(json.dumps(manifest_original))
-declared["design_invariants"] = {"foregroundWorkflow": "no-such-workflow"}
+declared["design_invariants"] = {"foregroundWorkflow": "narrative-controls/no-such-workflow"}
 write_json(manifest_path, declared)
 report("negative: an invariant naming an unknown workflow must fail",
        [e for e in run_cli(FIXTURE) if "design_invariants.foregroundWorkflow" in e], expect_empty=False)
@@ -696,6 +737,61 @@ report("the coupling the README claims is recorded in the shipped sidecars",
 
 print()
 print("== frontend region types and call bindings ==")
+
+director_controls_root = FIXTURE / "features" / "world-narrative-coordinator"
+director_controls_path = director_controls_root / "controls.json"
+director_controls = load(director_controls_path)
+broken_director_controls = json.loads(json.dumps(director_controls))
+broken_director_controls["delivery"]["agents"].append("world-narrative-coordinator/not-an-installed-agent")
+write_json(director_controls_path, broken_director_controls)
+report("negative: director prompt recipients must be real installed Agents",
+       [e for e in run_cli(FIXTURE) if "unknown Agent" in e], expect_empty=False)
+write_json(director_controls_path, director_controls)
+director_option_path = director_controls_root / "documents" / "options" / "protagonist-treatment" / "ordinary.md"
+director_option = director_option_path.read_text(encoding="utf-8")
+director_option_path.write_text(director_option + "\n<!-- director-only: nonexistent-agent -->\nprivate text\n", encoding="utf-8")
+report("negative: invalid director audience annotations must fail before play",
+       [e for e in run_cli(FIXTURE) if "director-only" in e], expect_empty=False)
+director_option_path.write_text(director_option, encoding="utf-8")
+
+controls_module = FIXTURE / "features" / "narrative-controls"
+controls_source_path = controls_module / "controls.json"
+controls_source = load(controls_source_path)
+broken_controls_source = json.loads(json.dumps(controls_source))
+next(group for group in broken_controls_source["groups"] if group["id"] == "input-mode")["allowCustom"] = "false"
+write_json(controls_source_path, broken_controls_source)
+report("negative: allowCustom must be a boolean",
+       [e for e in run_cli(FIXTURE) if "allowCustom must be boolean" in e], expect_empty=False)
+write_json(controls_source_path, controls_source)
+controls_view_path = controls_module / "frontend-view.json"
+controls_view = load(controls_view_path)
+broken_controls = json.loads(json.dumps(controls_view))
+broken_controls["regions"][0]["controlsFile"] = "missing-controls.json"
+write_json(controls_view_path, broken_controls)
+report("negative: a missing prompt-controls source must fail",
+       [e for e in run_cli(FIXTURE) if "missing-controls.json" in e], expect_empty=False)
+write_json(controls_view_path, controls_view)
+
+optional_settings = load(FIXTURE / "settings.json")
+without_controls_settings = json.loads(json.dumps(optional_settings))
+without_controls_settings["settings"]["featureModules"]["hidden"] = ["narrative-controls"]
+write_json(FIXTURE / "settings.json", without_controls_settings)
+saved_workflows = {}
+for workflow_id in ("standard-rp", "advanced-memory-rp"):
+    path = workflow_path(workflow_id)
+    saved_workflows[workflow_id] = load(path)
+    trimmed = json.loads(json.dumps(saved_workflows[workflow_id]))
+    trimmed["nodes"] = [node for node in trimmed["nodes"] if node["id"] != "prepare-creative-context"]
+    for node in trimmed["nodes"]:
+        node["dependsOn"] = ["prepare-card-context" if item == "prepare-creative-context" else item for item in node.get("dependsOn", [])]
+        if node.get("context", {}).get("fromNodes"):
+            node["context"]["fromNodes"] = ["prepare-card-context" if item == "prepare-creative-context" else item for item in node["context"]["fromNodes"]]
+    write_json(path, trimmed)
+report("positive: hiding the narrative frontend and trimming optional prompt composition keeps owned workflows valid", run_cli(FIXTURE))
+write_json(FIXTURE / "settings.json", optional_settings)
+for workflow_id, original in saved_workflows.items():
+    workflow_path(workflow_id).write_text(json.dumps(original, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 for module_id in ("local-scene-narrative", "world-scope-narrative"):
     module_root = FIXTURE / "features" / module_id
     errors: list[str] = []

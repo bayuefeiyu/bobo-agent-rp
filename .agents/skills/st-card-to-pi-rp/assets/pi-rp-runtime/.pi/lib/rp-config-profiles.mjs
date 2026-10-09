@@ -77,8 +77,8 @@ export function normalizeConfigProfile(value, { scope = null } = {}) {
     workflowOverrides: cleanObject(value.workflowOverrides),
     moduleOverrides: cleanObject(value.moduleOverrides),
     compatibility: {
-      moduleProtocol: Number.isSafeInteger(value.compatibility?.moduleProtocol) ? value.compatibility.moduleProtocol : 6,
-      workflowProtocol: Number.isSafeInteger(value.compatibility?.workflowProtocol) ? value.compatibility.workflowProtocol : 3,
+      moduleProtocol: Number.isSafeInteger(value.compatibility?.moduleProtocol) ? value.compatibility.moduleProtocol : 7,
+      workflowProtocol: Number.isSafeInteger(value.compatibility?.workflowProtocol) ? value.compatibility.workflowProtocol : 4,
     },
   };
 }
@@ -123,7 +123,7 @@ function emptyProfile(scope, id, name) {
     agentOverrides: {},
     workflowOverrides: {},
     moduleOverrides: {},
-    compatibility: { moduleProtocol: 6, workflowProtocol: 3 },
+    compatibility: { moduleProtocol: 7, workflowProtocol: 4 },
   }, { scope });
 }
 

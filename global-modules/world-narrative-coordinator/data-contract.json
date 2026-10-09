@@ -2408,6 +2408,37 @@
           ]
         }
       }
+    },
+    "prompt-preferences": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/prompt-preferences/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "director.prompt-preferences": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/prompt-preferences.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data",
+                  "label": "settings"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        }
+      }
     }
   },
   "capabilities": {
@@ -2587,6 +2618,28 @@
       ],
       "actions": [
         "query"
+      ],
+      "views": [
+        "frontend"
+      ]
+    },
+    "director.preferences.read": {
+      "collections": [
+        "prompt-preferences"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "frontend"
+      ]
+    },
+    "director.preferences.update": {
+      "collections": [
+        "prompt-preferences"
+      ],
+      "actions": [
+        "update"
       ],
       "views": [
         "frontend"

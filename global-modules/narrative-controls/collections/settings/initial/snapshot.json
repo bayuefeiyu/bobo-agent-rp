@@ -1,0 +1,49 @@
+[
+  {
+    "protocolVersion": 2,
+    "id": "narrative-preferences",
+    "moduleId": "narrative-controls",
+    "collectionId": "settings",
+    "recordType": "narrative.preferences",
+    "dataSchemaVersion": 1,
+    "sequence": 0,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-10-08T00:00:00.000Z",
+    "updatedAt": "2026-10-08T00:00:00.000Z",
+    "binding": {
+      "messageId": null,
+      "turn": 0
+    },
+    "data": {
+      "selections": {
+        "pacing": {
+          "optionId": "none",
+          "customText": ""
+        },
+        "player-speech": {
+          "optionId": "none",
+          "customText": ""
+        },
+        "other-requirements": {
+          "optionId": "default",
+          "customText": ""
+        },
+        "word-count": {
+          "optionId": "800-1500",
+          "customText": ""
+        },
+        "output-language": {
+          "optionId": "chinese",
+          "customText": ""
+        },
+        "input-mode": {
+          "optionId": "partial-expansion",
+          "customText": ""
+        }
+      }
+    },
+    "note": null,
+    "provenance": {}
+  }
+]

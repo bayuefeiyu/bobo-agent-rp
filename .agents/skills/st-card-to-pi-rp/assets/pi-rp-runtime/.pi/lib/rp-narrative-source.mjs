@@ -6,13 +6,19 @@ function safeId(value) {
   return typeof value === "string" && SAFE_ID.test(value) ? value : null;
 }
 
+function producerReference(value) {
+  if (safeId(value)) return value;
+  const parts = typeof value === "string" ? value.split("/") : [];
+  return parts.length === 2 && parts.every(safeId) ? value : null;
+}
+
 export function normalizeNarrativeSource(value, fallback = {}) {
   const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const layer = input.layer ?? fallback.layer ?? "unspecified";
   const producerKind = input.producerKind ?? fallback.producerKind ?? "unknown";
   if (!LAYERS.has(layer)) throw new Error(`Unsupported narrative source layer: ${String(layer)}.`);
   if (!PRODUCERS.has(producerKind)) throw new Error(`Unsupported narrative source producer: ${String(producerKind)}.`);
-  const producerId = input.producerId === null || input.producerId === undefined ? safeId(fallback.producerId) : safeId(input.producerId);
+  const producerId = input.producerId === null || input.producerId === undefined ? producerReference(fallback.producerId) : producerReference(input.producerId);
   const characterId = input.characterId === null || input.characterId === undefined ? safeId(fallback.characterId) : safeId(input.characterId);
   if (input.producerId !== null && input.producerId !== undefined && !producerId) throw new Error("Narrative source producerId must be a safe ID or null.");
   if (input.characterId !== null && input.characterId !== undefined && !characterId) throw new Error("Narrative source characterId must be a safe ID or null.");

@@ -99,10 +99,10 @@ test("card-local server only transports view state and player input", async () =
     discoverModels: async () => ({ models: ["test-model"] }),
     testModel: async () => ({ ok: true, elapsedMs: 1, reply: "hello" }),
     deleteModel: async modelId => { savedModel = null; return { deleted: modelId }; },
-    listAgents: async () => ({ agents: [{ effective: { schemaVersion: 1, id: "writer", name: "Writer", defaultModelId: "pi:current" }, base: {}, override: null, overridden: false }] }),
+    listAgents: async () => ({ agents: [{ effective: { schemaVersion: 1, id: "demo-module/writer", name: "Writer", defaultModelId: "pi:current" }, base: {}, override: null, overridden: false }] }),
     saveAgent: async (agent, scope) => ({ effective: agent, scope }),
     restoreAgent: async agentId => ({ effective: { id: agentId }, overridden: false }),
-    listWorkflows: async () => ({ activeWorkflowId: "standard", workflows: [{ id: "standard", title: "Standard", kind: "foreground", nodes: [] }] }),
+    listWorkflows: async () => ({ activeWorkflowId: "demo-module/standard", workflows: [{ id: "demo-module/standard", ownerModuleId: "demo-module", title: "Standard", kind: "foreground", nodes: [] }] }),
     listWorkflowRuns: async () => ({ runs: [] }),
     openWorkflowNodeProcessRecord: async (runId, nodeId) => {
       openedProcessRecord = { runId, nodeId };
@@ -207,13 +207,16 @@ test("card-local server only transports view state and player input", async () =
     assert.equal(pageResponse.headers.get("cache-control"), "no-store");
     const page = await pageResponse.text();
     assert.match(page, /id="tab-profiles"/);
-    assert.match(page, /id="tab-api"[^>]*hidden/);
-    assert.match(page, /id="tab-agents"[^>]*hidden/);
+    assert.doesNotMatch(page, /id="tab-api"/);
+    assert.doesNotMatch(page, /id="tab-agents"/);
     assert.match(page, /id="panel-profiles"/);
     assert.match(page, /src="\/config\.js\?v=4"/);
 
-    const legacyConfigPage = await fetch(`${base}/config.html`).then(response => response.text());
-    assert.match(legacyConfigPage, /\?panel=profiles/);
+    // S6：旧配置入口已删除。命名配置方案是唯一入口，源码不再生成旧 URL，
+    // 服务器也不再提供兼容重定向——因此旧地址必须按"不存在"处理。
+    const legacyConfigResponse = await fetch(`${base}/config.html`);
+    assert.equal(legacyConfigResponse.status, 404);
+    assert.deepEqual(await legacyConfigResponse.json(), { error: "Not found." });
 
     const card = await fetch(`${base}/api/card`).then(response => response.json());
     assert.equal(card.name, "沈月");
@@ -268,12 +271,37 @@ test("card-local server only transports view state and player input", async () =
     assert.equal((await imageRun.json()).runId, "image-run-1");
 
     const modelSaveResponse = await fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
-    assert.equal(modelSaveResponse.status, 200);
-    assert.equal((await fetch(`${base}/api/models`).then(response => response.json())).profiles[0].hasApiKey, true);
+    assert.equal(modelSaveResponse.status, 404);
+    assert.deepEqual((await fetch(`${base}/api/models`).then(response => response.json())).profiles, []);
     assert.deepEqual((await fetch(`${base}/api/models/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json())).models, ["test-model"]);
     assert.equal((await fetch(`${base}/api/models/test`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelId: "test" }) }).then(response => response.json())).reply, "hello");
-    assert.equal((await fetch(`${base}/api/agents`).then(response => response.json())).agents[0].effective.id, "writer");
-    assert.equal((await fetch(`${base}/api/workflows`).then(response => response.json())).activeWorkflowId, "standard");
+    assert.equal((await fetch(`${base}/api/agents`).then(response => response.json())).agents[0].effective.id, "demo-module/writer");
+    assert.equal((await fetch(`${base}/api/workflows`).then(response => response.json())).activeWorkflowId, "demo-module/standard");
+    const fullAgentId = "demo-module/writer";
+    const savedAgent = await fetch(`${base}/api/agents/${encodeURIComponent(fullAgentId)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "ignored", name: "Writer" }),
+    });
+    assert.equal(savedAgent.status, 404);
+    const rejectedBareAgent = await fetch(`${base}/api/agents/writer`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Writer" }),
+    });
+    assert.equal(rejectedBareAgent.status, 404);
+    const restoredAgent = await fetch(`${base}/api/agents/${encodeURIComponent(fullAgentId)}/restore`, { method: "POST" });
+    assert.equal(restoredAgent.status, 404);
+    const fullWorkflowId = "demo-module/standard";
+    const activatedWorkflow = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(activatedWorkflow.status, 202);
+    assert.equal((await activatedWorkflow.json()).activated, fullWorkflowId);
+    const rejectedBareWorkflow = await fetch(`${base}/api/workflows/standard/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(rejectedBareWorkflow.status, 400);
+    const bindingResponse = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/nodes/story/binding`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: fullAgentId }) });
+    assert.equal(bindingResponse.status, 404);
+    const triggerResponse = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/trigger`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "manual" }) });
+    assert.equal(triggerResponse.status, 404);
     assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
     const openedProcess = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
     assert.equal(openedProcess.opened, true);
@@ -291,8 +319,9 @@ test("card-local server only transports view state and player input", async () =
     assert.deepEqual(recoveredImage, { accepted: true, requestId: "image-request-one" });
     const skippedRun = await fetch(`${base}/api/workflow-runs/run-1/skip`, { method: "POST" }).then(response => response.json());
     assert.equal(skippedRun.status, "skipped");
-    const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) }).then(response => response.json());
-    assert.equal(savedPolicy.maxConcurrency, 8);
+    const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) });
+    assert.equal(savedPolicy.status, 404);
+    assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
 
     const cards = await fetch(`${base}/api/cards`).then(response => response.json());
     assert.equal(cards[0].name, "沈月");

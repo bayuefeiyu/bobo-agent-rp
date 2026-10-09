@@ -1,5 +1,21 @@
 {
-  "schemaVersion": 1, "id": "world-narrative-maintainer", "name": "世界叙事数据维护 Agent", "description": "仅在用户手动启动后整理导演私有数据。",
-  "promptFile": "prompts/modules/world-narrative-coordinator/agents/world-narrative-maintainer.md",
-  "tools": ["edit", "write", "read", "rp_data_query", "rp_data_get"], "contextPermissions": ["workspace:node", "workflow:scoped-output"], "outputMode": "json", "defaultModelId": "pi:current"
+  "schemaVersion": 1,
+  "id": "world-narrative-maintainer",
+  "name": "世界叙事数据维护 Agent",
+  "description": "仅在用户手动启动后整理导演私有数据。",
+  "promptFile": "prompts/agents/world-narrative-maintainer.md",
+  "tools": [
+    "edit",
+    "write",
+    "read",
+    "rp_data_query",
+    "rp_data_get"
+  ],
+  "contextPermissions": [
+    "workspace:node",
+    "workflow:scoped-output"
+  ],
+  "outputMode": "json",
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-narrative-coordinator"
 }

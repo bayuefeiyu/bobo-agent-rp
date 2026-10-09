@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 7,
+  "id": "narrative-controls",
+  "moduleKind": "hybrid",
+  "basedOn": null,
+  "title": "正文",
+  "description": "管理正文创作 Agent、前台工作流和可切换创作要求，只交付当前选中的提示词。",
+  "surface": "frontend",
+  "contextOrder": 100,
+  "displayOrder": -1000,
+  "dataContractFile": "data-contract.json",
+  "resourceCatalogFile": "catalog.json",
+  "frontendViewFile": "frontend-view.json",
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": [
+    "workflows/advanced-memory-rp/workflow.json",
+    "workflows/compose-context/workflow.json",
+    "workflows/standard-rp/workflow.json"
+  ],
+  "agentFiles": [
+    "agents/narrative-writer/agent.json"
+  ]
+}

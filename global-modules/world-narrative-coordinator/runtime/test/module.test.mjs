@@ -22,8 +22,8 @@ import { execute as commitDeepOperation } from "../workflow/commit-deep-operatio
 import { execute as finishDeepOperation } from "../workflow/finish-deep-operation.mjs";
 import { buildAgentChangeBatch } from "../lib/agent-change-batch.mjs";
 import { applyArchiveContentVersions } from "../lib/archive-content-version.mjs";
-import { execute as captureArchiveOutbox } from "../../integration/runtime/capture-archive-outbox.mjs";
-import { execute as runDeepIfNeeded } from "../../integration/runtime/run-deep-if-needed.mjs";
+import { execute as captureArchiveOutbox } from "../capture-archive-outbox.mjs";
+import { execute as runDeepIfNeeded } from "../run-deep-if-needed.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -45,7 +45,7 @@ async function fixture() {
 test("package, contract, workflows, schemas, and initial records normalize", async () => {
   normalizeFeatureModuleManifest(JSON.parse(await readFile(resolve(moduleRoot, "module.json"), "utf8")));
   const { contract, store } = await fixture();
-  assert.deepEqual(Object.keys(contract.collections), ["private-state", "deep-workbench", "reference-library", "archive-outbox", "health-dashboard", "settings"]);
+  assert.deepEqual(Object.keys(contract.collections), ["private-state", "deep-workbench", "reference-library", "archive-outbox", "health-dashboard", "settings", "prompt-preferences"]);
   for (const directory of await readdir(resolve(moduleRoot, "workflows"))) {
     normalizeWorkflowDefinition(JSON.parse(await readFile(resolve(moduleRoot, "workflows", directory, "workflow.json"), "utf8")));
   }

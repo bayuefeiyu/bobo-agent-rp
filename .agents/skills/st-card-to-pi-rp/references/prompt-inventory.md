@@ -7,9 +7,11 @@
 ## 维护规则
 
 - 项目提供的 Agent 与 Agent／team 节点都以 `promptFile` 指向的 Markdown 为唯一正文来源；JSON 不重复保存正文。
-- 运行时继续支持旧卡的内联 `prompt`，但新定义不要同时填写 `prompt` 与 `promptFile`。
-- `assets/pi-rp-runtime/prompts/` 会进入新卡；`assets/prompt-templates/` 只供转卡时选取，不会被打包器整目录复制。
-- 模块提示词由所属 `global-modules/<module-id>/prompts/` 维护。导入时复制到卡片 `prompts/modules/<module-id>/`；选中模块并复制进卡后，副本归该卡所有。
+- 新定义必须使用 `promptFile`，不保留旧的内联 `prompt` 兼容路径，也不同时填写两种来源。
+- `assets/pi-rp-runtime/prompts/` 只提供卡片公共层的 system、tools、model heads/tails、prefix、tail 和其他 common prompts；`assets/prompt-templates/` 只供转卡时选取，不会被打包器整目录复制。
+- 模块提示词由所属 `global-modules/<module-id>/prompts/` 维护。选中模块后完整复制到 `features/<module-id>/`，`promptFile` 继续使用模块相对路径；不把模块提示词拆到卡片根 `prompts/`、`agents/` 或 `workflows/`。
+- 每个模块 schema 7 manifest 都以 `agentFiles` 和 `workflowFiles` 登记全部自有组件；工作流 schema 4 声明 `ownerModuleId`，Agent、工作流和触发器引用使用全限定 `module-id/local-id`。
+- 模块运行时组件也随模块完整复制到 `features/<module-id>/runtime/`；代码节点的 `entryFile` 是模块相对路径，公共运行时只承载 engine、tools、system、model heads/tails 和 common prompts。
 
 ## Pi RP 通用运行时
 
@@ -23,18 +25,18 @@
 
 以上路径均相对 `.agents/skills/st-card-to-pi-rp/`。
 
-## 通用 Agent
+## 正文模块 Agent
 
 | 类别 | Agent | 提示词正文 | Agent 定义 |
 | --- | --- | --- | --- |
-| 创作类 | 正文创作 Agent | `assets/pi-rp-runtime/prompts/agents/narrative-writer.md` | `assets/pi-rp-runtime/agents/narrative-writer/agent.json` |
+| 创作类 | 正文创作 Agent | `global-modules/narrative-controls/prompts/agents/narrative-writer.md` | `global-modules/narrative-controls/agents/narrative-writer/agent.json` |
 
-## 通用工作流节点
+## 正文模块工作流节点
 
 | 类别 | 工作流／节点 | 提示词正文 | 工作流定义 |
 | --- | --- | --- | --- |
-| 创作类 | `standard-rp/write-narrative` | `assets/pi-rp-runtime/prompts/workflows/standard-rp/write-narrative.md` | `assets/pi-rp-runtime/workflows/standard-rp/workflow.json` |
-| 创作类 | `advanced-memory-rp/write-narrative` | `assets/pi-rp-runtime/prompts/workflows/advanced-memory-rp/write-narrative.md` | `assets/pi-rp-runtime/workflows/advanced-memory-rp/workflow.json` |
+| 创作类 | `narrative-controls/standard-rp/write-narrative` | `global-modules/narrative-controls/prompts/workflows/standard-rp/write-narrative.md` | `global-modules/narrative-controls/workflows/standard-rp/workflow.json` |
+| 创作类 | `narrative-controls/advanced-memory-rp/write-narrative` | `global-modules/narrative-controls/prompts/workflows/advanced-memory-rp/write-narrative.md` | `global-modules/narrative-controls/workflows/advanced-memory-rp/workflow.json` |
 
 没有 `prompt` 或 `promptFile` 的代码、调用、返回和结束节点不在此表中。
 
@@ -60,10 +62,10 @@
 
 | Agent | 提示词正文 |
 | --- | --- |
-| 叙事记忆检索 Agent | `narrative-memory-retriever.md` |
-| 叙事记忆维护 Agent | `narrative-memory-maintainer.md` |
-| 叙事记忆事件压缩 Agent | `narrative-memory-compressor.md` |
-| 叙事记忆归档 Agent | `narrative-memory-archive-editor.md` |
+| 叙事记忆检索 Agent | `global-modules/narrative-memory/prompts/agents/narrative-memory-retriever.md` |
+| 叙事记忆维护 Agent | `global-modules/narrative-memory/prompts/agents/narrative-memory-maintainer.md` |
+| 叙事记忆事件压缩 Agent | `global-modules/narrative-memory/prompts/agents/narrative-memory-compressor.md` |
+| 叙事记忆归档 Agent | `global-modules/narrative-memory/prompts/agents/narrative-memory-archive-editor.md` |
 
 节点任务位于 `global-modules/narrative-memory/prompts/workflows/<workflow-id>/<node-id>.md`：
 
@@ -104,6 +106,6 @@
 
 ## 可选提示词与静态资料模板
 
-起步材料位于 `assets/prompt-templates/`：通用 Agent 提示词可通过 `{{include:agent-preferences/路径.md}}` 引用默认片段，新卡打包时展开成完整的卡内提示词；其他 `agent-preferences/` 片段、`task-defaults/` 和 `static-materials/` 按转卡方案选择。具体规则见该目录的 `README.md`。模板目录本身不会进入卡片。
+起步材料位于 `assets/prompt-templates/`：模块 Agent 提示词可通过 `{{include:agent-preferences/路径.md}}` 引用默认片段，新卡打包时展开成完整的卡内提示词；其他 `agent-preferences/` 片段、`task-defaults/` 和 `static-materials/` 按转卡方案选择。具体规则见该目录的 `README.md`。模板目录本身不会进入卡片。模块专属提示词仍随完整模块复制到 `features/<module-id>/prompts/`，并由模块相对 `promptFile` 引用。
 
 模块 `skill/SKILL.md`、静态创作资料、数据契约和 schema 会影响 Agent 工作，但各自承担模块规则、资料或结构约束，不属于这份“提示词模板来源”清单。

@@ -2,4 +2,4 @@
 
 将 JSON 对象写入工作文件并交付：decisions 对象下只为存在的候选填写 local/world，每项含 decision、reason；无硬伤时用 accept-original，确需且能够安全修复时用 replace，无法安全修复时才用 withhold。replace 时还必须含完整 story 和完整最小 metadata，不能返回修订指令；accept-original/withhold 时不得含 story 或 metadata。
 
-另含 directorBatch，格式为 {"operations": [...]}，operations 可为空且只能操作 world-narrative-coordinator/private-state。可按需顺手更新下一轮必要的私有监督或频道指导，但不要借统审重做后置复盘；协议版本、原子提交策略和批次 ID 由代码补齐。
+另含 directorBatch，格式为 {"operations": [...]}，operations 可为空且只能操作 world-narrative-coordinator/private-state。仅针对本次审核发现的问题，按需更新下一轮必要的私有监督或频道指导；不全面重评整轮剧情、重排长期计划、重新分析玩家倾向或重写回合交接简报。协议版本、原子提交策略和批次 ID 由代码补齐。

@@ -1,5 +1,6 @@
+import { loadCardComponents, componentReference } from "./rp-module-registry.mjs";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
@@ -8,16 +9,16 @@ import { normalizeWorkflowDefinition } from "./rp-workflows.mjs";
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
-export function resolveActiveForegroundWorkflow(workflows, configured = null) {
+export function resolveActiveForegroundWorkflow(workflows, configured = /** @type {string | null} */ (null)) {
   const cardForeground = (Array.isArray(workflows) ? workflows : [])
-    .filter(workflow => workflow?.source === "card" && workflow.kind === "foreground" && workflow.invalid !== true);
+    .filter(workflow => workflow?.source === "module" && workflow.kind === "foreground" && workflow.invalid !== true);
   if (typeof configured === "string" && configured.trim()) {
     const selected = cardForeground.find(workflow => workflow.id === configured);
     if (!selected) throw new Error(`Configured active workflow ${configured} must reference a valid card-local foreground workflow.`);
     return selected.id;
   }
   if (cardForeground.length === 1) return cardForeground[0].id;
-  if (cardForeground.length === 0) throw new Error("The card declares no foreground workflow. Add one below workflows/ before opening Web mode.");
+  if (cardForeground.length === 0) throw new Error("The card declares no foreground workflow. Add one inside a registered feature module before opening Web mode.");
   throw new Error(`The card declares multiple foreground workflows (${cardForeground.map(workflow => workflow.id).join(", ")}); set settings.activeWorkflowId to choose one.`);
 }
 
@@ -55,14 +56,6 @@ function mergeDefined(base, override) {
   return result;
 }
 
-async function directoryIds(path) {
-  const entries = await readdir(path, { withFileTypes: true }).catch(error => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
-  return entries.filter(entry => entry.isDirectory() && SAFE_ID.test(entry.name)).map(entry => entry.name).sort();
-}
-
 function publicModel(profile) {
   const { apiKey: _apiKey, ...safe } = profile;
   return { ...safe, hasApiKey: Boolean(profile.apiKey) };
@@ -85,7 +78,7 @@ function cleanSecretDocument(value) {
   return { schemaVersion: 1, models };
 }
 
-export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = null, profileStore = null, resolveModuleWorkflow = null, isolatedRuntime = false } = {}) {
+export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheDirectory = /** @type {string | null} */ (null), profileStore = /** @type {ReturnType<typeof import("./rp-config-profiles.mjs").createConfigProfileStore> | null} */ (null), getModules = /** @type {(() => Promise<import("./rp-host-types.ts").FeatureModule[]>) | null} */ (null), isolatedRuntime = false } = {}) {
   const root = resolve(rootDirectory);
   const card = resolve(cardDirectory);
   const secretDirectory = resolve(secretCacheDirectory || systemCacheRoot(), "projects", projectCacheId(root));
@@ -95,11 +88,6 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     models: isolatedRuntime ? resolve(card, "defaults", "model-profiles.json") : resolve(root, "settings", "model-profiles.json"),
     modelSecrets: resolve(secretDirectory, "model-secrets.json"),
     runtime: isolatedRuntime ? resolve(card, "defaults", "workflow-runtime.json") : resolve(root, "settings", "workflow-runtime.json"),
-    agents: isolatedRuntime ? resolve(card, "agents") : resolve(root, "agents"),
-    cardAgents: resolve(card, "agents"),
-    workflows: isolatedRuntime ? resolve(card, "workflows") : resolve(root, "workflows"),
-    cardWorkflows: resolve(card, "workflows"),
-    moduleWorkflowOverrides: resolve(card, "module-workflow-overrides.json"),
   };
 
   async function modelDocuments({ migrate = false } = {}) {
@@ -138,92 +126,45 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
     return includeSecrets ? combined : publicModel(combined);
   }
 
-  function profileAgentOverride(profile, agentId) {
-    if (!profile) return null;
-    if (profile.agentOverrides?.[agentId]) return profile.agentOverrides[agentId];
-    const key = Object.keys(profile.agentOverrides || {}).find(item => item.endsWith(`/agent/${agentId}`));
-    return key ? profile.agentOverrides[key] : null;
-  }
-
-  function profileWorkflowOverride(profile, workflowId) {
-    if (!profile) return null;
-    if (profile.workflowOverrides?.[workflowId]) return profile.workflowOverrides[workflowId];
-    const key = Object.keys(profile.workflowOverrides || {}).find(item => item.endsWith(`/workflow/${workflowId}`));
-    return key ? profile.workflowOverrides[key] : null;
-  }
-
+  async function registeredModules() { return getModules ? getModules() : loadCardComponents(card); }
+  const overrideKey = (kind, reference) => { const [owner, id] = reference.split("/"); return "module/" + owner + "/" + kind + "/" + id; };
   /**
-   * Overrides are keyed by owner first. A module workflow and a top-level workflow may legally share
-   * `workflowId`, and "save as default" must only ever touch the definition the failed run came
-   * from — including when the two owners live in different storage layers.
+   * @template {"agent" | "workflow"} K
+   * @param {K} kind
+   * @param {string} reference
+   * @returns {Promise<{effective: K extends "agent" ? ReturnType<typeof normalizeAgentProfile> : ReturnType<typeof normalizeWorkflowDefinition> & {invalid?:boolean}, base: K extends "agent" ? ReturnType<typeof normalizeAgentProfile> : ReturnType<typeof normalizeWorkflowDefinition>,override:object|null,overridden:boolean,source:string,moduleId:string,moduleTitle:string,componentFile?:string,profileOverride:boolean}>}
    */
-  function workflowOverrideKey(ownerModuleId, workflowId) {
-    return ownerModuleId ? `${ownerModuleId}/workflow/${workflowId}` : workflowId;
-  }
-
-  function profileOwnerWorkflowOverride(profile, ownerModuleId, workflowId) {
-    if (!profile) return null;
-    const overrides = profile.workflowOverrides || {};
-    const exact = workflowOverrideKey(ownerModuleId, workflowId);
-    if (overrides[exact]) return overrides[exact];
-    for (const [key, value] of Object.entries(overrides)) {
-      if (key === exact || key.endsWith(`/${exact}`)) return value;
-    }
-    return ownerModuleId ? null : profileWorkflowOverride(profile, workflowId);
-  }
-
-  async function moduleWorkflowOverrides() {
-    const document = await readJson(paths.moduleWorkflowOverrides, { schemaVersion: 1, workflows: {} });
-    if (!document || typeof document !== "object" || Array.isArray(document) || typeof document.workflows !== "object" || document.workflows === null || Array.isArray(document.workflows)) {
-      throw new Error("Card module-workflow overrides must be a schemaVersion 1 document with a workflows object.");
-    }
-    return document;
-  }
-
-  /**
-   * Resolve a workflow definition by owner. Every caller that has a persisted run — restore, retry,
-   * panel actions — resolves through this, so a module workflow is never looked up in the top-level
-   * store (which is what made panel retry answer `Workflow <id> was not found`).
-   */
-  async function resolveOwnedWorkflow(ownerModuleId, workflowId) {
-    assertId(workflowId, "workflowId");
+  async function component(kind, reference) {
+    const ref = componentReference(null, reference);
+    const owner = ref.split("/")[0];
+    const module = (await registeredModules()).find(item => item.id === owner);
+    const entry = module?.[kind === "agent" ? "agents" : "workflows"]?.find(item => item.id === ref);
+    if (!entry) throw new Error(kind + " " + ref + " is not registered in this card.");
+    const base = entry.componentFile ? await readJson(entry.componentFile) : entry;
+    const normalize = kind === "agent" ? normalizeAgentProfile : normalizeWorkflowDefinition;
     const profile = await activeProfile();
-    if (!ownerModuleId) {
-      const cardPath = resolve(paths.cardWorkflows, workflowId, "workflow.json");
-      const globalPath = resolve(paths.workflows, workflowId, "workflow.json");
-      const raw = await readJson(cardPath, null) || (isolatedRuntime ? null : await readJson(globalPath, null));
-      if (!raw) throw new Error(isolatedRuntime ? `Workflow ${workflowId} is missing from this card.` : `Workflow ${workflowId} was not found in the card or the shared runtime.`);
-      const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileWorkflowOverride(profile, workflowId)));
-      if (workflow.kind.startsWith("module-")) throw new Error(`Module workflow ${workflowId} must be resolved through its owning module, not the top-level workflow store.`);
-      return workflow;
-    }
-    assertId(ownerModuleId, "ownerModuleId");
-    if (typeof resolveModuleWorkflow !== "function") throw new Error(`Module workflow ${ownerModuleId}/${workflowId} cannot be resolved: the card has no feature-module registry.`);
-    const raw = await resolveModuleWorkflow(ownerModuleId, workflowId);
-    if (!raw) throw new Error(`Module workflow ${ownerModuleId}/${workflowId} was not found in the loaded card modules.`);
-    const stored = profile ? null : (await moduleWorkflowOverrides()).workflows[workflowOverrideKey(ownerModuleId, workflowId)] || null;
-    const workflow = normalizeWorkflowDefinition(mergeDefined(raw, profileOwnerWorkflowOverride(profile, ownerModuleId, workflowId) || stored));
-    if (workflow.kind !== "module-external" && workflow.kind !== "module-internal") throw new Error(`Workflow ${ownerModuleId}/${workflowId} must be a module workflow.`);
-    if (workflow.ownerModuleId && workflow.ownerModuleId !== ownerModuleId) throw new Error(`Module workflow ${ownerModuleId}/${workflowId} declares owner ${workflow.ownerModuleId}.`);
-    return workflow;
+    const override = profile?.[kind + "Overrides"]?.[overrideKey(kind, ref)] || null;
+    const normalizedBase = normalize(base);
+    const effective = normalize(mergeDefined(normalizedBase, override));
+    if (effective.id !== ref || effective.ownerModuleId !== owner) throw new Error("Configuration overrides cannot change component identity or ownership.");
+    return { effective, base: normalizedBase, override, overridden: Boolean(override), source: "module", moduleId: owner, moduleTitle: module.title, componentFile: entry.componentFile, profileOverride: Boolean(override) };
   }
-
-  /** Where an edited module workflow is written: the active profile, or the card's override layer. */
-  async function saveModuleWorkflowOverride(value) {
-    const workflow = normalizeWorkflowDefinition(value);
-    if (!workflow.kind.startsWith("module-") || !workflow.ownerModuleId) throw new Error("Only an owned module workflow can be saved as a module override.");
-    if (typeof resolveModuleWorkflow !== "function") throw new Error(`Module workflow ${workflow.ownerModuleId}/${workflow.id} cannot be resolved: the card has no feature-module registry.`);
+  async function resolveOwnedWorkflow(owner, id) {
+    return (await component("workflow", componentReference(owner, id))).effective;
+  }
+  async function saveComponent(kind, value) {
+    const normalize = kind === "agent" ? normalizeAgentProfile : normalizeWorkflowDefinition;
+    const normalized = normalize(value);
+    const current = await component(kind, normalized.id);
     const profile = await activeProfile();
-    if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a module workflow.");
     if (profile) {
-      profile.workflowOverrides[workflowOverrideKey(workflow.ownerModuleId, workflow.id)] = workflow;
+      profile[kind + "Overrides"][overrideKey(kind, normalized.id)] = normalized;
       await profileStore.save(profile);
-      return workflow;
+    } else {
+      if (!current.componentFile) throw new Error("No editable module component file.");
+      await atomicJson(current.componentFile, normalized);
     }
-    const document = await moduleWorkflowOverrides();
-    document.workflows[workflowOverrideKey(workflow.ownerModuleId, workflow.id)] = workflow;
-    await atomicJson(paths.moduleWorkflowOverrides, document);
-    return workflow;
+    return normalized;
   }
 
   return {
@@ -236,10 +177,6 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
         return;
       }
       await Promise.all([
-        mkdir(paths.agents, { recursive: true }),
-        mkdir(paths.cardAgents, { recursive: true }),
-        mkdir(paths.workflows, { recursive: true }),
-        mkdir(paths.cardWorkflows, { recursive: true }),
         mkdir(dirname(paths.models), { recursive: true }),
       ]);
       const { models } = await modelDocuments({ migrate: true });
@@ -335,119 +272,30 @@ export function createRpConfigStore(rootDirectory, cardDirectory, { secretCacheD
       await atomicJson(paths.models, document);
     },
     async listAgents() {
-      const ids = [...new Set([...(await directoryIds(paths.agents)), ...(isolatedRuntime ? [] : await directoryIds(paths.cardAgents))])].sort();
       const result = [];
-      for (const id of ids) result.push(await this.getAgent(id));
+      for (const module of await registeredModules()) for (const agent of module.agents || []) result.push(await component("agent", agent.id));
       return result;
     },
-    async getAgent(agentId) {
-      assertId(agentId, "agentId");
-      const cardBasePath = resolve(paths.cardAgents, agentId, "agent.json");
-      const globalBasePath = resolve(paths.agents, agentId, "agent.json");
-      const cardBase = await readJson(cardBasePath, null);
-      const basePath = cardBase ? cardBasePath : isolatedRuntime ? cardBasePath : globalBasePath;
-      const overridePath = resolve(paths.cardAgents, agentId, "override.json");
-      const base = await readJson(basePath);
-      const override = await readJson(overridePath, null);
+    async getAgent(reference) { return component("agent", reference); },
+    async saveAgent(value) { await saveComponent("agent", value); return component("agent", normalizeAgentProfile(value).id); },
+    async restoreAgent(reference) {
+      const current = await component("agent", reference);
       const profile = await activeProfile();
-      const profileOverride = profileAgentOverride(profile, agentId);
-      return { effective: normalizeAgentProfile(mergeDefined(mergeDefined(base, override), profileOverride)), base: normalizeAgentProfile(base), override: profileOverride || override, overridden: Boolean(profileOverride || override), source: cardBase ? "card" : "global", profileOverride: Boolean(profileOverride) };
-    },
-    async saveAgent(value, { scope = "card" } = {}) {
-      const profile = normalizeAgentProfile(value);
-      const active = await activeProfile();
-      if (isolatedRuntime && scope === "global") throw new Error("Shared Agent definitions are unavailable in an isolated card.");
-      if (isolatedRuntime && !active) throw new Error("Select an editable card configuration profile before changing an Agent.");
-      if (active && scope !== "global") {
-        const current = await this.getAgent(profile.id);
-        const override = {};
-        for (const key of Object.keys(profile)) {
-          if (JSON.stringify(profile[key]) !== JSON.stringify(current.base[key])) override[key] = profile[key];
-        }
-        delete override.schemaVersion;
-        delete override.id;
-        active.agentOverrides[profile.id] = override;
-        await profileStore.save(active);
-        return this.getAgent(profile.id);
-      }
-      if (scope === "global") {
-        await atomicJson(resolve(paths.agents, profile.id, "agent.json"), profile);
-        await rm(resolve(paths.cardAgents, profile.id, "override.json"), { force: true });
-        return this.getAgent(profile.id);
-      }
-      const base = await readJson(resolve(paths.cardAgents, profile.id, "agent.json"), null) || await readJson(resolve(paths.agents, profile.id, "agent.json"));
-      const override = {};
-      for (const key of Object.keys(profile)) {
-        if (JSON.stringify(profile[key]) !== JSON.stringify(normalizeAgentProfile(base)[key])) override[key] = profile[key];
-      }
-      delete override.schemaVersion;
-      delete override.id;
-      await atomicJson(resolve(paths.cardAgents, profile.id, "override.json"), override);
-      return this.getAgent(profile.id);
-    },
-    async restoreAgent(agentId) {
-      assertId(agentId, "agentId");
-      const profile = await activeProfile();
-      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before restoring an Agent.");
-      if (profile) {
-        delete profile.agentOverrides[agentId];
-        for (const key of Object.keys(profile.agentOverrides)) if (key.endsWith(`/agent/${agentId}`)) delete profile.agentOverrides[key];
-        await profileStore.save(profile);
-        return this.getAgent(agentId);
-      }
-      await rm(resolve(paths.cardAgents, agentId, "override.json"), { force: true });
-      return this.getAgent(agentId);
+      if (profile) { delete profile.agentOverrides[overrideKey("agent", current.effective.id)]; await profileStore.save(profile); }
+      return component("agent", current.effective.id);
     },
     async listWorkflows() {
-      const cardIds = await directoryIds(paths.cardWorkflows);
-      const globalIds = isolatedRuntime ? [] : await directoryIds(paths.workflows);
-      const ids = [...new Set([...cardIds, ...globalIds])].sort();
       const result = [];
-      for (const id of ids) {
-        const source = cardIds.includes(id) ? "card" : "global";
-        try {
-          const definition = await this.getWorkflow(id);
-          result.push({ ...definition, source });
-        } catch (error) {
-          result.push({ schemaVersion: 1, id, title: id, source, invalid: true, error: error.message, nodes: [] });
-        }
+      for (const module of await registeredModules()) for (const workflow of module.workflows || []) {
+        const current = await component("workflow", workflow.id);
+        result.push({ ...current.effective, source: "module", moduleTitle: module.title, reference: current.effective.id });
       }
       return result;
     },
-    async getWorkflow(workflowId) {
-      return resolveOwnedWorkflow(null, workflowId);
-    },
-    async getModuleWorkflow(ownerModuleId, workflowId) {
-      return resolveOwnedWorkflow(ownerModuleId, workflowId);
-    },
-    /**
-     * Return the definition a panel edit should modify. A module workflow is already card-owned
-     * through its module registration, so it is never copied into the top-level workflow store —
-     * that copy would be an unreachable second definition of the same workflow.
-     */
-    async copyWorkflowToCard(workflowId, ownerModuleId = null) {
-      const profile = await activeProfile();
-      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a workflow.");
-      if (!ownerModuleId) {
-        const workflow = await resolveOwnedWorkflow(null, workflowId);
-        if (profile) return workflow;
-        await atomicJson(resolve(paths.cardWorkflows, workflowId, "workflow.json"), workflow);
-        return workflow;
-      }
-      return resolveOwnedWorkflow(ownerModuleId, workflowId);
-    },
-    async saveCardWorkflow(value) {
-      const workflow = normalizeWorkflowDefinition(value);
-      if (workflow.kind.startsWith("module-")) return saveModuleWorkflowOverride(workflow);
-      const profile = await activeProfile();
-      if (isolatedRuntime && !profile) throw new Error("Select an editable card configuration profile before changing a workflow.");
-      if (profile) {
-        profile.workflowOverrides[workflowOverrideKey(null, workflow.id)] = workflow;
-        await profileStore.save(profile);
-        return workflow;
-      }
-      await atomicJson(resolve(paths.cardWorkflows, workflow.id, "workflow.json"), workflow);
-      return workflow;
-    },
+    async getWorkflow(reference) { return resolveOwnedWorkflow(null, reference); },
+    async getModuleWorkflow(owner, id) { return resolveOwnedWorkflow(owner, id); },
+    async copyWorkflowToCard(id, owner = null) { return resolveOwnedWorkflow(owner, id); },
+    async saveCardWorkflow(value) { return saveComponent("workflow", value); },
+
   };
 }

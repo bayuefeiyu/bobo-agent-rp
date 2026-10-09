@@ -4,17 +4,33 @@
 !/.gitattributes
 !/.gitignore
 !/README.md
+!/PROJECT_STATUS.md
+!/DEVELOPER-GUIDE.md
+!/DEVELOPMENT-HISTORY.md
+!/TROUBLESHOOTING.md
 !/PI-PLAY-CONTEXT-ISOLATION.md
 !/PI-RP-DEVELOPMENT-SCOPE.md
 !/PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md
-!/PROJECT_STATUS.md
 !/PROJECT-RELEASE-MANIFEST.json
+# Root development and verification entry points. These are development-only and
+# are never copied into a card pack or the card runtime.
+!/package.json
+!/package-lock.json
+!/tsconfig.check.json
+!/scripts/
+!/scripts/**
+!/types/
+!/types/**
+!/.github/
+!/.github/**
 !/global-modules/
 /global-modules/*
 !/global-modules/comfy-image-generation/
 !/global-modules/comfy-image-generation/**
 !/global-modules/narrative-memory/
 !/global-modules/narrative-memory/**
+!/global-modules/narrative-controls/
+!/global-modules/narrative-controls/**
 !/global-modules/local-scene-narrative/
 !/global-modules/local-scene-narrative/**
 !/global-modules/world-scope-narrative/

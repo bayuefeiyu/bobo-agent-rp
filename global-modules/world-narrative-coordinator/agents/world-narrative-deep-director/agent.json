@@ -1,5 +1,21 @@
 {
-  "schemaVersion": 1, "id": "world-narrative-deep-director", "name": "世界叙事深度导演", "description": "从高层视角独立进行长期剧情与世界形势推演。",
-  "promptFile": "prompts/modules/world-narrative-coordinator/agents/world-narrative-deep-director.md",
-  "tools": ["edit", "read", "write", "rp_call"], "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"], "outputMode": "json", "defaultModelId": "pi:current"
+  "schemaVersion": 1,
+  "id": "world-narrative-deep-director",
+  "name": "世界叙事深度导演",
+  "description": "从高层视角独立进行长期剧情与世界形势推演。",
+  "promptFile": "prompts/agents/world-narrative-deep-director.md",
+  "tools": [
+    "edit",
+    "read",
+    "write",
+    "rp_call"
+  ],
+  "contextPermissions": [
+    "workspace:node",
+    "workflow:scoped-output",
+    "card:modules"
+  ],
+  "outputMode": "json",
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-narrative-coordinator"
 }

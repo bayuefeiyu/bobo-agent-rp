@@ -355,10 +355,10 @@ function normalizeTrigger(value, kind) {
   }));
   if ((type === "manual" || type === "after-opening") && Object.keys(documents).length) throw new Error(`${type} triggers cannot map source workflow documents.`);
   if (type === "manual" || type === "after-opening") return { type, blockNextTurnUntilReady, documents: {} };
-  if (type === "after-workflow") return { type, workflowId: assertId(trigger.workflowId, "workflow.trigger.workflowId"), blockNextTurnUntilReady, documents };
+  if (type === "after-workflow") return { type, workflowId: assertWorkflowRef(trigger.workflowId, "workflow.trigger.workflowId"), blockNextTurnUntilReady, documents };
   if (type === "node") return {
     type,
-    workflowId: assertId(trigger.workflowId, "workflow.trigger.workflowId"),
+    workflowId: assertWorkflowRef(trigger.workflowId, "workflow.trigger.workflowId"),
     nodeId: assertId(trigger.nodeId, "workflow.trigger.nodeId"),
     blockNextTurnUntilReady,
     documents,
@@ -383,14 +383,12 @@ function assertAcyclic(nodes) {
 
 export function normalizeWorkflowDefinition(value) {
   const input = assertObject(value, "workflow");
-  if (input.schemaVersion !== 3) throw new Error("workflow.schemaVersion must be 3.");
-  const id = assertId(input.id, "workflow.id");
+  if (input.schemaVersion !== 4) throw new Error("workflow.schemaVersion must be 4.");
+  const ownerModuleId = assertId(input.ownerModuleId, "workflow.ownerModuleId");
+  const id = input.id?.includes("/") ? assertWorkflowRef(input.id, "workflow.id") : `${ownerModuleId}/${assertId(input.id, "workflow.id")}`;
+  if (id.split("/")[0] !== ownerModuleId) throw new Error("Workflow reference does not match its owner module.");
   const kind = typeof input.kind === "string" ? input.kind : "foreground";
   if (!WORKFLOW_KINDS.has(kind)) throw new Error(`Unsupported workflow kind: ${kind}`);
-  const ownerModuleId = MODULE_WORKFLOW_KINDS.has(kind)
-    ? assertId(input.ownerModuleId, "workflow.ownerModuleId")
-    : null;
-  if (!MODULE_WORKFLOW_KINDS.has(kind) && input.ownerModuleId !== undefined && input.ownerModuleId !== null) throw new Error("Top-level workflows cannot declare ownerModuleId.");
   if (!MODULE_WORKFLOW_KINDS.has(kind) && input.agentCallable !== undefined && input.agentCallable !== false) throw new Error("Only module workflows may declare agentCallable.");
   const agentCallable = MODULE_WORKFLOW_KINDS.has(kind) && input.agentCallable === true;
   const workflowInterface = normalizeWorkflowInterface(input.interface, kind);
@@ -473,10 +471,11 @@ export function normalizeWorkflowDefinition(value) {
     if ((type === "team") !== Boolean(team)) throw new Error(`node ${rawNode.id} must declare team exactly when type is team.`);
     return {
       id: rawNode.id,
+      ownerModuleId,
       title: typeof rawNode.title === "string" && rawNode.title.trim() ? rawNode.title.trim() : rawNode.id,
       description: typeof rawNode.description === "string" ? rawNode.description.trim() : "",
       type,
-      agentId: typeof rawNode.agentId === "string" && rawNode.agentId.trim() ? rawNode.agentId.trim() : null,
+      agentId: typeof rawNode.agentId === "string" && rawNode.agentId.trim() ? assertWorkflowRef(rawNode.agentId.includes("/") ? rawNode.agentId.trim() : `${ownerModuleId}/${rawNode.agentId.trim()}`, "node.agentId") : null,
       modelId: typeof rawNode.modelId === "string" && rawNode.modelId.trim() ? rawNode.modelId.trim() : null,
       prompt: typeof rawNode.prompt === "string" && rawNode.prompt.trim() ? rawNode.prompt.trim() : null,
       promptFile: typeof rawNode.promptFile === "string" && rawNode.promptFile.trim() ? rawNode.promptFile.trim() : null,
@@ -650,7 +649,7 @@ export function normalizeWorkflowDefinition(value) {
     };
   })();
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id,
     title: typeof input.title === "string" && input.title.trim() ? input.title.trim() : id,
     description: typeof input.description === "string" ? input.description.trim() : "",
@@ -660,7 +659,7 @@ export function normalizeWorkflowDefinition(value) {
     interface: workflowInterface,
     revision: typeof input.revision === "string" && input.revision.trim() ? input.revision.trim() : "1",
     defaults: {
-      agentId: typeof input.defaults?.agentId === "string" ? input.defaults.agentId : null,
+      agentId: typeof input.defaults?.agentId === "string" ? assertWorkflowRef(input.defaults.agentId.includes("/") ? input.defaults.agentId : `${ownerModuleId}/${input.defaults.agentId}`, "workflow.defaults.agentId") : null,
       modelId: typeof input.defaults?.modelId === "string" ? input.defaults.modelId : null,
       context: normalizeContext(input.defaults?.context),
     },
@@ -1060,9 +1059,7 @@ export function maybeFinalizeWorkflow(definition, run, now = new Date().toISOStr
 
 export function workflowRuntimeIdentity(definition) {
   const workflow = normalizeWorkflowDefinition(definition);
-  return MODULE_WORKFLOW_KINDS.has(workflow.kind)
-    ? `${workflow.ownerModuleId}/${workflow.id}`
-    : `top-level/${workflow.id}`;
+  return workflow.id;
 }
 
 export function resolveWorkflowInstanceInput(definition, options = {}) {
@@ -1107,8 +1104,7 @@ export function workflowTriggerMatches(definition, event) {
 
 export function canonicalWorkflowRef(definition) {
   const workflow = normalizeWorkflowDefinition(definition);
-  if (!MODULE_WORKFLOW_KINDS.has(workflow.kind)) throw new Error("Only module workflows have canonical module/workflow references.");
-  return `${workflow.ownerModuleId}/${workflow.id}`;
+  return workflow.id;
 }
 
 export function assertWorkflowCallAllowed(callerWorkflow, callerNode, targetWorkflow, { agent = false, lifecycle = false } = {}) {

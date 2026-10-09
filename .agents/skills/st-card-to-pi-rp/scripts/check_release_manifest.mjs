@@ -172,6 +172,11 @@ for (const moduleId of manifest.modules) {
   if (definition.id !== moduleId) throw new Error(`Module directory ${moduleId} contains manifest id ${definition.id}.`);
   for (const field of ["dataContractFile", "resourceCatalogFile", "frontendViewFile", "skillFile"]) addPath(required, moduleId, definition[field]);
   for (const path of definition.workflowFiles || []) addPath(required, moduleId, path);
+  for (const agentFile of definition.agentFiles || []) {
+    addPath(required, moduleId, agentFile);
+    const agent = parseJson(await reader.readBuffer(`${prefix}${agentFile}`), agentFile);
+    addPath(required, moduleId, agent.promptFile);
+  }
 
   if (definition.dataContractFile) {
     const path = `${prefix}${definition.dataContractFile}`;
@@ -195,8 +200,8 @@ for (const moduleId of manifest.modules) {
     const workflow = normalizeWorkflowDefinition(parseJson(await reader.readBuffer(path), path));
     for (const node of workflow.nodes || []) {
       const entry = node.metadata?.entryFile;
-      const entryPrefix = `features/${moduleId}/`;
-      if (typeof entry === "string" && entry.startsWith(entryPrefix)) addPath(required, moduleId, entry.slice(entryPrefix.length));
+      if (typeof entry === "string") addPath(required, moduleId, entry);
+      addPath(required, moduleId, node.promptFile);
     }
   }
 }

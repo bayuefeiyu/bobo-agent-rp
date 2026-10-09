@@ -1,0 +1,414 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "narrative-controls",
+  "categories": {
+    "prompt-option": {
+      "title": "可切换创作提示词",
+      "description": "仅供代码按玩家选择组合的源资源，不直接交付给 Agent。"
+    }
+  },
+  "selectionGroups": {
+    "pacing": {
+      "title": "叙事节奏",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择，代码交付所选正文。",
+      "fallback": null
+    },
+    "other-requirements": {
+      "title": "其他要求",
+      "mode": "at-most-one",
+      "instruction": "默认由创作者或转卡者填写，玩家可切换为自定义；代码只交付所选正文。",
+      "fallback": null
+    },
+    "player-speech": {
+      "title": "抢话方式",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择，代码交付所选正文。",
+      "fallback": null
+    },
+    "word-count": {
+      "title": "字数",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择，代码只交付所选正文。",
+      "fallback": null
+    },
+    "output-language": {
+      "title": "语言",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择，代码只交付所选正文。",
+      "fallback": null
+    },
+    "input-mode": {
+      "title": "扩写",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择，代码只交付所选正文。",
+      "fallback": null
+    }
+  },
+  "documents": [
+    {
+      "id": "other-requirements-default",
+      "path": "documents/options/other-requirements/default.md",
+      "title": "其他要求：默认",
+      "summary": "创作者或转卡者填写的额外正文创作要求，可留空。",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "other-requirements",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "other-requirements",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "创作者或转卡者填写；项目模板留空。"
+      ]
+    },
+    {
+      "id": "pacing-conservative",
+      "path": "documents/options/pacing/conservative.md",
+      "title": "保守",
+      "summary": "叙事节奏：保守",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "pacing",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "pacing",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "pacing-adventurous",
+      "path": "documents/options/pacing/adventurous.md",
+      "title": "冒险",
+      "summary": "叙事节奏：冒险",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "pacing",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "pacing",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "pacing-highly-adventurous",
+      "path": "documents/options/pacing/highly-adventurous.md",
+      "title": "大胆冒险",
+      "summary": "叙事节奏：大胆冒险",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "pacing",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "pacing",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "speech-none",
+      "path": "documents/options/player-speech/防抢话.md",
+      "title": "防抢话",
+      "summary": "抢话方式：防抢话",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "player-speech",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "player-speech",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "speech-general",
+      "path": "documents/options/player-speech/一般抢话.md",
+      "title": "一般抢话",
+      "summary": "抢话方式：一般抢话",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "player-speech",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "player-speech",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "speech-free",
+      "path": "documents/options/player-speech/自由抢话.md",
+      "title": "自由抢话",
+      "summary": "抢话方式：自由抢话",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "player-speech",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "player-speech",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "项目原有静态提示词，原文保留。"
+      ]
+    },
+    {
+      "id": "word-count-up-to-800",
+      "path": "documents/options/word-count/up-to-800.md",
+      "title": "字数：800以内",
+      "summary": "字数：800以内",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "word-count",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "word-count",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 🛡️准则结束原文句式；按字数设置注释及用户范围展开 wordsCloud=不得大于800。"
+      ]
+    },
+    {
+      "id": "word-count-800-1500",
+      "path": "documents/options/word-count/800-1500.md",
+      "title": "字数：800-1500",
+      "summary": "字数：800-1500",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "word-count",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "word-count",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 🛡️准则结束原文句式；沿用正文任务已有范围，展开 wordsCloud=800-1500。"
+      ]
+    },
+    {
+      "id": "word-count-at-least-1500",
+      "path": "documents/options/word-count/at-least-1500.md",
+      "title": "字数：1500以上",
+      "summary": "字数：1500以上",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "word-count",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "word-count",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 字数设置 wordsCloud=不少于1500；准则结束展开原文。"
+      ]
+    },
+    {
+      "id": "output-language-chinese",
+      "path": "documents/options/output-language/chinese.md",
+      "title": "语言：中文",
+      "summary": "语言：中文",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "output-language",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "output-language",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 🛡️准则结束语言准则原文节选；2.42、3.5同文。"
+      ]
+    },
+    {
+      "id": "input-mode-full-expansion",
+      "path": "documents/options/input-mode/full-expansion.md",
+      "title": "扩写：扩写",
+      "summary": "扩写：扩写",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "input-mode",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-mode",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 ➡️扩写/转述输入；沿用已整理任务模板，仅将<最新互动>转成User的本轮输入，不改变扩写要求。"
+      ]
+    },
+    {
+      "id": "input-mode-partial-expansion",
+      "path": "documents/options/input-mode/partial-expansion.md",
+      "title": "扩写：部分扩写",
+      "summary": "扩写：部分扩写",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "input-mode",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-mode",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 ➡️半转述；沿用已整理任务模板，仅将<最新互动>转成本轮输入，不改变扩写要求。"
+      ]
+    },
+    {
+      "id": "input-mode-continue",
+      "path": "documents/options/input-mode/continue.md",
+      "title": "扩写：续写",
+      "summary": "扩写：续写",
+      "categories": [
+        "prompt-option"
+      ],
+      "subcategory": "input-mode",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "writing",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-mode",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "夏瑾·天琴座 V2 🛡️伪对话续写原文节选；沿用已整理任务模板。"
+      ]
+    }
+  ]
+}

@@ -135,8 +135,8 @@ test("a leftover transaction journal does not mask an already-committed batch", 
 
 test("unblocking one node keeps the run blocked while a sibling still awaits a model choice", { timeout: 15000 }, async t => {
   const parent = {
-    schemaVersion: 3,
-    id: "audit-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/audit-parent",
     kind: "turn-background",
     nodes: [
       { id: "first", type: "agent" },
@@ -194,8 +194,8 @@ test("a cancelled run still executes its declared terminal finalizer", { timeout
   // the engine passes exactly the arguments `forwardArguments` names, so a target that needs them must
   // declare them and the finalizer must forward them, just like the shipped `finish-deep-operation`.
   const finalizer = {
-    schemaVersion: 3,
-    id: "audit-release",
+    schemaVersion: 4,
+    id: "audit/audit-release",
     ownerModuleId: "audit",
     kind: "module-internal",
     interface: {
@@ -209,8 +209,8 @@ test("a cancelled run still executes its declared terminal finalizer", { timeout
     nodes: [{ id: "release", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["release"], exports: {} }],
   };
   const owner = {
-    schemaVersion: 3,
-    id: "audit-owner",
+    schemaVersion: 4,
+    id: "audit/audit-owner",
     ownerModuleId: "audit",
     kind: "module-external",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId" },
@@ -219,8 +219,8 @@ test("a cancelled run still executes its declared terminal finalizer", { timeout
     nodes: [{ id: "work", type: "agent" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   const host = {
-    schemaVersion: 3,
-    id: "audit-host",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/audit-host",
     kind: "global-background",
     nodes: [{ id: "call", type: "call", target: "audit/audit-owner", arguments: { operationId: "op-1" }, outputPaths: {} }],
   };
@@ -270,8 +270,8 @@ test("a re-queued coordination batch whose artifact already exists resumes inste
 
   const config = {
     schemaVersion: 1,
-    leader: { id: "leader", agentId: "audit-leader" },
-    secretary: { id: "secretary", agentId: "audit-secretary" },
+    leader: { id: "leader", agentId: "audit/audit-leader" },
+    secretary: { id: "secretary", agentId: "audit/audit-secretary" },
     experts: [],
     agenda: { normalRounds: 1, maxRounds: 2 },
     budgets: { preparation: 20, discussion: 20, coordination: 10, closing: 20, draft: 3, review: 20, revision: 3, references: 3 },
@@ -335,8 +335,8 @@ test("the terminal finalizer receives exactly the arguments forwardArguments dec
   // forwards. A workflow that forwards fewer arguments than its target requires is *rejected* — that
   // is the contract working, not a bug — so the comparison needs one target per argument set.
   const fullTarget = {
-    schemaVersion: 3,
-    id: "audit-release-full",
+    schemaVersion: 4,
+    id: "audit/audit-release-full",
     ownerModuleId: "audit",
     kind: "module-internal",
     interface: {
@@ -349,8 +349,8 @@ test("the terminal finalizer receives exactly the arguments forwardArguments dec
     nodes: [{ id: "release", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["release"], exports: {} }],
   };
   const narrowTarget = {
-    schemaVersion: 3,
-    id: "audit-release-narrow",
+    schemaVersion: 4,
+    id: "audit/audit-release-narrow",
     ownerModuleId: "audit",
     kind: "module-internal",
     interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -358,13 +358,13 @@ test("the terminal finalizer receives exactly the arguments forwardArguments dec
   };
   const targets = new Map([[fullTarget.id, fullTarget], [narrowTarget.id, narrowTarget]]);
   const owner = (id, target, forwardArguments) => ({
-    schemaVersion: 3,
-    id,
+    schemaVersion: 4,
+    id: `audit/${id}`,
     ownerModuleId: "audit",
     kind: "module-external",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId" },
     interface: { inputs: { operationId: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
-    terminalFinalizer: { target: `audit/${target}`, statuses: ["failed", "cancelled", "skipped"], forwardArguments },
+    terminalFinalizer: { target, statuses: ["failed", "cancelled", "skipped"], forwardArguments },
     nodes: [{ id: "work", type: "agent" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   });
   const ownerFull = owner("audit-owner-full", fullTarget.id, ["operationId", "terminalStatus"]);
@@ -377,7 +377,7 @@ test("the terminal finalizer receives exactly the arguments forwardArguments dec
   const workGate = new Promise(resolve => { releaseWork = resolve; });
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async reference => {
-      const targetId = reference.replace("audit/", "");
+      const targetId = reference;
       return targets.get(targetId) || owners.get(targetId) || null;
     },
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
@@ -398,7 +398,7 @@ test("the terminal finalizer receives exactly the arguments forwardArguments dec
 
   // Cancel each owner in turn; `cancelled` is a terminal status both workflows list.
   for (const [runId, operationId] of [[ownerFull.id, "op-full"], [ownerNarrow.id, "op-narrow"]]) {
-    const host = { schemaVersion: 3, id: `audit-host-${runId}`, kind: "global-background", nodes: [{ id: "call", type: "call", target: `audit/${runId}`, arguments: { operationId }, outputPaths: {} }] };
+    const host = { schemaVersion: 4, ownerModuleId: "test", id: `test/audit-host-${runId.split("/").at(-1)}`, kind: "global-background", nodes: [{ id: "call", type: "call", target: runId, arguments: { operationId }, outputPaths: {} }] };
     const hostRun = await engine.start(host, { id: `host-${runId}` });
     for (let attempt = 0; attempt < 400 && !pendingOwnerRunId; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
     assert.ok(pendingOwnerRunId, `${runId} must start`);
@@ -485,8 +485,8 @@ test("a blocking run that stopped because a host hook failed reports the reason"
   // reaching `blockingTurnRuns` the panel can only say "waiting for a background workflow", which is
   // indistinguishable from normal progress.
   const workflow = {
-    schemaVersion: 3,
-    id: "audit-stuck",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/audit-stuck",
     title: "Stuck archive",
     kind: "turn-background",
     trigger: { type: "manual", blockNextTurnUntilReady: true },
@@ -544,8 +544,8 @@ test("reuseCompleted works for a multiple-instance workflow that declares no ded
   // never match and the branch was dead: the same node asking for the same call twice re-ran the child
   // (and its side effects) instead of reusing the completed result.
   const child = {
-    schemaVersion: 3,
-    id: "audit-child",
+    schemaVersion: 4,
+    id: "audit/audit-child",
     ownerModuleId: "audit",
     kind: "module-external",
     interface: { inputs: { label: { type: "parameter", required: true, valueType: "string" } }, exports: {} },
@@ -553,8 +553,8 @@ test("reuseCompleted works for a multiple-instance workflow that declares no ded
     nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   const parent = {
-    schemaVersion: 3,
-    id: "audit-parent",
+    schemaVersion: 4, ownerModuleId: "test",
+    id: "test/audit-parent",
     kind: "global-background",
     nodes: [{ id: "call-twice", type: "code", workflowCalls: ["audit/audit-child"] }],
   };
@@ -588,7 +588,7 @@ test("the extension wires the frozen read boundary into data.getCurrent", async 
   // `getCurrent` lives in the Pi extension, which cannot be imported here (it needs the Pi runtime), so
   // this pins the wiring rather than the behaviour: before the fix the call passed capabilities and
   // views only, so a code node could read a record committed after its own run started.
-  const extension = await readFile(new URL("../extensions/pi-rp-web.ts", import.meta.url), "utf8");
+  const extension = await readFile(new URL("./rp-node-control-executor.ts", import.meta.url), "utf8");
   const start = extension.indexOf("getCurrent: (request: any) => {");
   assert.ok(start > 0, "the code-node data service must still expose getCurrent");
   const body = extension.slice(start, extension.indexOf("},", start));
@@ -596,9 +596,10 @@ test("the extension wires the frozen read boundary into data.getCurrent", async 
   assert.match(body, /accessFor\(request\.moduleId, request\.collectionId\)/, "getCurrent must still require a declared collection access");
 
   // The restore path must not leave an unrestorable run blocking the chat for ever.
-  const marker = extension.indexOf("Could not be restored:");
+  const lifecycle = await readFile(new URL("./rp-host-session.ts", import.meta.url), "utf8");
+  const marker = lifecycle.indexOf("Could not be restored:");
   assert.ok(marker > 0, "a failed restore must record why it failed");
-  const restoreCatch = extension.slice(Math.max(0, marker - 400), marker + 1400);
+  const restoreCatch = lifecycle.slice(Math.max(0, marker - 400), marker + 1400);
   assert.match(restoreCatch, /status: "failed"/, "a failed restore must leave the run in a terminal status");
   assert.match(restoreCatch, /appendWorkflowRunRecord/, "the terminal status must be persisted, not only held in memory");
   assert.match(restoreCatch, /hook: "restore"/, "the persisted run must carry the reason for the panel");
@@ -606,12 +607,12 @@ test("the extension wires the frozen read boundary into data.getCurrent", async 
 
 test("module workflows are never matched as top-level trigger targets", () => {
   const moduleWorkflow = {
-    schemaVersion: 3,
-    id: "m",
+    schemaVersion: 4,
+    id: "audit/m",
     ownerModuleId: "audit",
     kind: "module-internal",
     nodes: [{ id: "work", type: "code" }, { id: "return", type: "workflow-return", dependsOn: ["work"], exports: {} }],
   };
   assert.equal(workflowTriggerMatches(moduleWorkflow, { type: "manual" }), false);
-  assert.equal(normalizeWorkflowDefinition({ schemaVersion: 3, id: "x", kind: "turn-background", trigger: { type: "after-workflow", workflowId: "audit-parent" }, nodes: [{ id: "n", type: "code" }] }).trigger.workflowId, "audit-parent");
+  assert.equal(normalizeWorkflowDefinition({ schemaVersion: 4, ownerModuleId: "test", id: "test/x", kind: "turn-background", trigger: { type: "after-workflow", workflowId: "test/audit-parent" }, nodes: [{ id: "n", type: "code" }] }).trigger.workflowId, "test/audit-parent");
 });

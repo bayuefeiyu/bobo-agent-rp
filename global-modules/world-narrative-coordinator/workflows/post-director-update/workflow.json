@@ -1,20 +1,348 @@
 {
-  "schemaVersion": 3, "id": "post-director-update", "ownerModuleId": "world-narrative-coordinator", "title": "后置导演复盘", "description": "在正文落地后完成主要复盘、私有状态、频道指导、可选归档交接及深度启动建议。", "kind": "module-internal", "agentCallable": false,
-  "interface": { "inputs": { "phase": { "type": "parameter", "required": true, "valueType": "string", "description": "turn或opening。" }, "context": { "type": "document", "required": false, "kind": "directory", "formats": ["document-workspace-snapshot"], "description": "正文结束时的受控文档工作区快照。" } }, "exports": { "delegations": { "format": "director-delegation-plan", "kind": "directory", "description": "后置导演本轮决定启动的非正文创作委托。" } } },
-  "revision": "1", "defaults": { "agentId": "world-narrative-daily-director", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 }, "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "private-state" }, { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox" }],
+  "schemaVersion": 4,
+  "id": "post-director-update",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "后置导演复盘",
+  "description": "在正文落地后完成主要复盘、私有状态、频道指导、可选归档交接及深度启动建议。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "phase": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "string",
+        "description": "turn或opening。"
+      },
+      "context": {
+        "type": "document",
+        "required": false,
+        "kind": "directory",
+        "formats": [
+          "document-workspace-snapshot"
+        ],
+        "description": "正文结束时的受控文档工作区快照。"
+      }
+    },
+    "exports": {
+      "delegations": {
+        "format": "director-delegation-plan",
+        "kind": "directory",
+        "description": "后置导演本轮决定启动的非正文创作委托。"
+      }
+    }
+  },
+  "revision": "1",
+  "defaults": {
+    "agentId": "world-narrative-coordinator/world-narrative-daily-director",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "private-state"
+    },
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "archive-outbox"
+    }
+  ],
   "nodes": [
-    { "id": "prepare-private", "type": "call", "target": "world-narrative-coordinator/prepare-private-context", "arguments": {}, "documents": {}, "outputPaths": { "context": "director-private" }, "outputs": { "context": { "path": "director-private", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } },
-    { "id": "prepare-author-future", "type": "call", "target": "card-context-library/export-context", "arguments": { "categories": ["director-future"] }, "documents": {}, "outputPaths": { "context": "author-future" }, "outputs": { "context": { "path": "author-future", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } },
-    { "id": "review", "type": "agent", "agentId": "world-narrative-daily-director", "dependsOn": ["prepare-private", "prepare-author-future"], "context": { "mode": "previous-output", "fromNodes": ["prepare-private", "prepare-author-future"] }, "promptFile": "prompts/modules/world-narrative-coordinator/workflows/post-director-update/review.md", "outputs": {"result": {"path": "director-update.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["changes", "delegations"], "properties": {"changes": {"type": "object", "required": ["operations"], "properties": {"operations": {"type": "array"}}}, "delegations": {"type": "object"}}}}}, "delivery": {"primaryOutput": "result"}, "moduleAccess": [
-      { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.read"], "views": ["daily-director"], "queryBudget": { "maxRecords": 100, "maxCharacters": 1000000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox", "capabilities": ["director.archive.write"], "views": ["director-status"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } }
-    ], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "documentWorkspace": true, "callInputs": ["context"], "argumentInputs": ["phase"] } },
-    { "id": "commit", "type": "code", "dependsOn": ["review"], "context": { "mode": "previous-output", "fromNodes": ["review"] }, "outputs": {}, "moduleAccess": [
-      { "moduleId": "world-narrative-coordinator", "collectionId": "private-state", "capabilities": ["director.private.write"], "views": ["director"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 2000000 } },
-      { "moduleId": "world-narrative-coordinator", "collectionId": "archive-outbox", "capabilities": ["director.archive.write"], "views": ["director-status", "archive-source"], "queryBudget": { "maxRecords": 10000, "maxCharacters": 1000000 } }
-    ], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/commit-agent-batch.mjs", "sourceNode": "review", "sourceField": "changes", "allowedCollections": ["archive-outbox", "private-state"], "bindingMode": "assistant", "archiveFirst": true } },
-    { "id": "export-delegations", "type": "code", "dependsOn": ["commit"], "context": { "mode": "previous-output", "fromNodes": ["review"] }, "outputs": { "delegations": { "path": "delegations", "format": "director-delegation-plan", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "delegations" }] }, "moduleAccess": [], "workflowCalls": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/export-delegation-plan.mjs", "sourceNode": "review" } },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["export-delegations"], "exports": { "delegations": { "fromNode": "export-delegations", "output": "delegations" } }, "outputs": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+    {
+      "id": "prepare-private",
+      "type": "call",
+      "target": "world-narrative-coordinator/prepare-private-context",
+      "arguments": {},
+      "documents": {},
+      "outputPaths": {
+        "context": "director-private"
+      },
+      "outputs": {
+        "context": {
+          "path": "director-private",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    },
+    {
+      "id": "prepare-author-future",
+      "type": "call",
+      "target": "card-context-library/export-context",
+      "arguments": {
+        "categories": [
+          "director-future"
+        ]
+      },
+      "documents": {},
+      "outputPaths": {
+        "context": "author-future"
+      },
+      "outputs": {
+        "context": {
+          "path": "author-future",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "agentId": "world-narrative-coordinator/world-narrative-daily-director",
+      "dependsOn": [
+        "prepare-private",
+        "prepare-author-future"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-private",
+          "prepare-author-future"
+        ]
+      },
+      "promptFile": "prompts/workflows/post-director-update/review.md",
+      "outputs": {
+        "result": {
+          "path": "director-update.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "changes",
+              "delegations"
+            ],
+            "properties": {
+              "changes": {
+                "type": "object",
+                "required": [
+                  "operations"
+                ],
+                "properties": {
+                  "operations": {
+                    "type": "array"
+                  }
+                }
+              },
+              "delegations": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        },
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "deep-workbench",
+          "capabilities": [
+            "director.deep.read"
+          ],
+          "views": [
+            "daily-director"
+          ],
+          "queryBudget": {
+            "maxRecords": 100,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "archive-outbox",
+          "capabilities": [
+            "director.archive.write"
+          ],
+          "views": [
+        "director-status",
+        "archive-source"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "workflowCalls": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "callInputs": [
+          "context"
+        ],
+        "argumentInputs": [
+          "phase"
+        ]
+      }
+    },
+    {
+      "id": "commit",
+      "type": "code",
+      "dependsOn": [
+        "review"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "review"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        },
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "archive-outbox",
+          "capabilities": [
+            "director.archive.write"
+          ],
+          "views": [
+            "director-status",
+            "archive-source"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/commit-agent-batch.mjs",
+        "sourceNode": "review",
+        "sourceField": "changes",
+        "allowedCollections": [
+          "archive-outbox",
+          "private-state"
+        ],
+        "bindingMode": "assistant",
+        "archiveFirst": true
+      }
+    },
+    {
+      "id": "export-delegations",
+      "type": "code",
+      "dependsOn": [
+        "commit"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "review"
+        ]
+      },
+      "outputs": {
+        "delegations": {
+          "path": "delegations",
+          "format": "director-delegation-plan",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "delegations"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "workflowCalls": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/export-delegation-plan.mjs",
+        "sourceNode": "review"
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "export-delegations"
+      ],
+      "exports": {
+        "delegations": {
+          "fromNode": "export-delegations",
+          "output": "delegations"
+        }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
   ]
 }

@@ -16,9 +16,9 @@ import { normalizeWorkflowCallRequest, normalizeWorkflowDefinition } from "./rp-
 function config({ experts = 0, assistants = 0, references = false } = {}) {
   return {
     schemaVersion: 1,
-    leader: { id: "leader", agentId: "deep-leader" },
-    secretary: { id: "secretary", agentId: "deep-secretary" },
-    experts: Array.from({ length: experts }, (_, index) => ({ id: `expert-${index + 1}`, agentId: "deep-expert", focus: `focus ${index + 1}` })),
+    leader: { id: "leader", agentId: "test/deep-leader" },
+    secretary: { id: "secretary", agentId: "test/deep-secretary" },
+    experts: Array.from({ length: experts }, (_, index) => ({ id: `expert-${index + 1}`, agentId: "test/deep-expert", focus: `focus ${index + 1}` })),
     baseRetrieval: {
       id: "base-memory",
       kind: "workflow",
@@ -333,7 +333,7 @@ test("failed assistant attempts retain exact usage once across persistence and r
       id: "agent-helper",
       enabled: true,
       kind: "agent",
-      agentId: "helper",
+      agentId: "test/helper",
       inputAdapter: "natural-language-v1",
       fixedArguments: {},
       documents: {},
@@ -393,7 +393,7 @@ test("late timeout usage supplements the same attempt without publishing its res
       id: "agent-helper",
       enabled: true,
       kind: "agent",
-      agentId: "helper",
+      agentId: "test/helper",
       inputAdapter: "natural-language-v1",
       fixedArguments: {},
       documents: {},

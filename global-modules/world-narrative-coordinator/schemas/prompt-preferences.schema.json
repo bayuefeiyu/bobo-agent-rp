@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "required": [
+    "selections"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "selections": {
+      "type": "object",
+      "required": [
+        "protagonist-treatment",
+        "other-requirements"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protagonist-treatment": {
+          "type": "object",
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "optionId": {
+              "enum": [
+                "none",
+                "ordinary",
+                "favored",
+                "pressured",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "other-requirements": {
+          "type": "object",
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "optionId": {
+              "enum": [
+                "default",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        }
+      }
+    }
+  }
+}

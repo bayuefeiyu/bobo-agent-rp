@@ -2,10 +2,11 @@
 
 本文是项目提示词的创作者入口，回答四个问题：提示词在哪里、各自负责什么、通过什么机制进入卡片或模型请求，以及应该怎样手写。
 
-这里涉及两类来源：
+这里涉及三类来源：
 
-- `assets/pi-rp-runtime/prompts/` 是新卡运行模板的一部分。转卡打包时复制进卡，随后由该卡独立维护。
-- `assets/prompt-templates/agent-preferences/` 中被通用 Agent 提示词以 `{{include:agent-preferences/路径.md}}` 引用的片段，是该 Agent 的默认内容；新卡打包时按引用位置展开。其他 Agent 偏好、`task-defaults/` 和 `static-materials/` 仍是转卡阶段可选的起步材料。
+- `assets/pi-rp-runtime/prompts/` 是新卡运行模板的一部分。这里只维护公共系统、总前后置和模型相关提示词；转卡打包时复制进卡，随后由该卡独立维护。
+- `global-modules/<module-id>/prompts/` 保存所属 Agent 和节点的提示词，随整个模块进入卡内 `features/<module-id>/`。
+- `assets/prompt-templates/agent-preferences/` 中被模块 Agent 提示词以 `{{include:agent-preferences/路径.md}}` 引用的片段，是该 Agent 的默认内容；新卡打包时按引用位置展开。其他 Agent 偏好、`task-defaults/` 和 `static-materials/` 仍是转卡阶段可选的起步材料。
 
 完整的创作类、非创作类、系统、Agent 和工作流提示词位置见 [提示词来源清单](../../references/prompt-inventory.md)。
 
@@ -24,24 +25,15 @@ assets/
 │  │  │  └─ tools.json
 │  │  ├─ prefix/
 │  │  │  └─ total.md
-│  │  ├─ agents/
-│  │  │  └─ narrative-writer.md
-│  │  ├─ workflows/
-│  │  │  ├─ standard-rp/write-narrative.md
-│  │  │  └─ advanced-memory-rp/write-narrative.md
 │  │  └─ tail/
 │  │     └─ total.md
-│  ├─ agents/                 # Agent 定义，使用 promptFile 指向上面的正文
-│  └─ workflows/              # 工作流定义，使用 promptFile 指向上面的节点任务
+│  └─ .pi/                    # 公共引擎、工具与运行库
 └─ prompt-templates/
    ├─ README.md               # 本文
    ├─ agent-preferences/      # Agent 默认引用或转卡时选用的片段
    │  ├─ 创作agent身份定位.md
    │  └─ common-creative.md
-   ├─ task-defaults/          # 拼入指定工作流节点任务的可选片段
-   │  ├─ output-language.md
-   │  ├─ word-count.md
-   │  └─ input-mode/
+   ├─ task-defaults/          # 其他可选节点片段；字数、语言、扩写已移入正文模块拨档
    └─ static-materials/       # 导入卡片 context library 的可选静态资料
       ├─ INDEX.md             # 部分材料的可选使用时机预设
       ├─ styles/
@@ -171,13 +163,13 @@ assets/
 
 手写方法：只写该模型确实需要的差异。前缀默认 `system`，尾部默认 `user`，两者都支持角色标记。不要把通用创作规则复制到每个模型配置中。
 
-### `prompts/agents/*.md`
+### `features/<module-id>/prompts/agents/*.md`
 
 作用：定义一个 Agent 的长期职责、判断边界、工具使用方式和产物要求。
 
 用在哪儿：所有绑定该 Agent 的工作流节点都会读取；具体节点任务仍由工作流节点提示词提供。
 
-引入机制：通用 Agent 文件随新卡打包，Agent 定义通过 `promptFile` 引用。Agent 提示词可用 `{{include:agent-preferences/相对路径.md}}` 在指定位置插入项目片段；打包时展开为卡内完整提示词，不留下文件引用。模块专属 Agent 的源文件位于 `global-modules/<module-id>/prompts/agents/`；导入模块时复制到卡片 `prompts/modules/<module-id>/agents/`。转卡时额外选中的长期偏好仍可拼入指定 Agent 的提示词。
+引入机制：Agent 文件随所属模块整体复制进卡，Agent 定义通过模块相对的 `promptFile` 引用。Agent 提示词可用 `{{include:agent-preferences/相对路径.md}}` 在指定位置插入项目片段；打包时展开为卡内完整提示词，不留下文件引用。模块专属 Agent 的源文件位于 `global-modules/<module-id>/prompts/agents/`；导入模块时复制到卡片 `features/<module-id>/prompts/agents/`。转卡时额外选中的长期偏好仍可拼入指定 Agent 的提示词。
 
 手写方法：先写“你负责什么”，再写长期有效的约束，最后写通用交付方式。不要写只属于某个节点的一次性任务，也不要在多个 Agent 中重复模块 Skill 已经定义的领域规则。默认角色是 `system`。
 
@@ -206,13 +198,13 @@ assets/
 
 这类 `assistant` 块是历史正例，后面仍会有本轮 `user` 任务；它不是最终 prefill。
 
-### `prompts/workflows/<workflow-id>/<node>.md`
+### `features/<module-id>/prompts/workflows/<workflow-id>/<node>.md`
 
 作用：定义一个具体工作流节点在本轮要完成什么、按什么顺序处理、需要交付什么。
 
 用在哪儿：运行时把节点提示词放入当前 `user` 消息的“【任务】”部分，同时附上玩家输入、补充上下文和资料索引。
 
-引入机制：通用工作流节点文件随新卡打包，工作流定义通过 `promptFile` 引用。模块节点的源文件位于 `global-modules/<module-id>/prompts/workflows/`；导入模块时复制到卡片 `prompts/modules/<module-id>/workflows/`。转卡时，用户明确选择的输出语言、输入处理方式、字数等任务默认值会加入相应节点提示词。
+引入机制：工作流节点文件随所属模块整体复制进卡，工作流定义通过模块相对的 `promptFile` 引用。模块节点的源文件位于 `global-modules/<module-id>/prompts/workflows/`；导入模块时复制到卡片 `features/<module-id>/prompts/workflows/`。正文的字数、语言、扩写默认值已移到 `narrative-controls` 拨档，导入该模块时仅通过组合后的普通静态《创作要求》交付，不再固定追加到正文任务。
 
 手写方法：直接写任务步骤，不写“你长期是谁”，也不写角色标记。应明确读取哪些资料、进行哪些判断、调用哪些已开放能力、生成哪个正式产物以及何时结束。例如：
 
@@ -222,7 +214,7 @@ assets/
 先形成仅供本轮使用的简短规划，再完成正文。把正文写入工作文件，交付 narrative，确认交付成功后结束节点。
 ```
 
-项目提供的 Agent 与 Agent／team 节点只用 `promptFile` 保存可定制提示词，不在 JSON 中重复正文。运行时代码仍兼容旧卡的内联 `prompt`；新定义不要同时写两者。
+项目提供的 Agent 与 Agent／team 节点只用 `promptFile` 保存可定制提示词，不在 JSON 中重复正文。不提供旧目录或旧协议兼容层。新定义不要同时写 `promptFile` 与 `prompt`。
 
 ### `prompts/tail/total.md`
 
@@ -275,7 +267,7 @@ assets/
 
 ### `prompt-templates/task-defaults/**`
 
-作用：提供可直接加入节点“【任务】”的默认要求。预置入口聚焦输出语言、续写／扩写等输入处理方式和字数要求，这些要求不限于创作 Agent 或创作工作流。
+作用：提供可直接加入节点“【任务】”的默认要求。原夏瑾系列字数、语言、续写／扩写素材已迁入 `global-modules/narrative-controls/documents/options/`，完整保留为正文拨档源；此目录供创作者另写其他任务片段。
 
 用在哪儿：用户为实际存在的目标工作流节点分别选择。选中后按方案列明的顺序原样加入该节点已有任务提示词；本轮明确要求可以覆盖默认值时，应在卡内规则中保持这种优先关系。
 
@@ -303,6 +295,8 @@ assets/
 
 ### 自由扩展与组合
 
+可在游玩中拨档切换的正文要求使用独立资源机制：项目源位于 `global-modules/narrative-controls/documents/options/`，卡内副本位于 `features/narrative-controls/documents/options/`，不属于本目录的普通静态材料。叙事节奏与抢话方式已迁入该资源区。转卡选择模块后保留整组档位，由前端选择决定本次交付内容；生成的《创作要求》合入普通静态资料目录，与其他创作准则同级。详见[可切换正文提示词](../../references/switchable-prompts.md)。并列且非互斥的其他静态材料仍按上述规则处理。
+
 创作者可以在上述三个目录下任意新增、删除、改名或重组子目录和 Markdown 文件。转卡者递归检查实际文件，以实际内容为准；`static-materials/INDEX.md` 是保留的目录说明，不属于可选材料。目录名只帮助作者整理，不自动声明互斥关系、拼接顺序、用途或运行规则。README 不维护穷举文件清单，新增文件不需要登记在这里，也不要求写入 `INDEX.md`。
 
 多个 Agent 或节点片段的拼接顺序必须在转卡方案中明示，不能由文件名或目录遍历顺序暗中决定。固定提示词与静态资料可以表达相同或相近的要求；转卡者不自动搬移、拆分或去重，只在发现会改变行为的实际冲突时指出具体条文和影响。
@@ -326,6 +320,14 @@ assets/
 | 某个全局模块自己的长期职责和任务 | 该 `global-modules/<module-id>/` 内的 Agent、工作流或 Skill |
 
 判断不清时，优先问两个问题：它是否在每个节点都成立，以及它描述的是长期职责还是当前任务。适用范围越窄，越应靠近具体 Agent、节点或静态资料，避免把所有规则堆进总前缀。
+
+## 按 Agent 实际可见上下文编写
+
+写到总体流程、其他角色或前后阶段时，先确认当前 Agent 从哪里知道这些信息：检查实际绑定的 Agent 提示词、节点任务、运行时阶段任务，以及本次确实交付且要求读取的资料。仓库中存在流程说明、工作流声明了前后依赖，或另一个 Agent 已读过资料，都不等于当前 Agent 已获得这些内容。通用 Agent 提示词还要检查它绑定的每个节点，不能只凭其中一个节点提供了说明就假定始终可用。
+
+若理解整个流程并非完成任务所必需，优先把要求改写为当前 Agent 能执行的动作、输入依据、输出和权限边界；若必须理解协作关系，则在实际送达的节点任务或资料中补充最少必要说明，明确当前步骤、所接收的内容和应交付的结果。不要仅要求 Agent 自行猜测角色名、阶段名或寻找未提供的流程文档。
+
+例如，“统审不替代导演的后置复盘”应具体说明只审核当前候选，附带更新限于本次发现的问题，不全面重评整轮剧情或重排长期计划；“正式报告由秘书撰写”用于 Leader 时，应说明其负责综合意见、给出裁定及草稿修订意见，无需编写正式报告文件。协作分工已在当前会议任务中解释时可以保留，但不能用它代替对当前角色动作的说明。
 
 ## 编辑后的检查
 

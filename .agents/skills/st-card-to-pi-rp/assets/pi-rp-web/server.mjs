@@ -140,6 +140,25 @@ function cleanId(value, fieldName = "id") {
   return id;
 }
 
+function cleanComponentReference(value, fieldName = "component reference") {
+  let reference;
+  try {
+    reference = decodeURIComponent(cleanText(value, fieldName, 400));
+  } catch (error) {
+    if (error?.status === 400) throw error;
+    const invalid = new Error(`${fieldName} is invalid.`);
+    invalid.status = 400;
+    throw invalid;
+  }
+  const parts = reference.split("/");
+  if (parts.length !== 2 || parts.some(part => !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part))) {
+    const error = new Error(`${fieldName} must use module-id/component-id.`);
+    error.status = 400;
+    throw error;
+  }
+  return reference;
+}
+
 function cleanSequence(value) {
   const sequence = Number(value);
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
@@ -360,32 +379,18 @@ export function createApplication({ cardStore, bridge }) {
       if (request.method === "GET" && url.pathname === "/api/models") {
         return sendJson(response, 200, await bridge.listModels());
       }
-      if (request.method === "POST" && url.pathname === "/api/models") {
-        return sendJson(response, 200, await bridge.saveModel(await readJson(request)));
-      }
       if (request.method === "POST" && url.pathname === "/api/models/discover") {
         return sendJson(response, 200, await bridge.discoverModels(await readJson(request)));
       }
       if (request.method === "POST" && url.pathname === "/api/models/test") {
         return sendJson(response, 200, await bridge.testModel(await readJson(request)));
       }
-      const modelMatch = url.pathname.match(/^\/api\/models\/([a-zA-Z0-9][a-zA-Z0-9._:-]*)$/);
-      if (request.method === "DELETE" && modelMatch) {
-        return sendJson(response, 200, await bridge.deleteModel(cleanId(modelMatch[1], "modelId")));
-      }
+
       if (request.method === "GET" && url.pathname === "/api/agents") {
         return sendJson(response, 200, await bridge.listAgents());
       }
-      const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/);
-      if (request.method === "PUT" && agentMatch) {
-        const body = await readJson(request);
-        body.id = cleanId(agentMatch[1], "agentId");
-        return sendJson(response, 200, await bridge.saveAgent(body, url.searchParams.get("scope") === "global" ? "global" : "card"));
-      }
-      const restoreAgentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/restore$/);
-      if (request.method === "POST" && restoreAgentMatch) {
-        return sendJson(response, 200, await bridge.restoreAgent(cleanId(restoreAgentMatch[1], "agentId")));
-      }
+
+
       if (request.method === "GET" && url.pathname === "/api/workflows") {
         return sendJson(response, 200, await bridge.listWorkflows());
       }
@@ -409,25 +414,12 @@ export function createApplication({ cardStore, bridge }) {
       if (request.method === "GET" && url.pathname === "/api/workflow-policy") {
         return sendJson(response, 200, await bridge.getWorkflowPolicy());
       }
-      if (request.method === "PUT" && url.pathname === "/api/workflow-policy") {
-        return sendJson(response, 200, await bridge.saveWorkflowPolicy(await readJson(request)));
-      }
-      const activateWorkflowMatch = url.pathname.match(/^\/api\/workflows\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/activate$/);
+      const activateWorkflowMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)\/activate$/);
       if (request.method === "POST" && activateWorkflowMatch) {
-        return sendJson(response, 202, await bridge.activateWorkflow(cleanId(activateWorkflowMatch[1], "workflowId"), await readJson(request)));
+        return sendJson(response, 202, await bridge.activateWorkflow(cleanComponentReference(activateWorkflowMatch[1], "workflowId"), await readJson(request)));
       }
-      const workflowBindingMatch = url.pathname.match(/^\/api\/workflows\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/binding$/);
-      if (request.method === "PUT" && workflowBindingMatch) {
-        return sendJson(response, 200, await bridge.updateWorkflowNodeBinding(
-          cleanId(workflowBindingMatch[1], "workflowId"),
-          cleanId(workflowBindingMatch[2], "nodeId"),
-          await readJson(request),
-        ));
-      }
-      const workflowTriggerMatch = url.pathname.match(/^\/api\/workflows\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/trigger$/);
-      if (request.method === "PUT" && workflowTriggerMatch) {
-        return sendJson(response, 200, await bridge.updateWorkflowTrigger(cleanId(workflowTriggerMatch[1], "workflowId"), await readJson(request)));
-      }
+
+
       const retryRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/nodes\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/retry$/);
       if (request.method === "POST" && retryRunMatch) {
         return sendJson(response, 202, await bridge.retryWorkflowNode(

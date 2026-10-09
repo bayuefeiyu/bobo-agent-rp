@@ -3,9 +3,12 @@
   "id": "world-narrative-team-expert",
   "name": "世界叙事推演专家",
   "description": "从配置的关注点切入，同时保留对全部推演问题的发言权。",
-  "promptFile": "prompts/modules/world-narrative-coordinator/agents/world-narrative-team-expert.md",
+  "promptFile": "prompts/agents/world-narrative-team-expert.md",
   "tools": [],
-  "contextPermissions": ["workspace:node"],
+  "contextPermissions": [
+    "workspace:node"
+  ],
   "outputMode": "text",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-narrative-coordinator"
 }

@@ -11,7 +11,7 @@ function safeResolve(root, path) {
   return target;
 }
 
-export function resolveCodeSubmissionBinding(requested, { messages = [], visibleThroughTurn = null, fallback = { turn: 0, messageId: null } } = {}) {
+export function resolveCodeSubmissionBinding(requested, { messages = /** @type {import("./rp-host-types.ts").RecordEnvelope[]} */ ([]), visibleThroughTurn = /** @type {number | null} */ (null), fallback = /** @type {{turn:number,messageId:string|null}} */ ({ turn: 0, messageId: null }) } = {}) {
   if (requested === undefined || requested === null) return structuredClone(fallback);
   if (!requested || typeof requested !== "object" || Array.isArray(requested) || Object.keys(requested).some(key => !["turn", "messageId"].includes(key))) {
     throw new Error("Code data submission binding must contain only turn and messageId.");
@@ -28,7 +28,7 @@ export function resolveCodeSubmissionBinding(requested, { messages = [], visible
   return { turn: requested.turn, messageId: requested.messageId };
 }
 
-export function resolveCodeSubmissionSourceReferences(requestedMessageIds, { messages = [], visibleThroughTurn = null, fallback = [], expectedRevisions = null } = {}) {
+export function resolveCodeSubmissionSourceReferences(requestedMessageIds, { messages = /** @type {import("./rp-host-types.ts").RecordEnvelope[]} */ ([]), visibleThroughTurn = /** @type {number | null} */ (null), fallback = [], expectedRevisions = null } = {}) {
   if (requestedMessageIds === undefined || requestedMessageIds === null) return mergeSourceReferences(fallback);
   if (!Array.isArray(requestedMessageIds) || requestedMessageIds.some(id => typeof id !== "string" || !id)) {
     throw new Error("Code data submission sourceMessageIds must be an array of message IDs.");

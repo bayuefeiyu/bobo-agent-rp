@@ -1,0 +1,749 @@
+{
+  "schemaVersion": 1,
+  "_comment": "跨语言协议样例（S3）。JS 侧由 rp-contracts.test.mjs 消费（运行时归一化实现），Python 侧由 test_contract_samples.py 消费（卡包校验器）。同一份样例必须得到一致的接受/拒绝结论；不接受任何一侧跳过。",
+  "samples": [
+    {
+      "id": "module.v7.data.valid",
+      "ruleIds": [
+        "struct.module.schemaVersion",
+        "struct.module.fieldSet",
+        "struct.module.kindFiles"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-module",
+        "moduleKind": "data",
+        "basedOn": null,
+        "title": "示例数据模块",
+        "description": "仅用于协议样例。",
+        "surface": "frontend",
+        "contextOrder": 100,
+        "displayOrder": 10,
+        "dataContractFile": "data-contract.json",
+        "resourceCatalogFile": null,
+        "frontendViewFile": "frontend-view.json",
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [
+          "agents/writer/agent.json"
+        ],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "module.v7.resource.valid",
+      "ruleIds": [
+        "struct.module.kindFiles",
+        "struct.module.surface"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-resource",
+        "moduleKind": "resource",
+        "basedOn": null,
+        "title": "示例资源模块",
+        "description": "仅用于协议样例。",
+        "surface": "background",
+        "contextOrder": 0,
+        "displayOrder": 0,
+        "dataContractFile": null,
+        "resourceCatalogFile": "catalog.json",
+        "frontendViewFile": null,
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/export/workflow.json"
+        ]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "module.v7.reject.wrongVersion",
+      "ruleIds": [
+        "struct.module.schemaVersion",
+        "reject.unsupportedVersion"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 6,
+        "id": "demo-module",
+        "moduleKind": "data",
+        "basedOn": null,
+        "title": "旧版本模块",
+        "description": "应被拒绝。",
+        "surface": "frontend",
+        "contextOrder": 100,
+        "displayOrder": 10,
+        "dataContractFile": "data-contract.json",
+        "resourceCatalogFile": null,
+        "frontendViewFile": "frontend-view.json",
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "module.v7.reject.extraField",
+      "ruleIds": [
+        "struct.module.fieldSet"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-module",
+        "moduleKind": "data",
+        "basedOn": null,
+        "title": "多字段模块",
+        "description": "应被拒绝。",
+        "surface": "frontend",
+        "contextOrder": 100,
+        "displayOrder": 10,
+        "dataContractFile": "data-contract.json",
+        "resourceCatalogFile": null,
+        "frontendViewFile": "frontend-view.json",
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ],
+        "legacyAgents": [
+          "agents/old/agent.json"
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "module.v7.reject.kindFileMismatch",
+      "ruleIds": [
+        "struct.module.kindFiles"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-module",
+        "moduleKind": "resource",
+        "basedOn": null,
+        "title": "资源模块却声明数据契约",
+        "description": "应被拒绝。",
+        "surface": "background",
+        "contextOrder": 0,
+        "displayOrder": 0,
+        "dataContractFile": "data-contract.json",
+        "resourceCatalogFile": "catalog.json",
+        "frontendViewFile": null,
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "module.v7.reject.resourceFrontend",
+      "ruleIds": [
+        "struct.module.surface"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-resource",
+        "moduleKind": "resource",
+        "basedOn": null,
+        "title": "资源模块不得有前端",
+        "description": "应被拒绝。",
+        "surface": "frontend",
+        "contextOrder": 0,
+        "displayOrder": 0,
+        "dataContractFile": null,
+        "resourceCatalogFile": "catalog.json",
+        "frontendViewFile": "frontend-view.json",
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "module.v7.reject.escapePath",
+      "ruleIds": [
+        "struct.path.relative"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 7,
+        "id": "demo-module",
+        "moduleKind": "data",
+        "basedOn": null,
+        "title": "越界路径",
+        "description": "应被拒绝。",
+        "surface": "frontend",
+        "contextOrder": 100,
+        "displayOrder": 10,
+        "dataContractFile": "../../outside/data-contract.json",
+        "resourceCatalogFile": null,
+        "frontendViewFile": "frontend-view.json",
+        "skillFile": "skill/SKILL.md",
+        "agentFiles": [],
+        "workflowFiles": [
+          "workflows/run/workflow.json"
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.entry.valid",
+      "ruleIds": [
+        "struct.workflow.schemaVersion",
+        "struct.workflow.owner",
+        "struct.workflow.entryKind"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "workflow.v4.callable.valid",
+      "ruleIds": [
+        "struct.workflow.callableKind"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/lookup",
+        "kind": "module-external",
+        "agentCallable": true,
+        "nodes": [
+          {
+            "id": "return",
+            "type": "workflow-return"
+          }
+        ]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "workflow.v4.reject.wrongVersion",
+      "ruleIds": [
+        "struct.workflow.schemaVersion",
+        "reject.unsupportedVersion"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 3,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.missingOwner",
+      "ruleIds": [
+        "struct.workflow.owner"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.ownerMismatch",
+      "ruleIds": [
+        "struct.workflow.owner"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "other-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.unknownKind",
+      "ruleIds": [
+        "struct.workflow.kindEnum"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "background-ish",
+        "nodes": [
+          {
+            "id": "return",
+            "type": "workflow-return"
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.unknownNodeType",
+      "ruleIds": [
+        "struct.workflow.nodeTypeEnum"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "weird",
+            "type": "not-a-node-type"
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.agentCallableOnEntry",
+      "ruleIds": [
+        "struct.workflow.agentCallable"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "agentCallable": true,
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.emptyNodes",
+      "ruleIds": [
+        "struct.workflow.nodesRequired"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": []
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "workflow.v4.reject.danglingDependency",
+      "ruleIds": [
+        "runtime.workflow.dag"
+      ],
+      "layer": "runtime",
+      "input": {
+        "schemaVersion": 4,
+        "ownerModuleId": "demo-module",
+        "id": "demo-module/run",
+        "kind": "foreground",
+        "nodes": [
+          {
+            "id": "narrative",
+            "type": "agent",
+            "outputs": {
+              "story": {
+                "path": "story.md",
+                "format": "narrative"
+              }
+            }
+          },
+          {
+            "id": "finalize",
+            "type": "turn-finalize",
+            "dependsOn": [
+              "narrative",
+              "ghost"
+            ],
+            "narrative": {
+              "fromNode": "narrative",
+              "output": "story"
+            }
+          }
+        ]
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "datacontract.v1.valid",
+      "ruleIds": [
+        "struct.datacontract.schemaVersion",
+        "struct.datacontract.moduleId"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 1,
+        "moduleId": "demo-module",
+        "collections": {
+          "entries": {
+            "storage": {
+              "kind": "record-log",
+              "partition": {
+                "mode": "single"
+              }
+            },
+            "recordTypes": {
+              "demo.entry": {
+                "dataSchemaVersion": 1,
+                "indexes": {
+                  "spread": {
+                    "path": "/data/spread",
+                    "type": "number",
+                    "default": 0,
+                    "operators": [
+                      "eq",
+                      "gte",
+                      "lte"
+                    ]
+                  }
+                },
+                "searchableFields": [
+                  "/data/content"
+                ],
+                "views": {
+                  "rp": {
+                    "format": "text",
+                    "fields": [
+                      {
+                        "path": "/data/content"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "capabilities": {
+          "demo.query": {
+            "collections": [
+              "entries"
+            ],
+            "actions": [
+              "query"
+            ],
+            "views": [
+              "rp"
+            ]
+          }
+        }
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "datacontract.v1.reject.wrongVersion",
+      "ruleIds": [
+        "struct.datacontract.schemaVersion",
+        "reject.unsupportedVersion"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 2,
+        "moduleId": "demo-module",
+        "collections": {},
+        "capabilities": {}
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "datacontract.v1.reject.moduleIdMismatch",
+      "ruleIds": [
+        "struct.datacontract.moduleId"
+      ],
+      "layer": "cardpack",
+      "input": {
+        "schemaVersion": 1,
+        "moduleId": "other-module",
+        "collections": {
+          "entries": {
+            "storage": {
+              "kind": "record-log",
+              "partition": {
+                "mode": "single"
+              }
+            },
+            "recordTypes": {
+              "demo.entry": {
+                "dataSchemaVersion": 1,
+                "indexes": {},
+                "searchableFields": [
+                  "/data/content"
+                ],
+                "views": {
+                  "rp": {
+                    "format": "text",
+                    "fields": [
+                      {
+                        "path": "/data/content"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "capabilities": {}
+      },
+      "expect": "reject",
+      "note": "契约声明的 moduleId 与其所在模块不一致。这是跨文件关系，input 自包含时无法表达（运行时归一化把期望 id 作为参数接收），因此只由卡包层执行；运行时的同一规则由归一化器的 expectedModuleId 参数覆盖。"
+    },
+    {
+      "id": "catalog.v1.valid",
+      "ruleIds": [
+        "struct.catalog.schemaVersion",
+        "struct.catalog.moduleId",
+        "struct.catalog.choiceGroup"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 1,
+        "moduleId": "demo-module",
+        "categories": {
+          "lore": {
+            "title": "设定",
+            "description": "世界设定资料。"
+          }
+        },
+        "selectionGroups": {},
+        "documents": [
+          {
+            "id": "world-overview",
+            "path": "documents/world-overview.md",
+            "title": "世界总览",
+            "summary": "仅用于协议样例。",
+            "categories": [
+              "lore"
+            ],
+            "subcategory": null,
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": [
+              "analysis"
+            ],
+            "priority": 10,
+            "selectionGroup": null,
+            "readWhen": [],
+            "perspective": "general",
+            "aliases": [],
+            "related": [],
+            "sources": []
+          }
+        ]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "catalog.v1.reject.wrongVersion",
+      "ruleIds": [
+        "struct.catalog.schemaVersion",
+        "reject.unsupportedVersion"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 2,
+        "moduleId": "demo-module",
+        "categories": {},
+        "selectionGroups": {},
+        "documents": []
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "datacontract.v1.reject.unknownField",
+      "ruleIds": [
+        "struct.datacontract.fieldSet"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 1,
+        "moduleId": "demo-module",
+        "collections": {},
+        "capabilities": {},
+        "legacyVariables": {}
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "catalog.v1.reject.choiceWithoutGroup",
+      "ruleIds": [
+        "struct.catalog.choiceGroup"
+      ],
+      "layer": "runtime+cardpack",
+      "input": {
+        "schemaVersion": 1,
+        "moduleId": "demo-module",
+        "categories": {
+          "lore": {
+            "title": "设定",
+            "description": ""
+          }
+        },
+        "selectionGroups": {},
+        "documents": [
+          {
+            "id": "pick-one",
+            "path": "documents/pick-one.md",
+            "title": "任选一篇",
+            "summary": "仅用于协议样例。",
+            "categories": [
+              "lore"
+            ],
+            "subcategory": null,
+            "readPolicy": "choice",
+            "authority": "advisory",
+            "appliesAt": [
+              "analysis"
+            ],
+            "priority": 10,
+            "selectionGroup": null,
+            "readWhen": [],
+            "perspective": "general",
+            "aliases": [],
+            "related": [],
+            "sources": []
+          }
+        ]
+      },
+      "expect": "reject"
+    }
+  ]
+}

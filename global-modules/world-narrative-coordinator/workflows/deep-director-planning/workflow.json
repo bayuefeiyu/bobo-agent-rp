@@ -1,15 +1,350 @@
 {
-  "schemaVersion": 3, "id": "deep-director-planning", "ownerModuleId": "world-narrative-coordinator", "title": "深度导演推演", "description": "从冻结剧情、完整导演资料、作者未来资料和高预算记忆中生成一份完整的高层推演报告。", "kind": "module-internal", "agentCallable": false,
-  "interface": { "inputs": { "operationId": { "type": "parameter", "required": false, "valueType": "string", "description": "新旧深度导演共用的外层运行标识；旧流程内部仍使用自身运行ID提交。" }, "triggerReasons": { "type": "parameter", "required": true, "valueType": "array", "description": "仅说明为什么启动，不指定推演任务。" }, "story-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot", "document-set"], "description": "启动时冻结的明确剧情范围；自动回合优先复用前台快照，其他入口由代码按配置窗口生成。" } }, "exports": {} },
-  "revision": "2", "defaults": { "agentId": "world-narrative-deep-director", "modelId": "pi:current", "context": { "mode": "fixed" } }, "instancePolicy": { "mode": "single", "maxConcurrentInstances": 1 },
-  "writeLocks": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench" }],
+  "schemaVersion": 4,
+  "id": "deep-director-planning",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "深度导演推演",
+  "description": "从冻结剧情、完整导演资料、作者未来资料和高预算记忆中生成一份完整的高层推演报告。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "operationId": {
+        "type": "parameter",
+        "required": false,
+        "valueType": "string",
+        "description": "新旧深度导演共用的外层运行标识；旧流程内部仍使用自身运行ID提交。"
+      },
+      "triggerReasons": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "array",
+        "description": "仅说明为什么启动，不指定推演任务。"
+      },
+      "story-context": {
+        "type": "document",
+        "required": true,
+        "kind": "directory",
+        "formats": [
+          "document-workspace-snapshot",
+          "document-set"
+        ],
+        "description": "启动时冻结的明确剧情范围；自动回合优先复用前台快照，其他入口由代码按配置窗口生成。"
+      }
+    },
+    "exports": {}
+  },
+  "revision": "2",
+  "defaults": {
+    "agentId": "world-narrative-coordinator/world-narrative-deep-director",
+    "modelId": "pi:current",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "deep-workbench"
+    }
+  ],
   "nodes": [
-    { "id": "mark-running", "type": "code", "outputs": {}, "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/mark-deep-running.mjs" } },
-    { "id": "prepare-private", "type": "call", "target": "world-narrative-coordinator/prepare-private-context", "dependsOn": ["mark-running"], "arguments": {}, "documents": {}, "outputPaths": { "context": "director-private" }, "outputs": { "context": { "path": "director-private", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "documentIndex": { "context": { "readPolicy": "required", "authority": "canonical", "appliesAt": "planning", "priority": 100, "description": "完整导演私有资料；先读CURRENT.md和DOCUMENTS.md。" } } } },
-    { "id": "prepare-author-future", "type": "call", "target": "card-context-library/export-context", "dependsOn": ["mark-running"], "arguments": { "categories": ["director-future"] }, "documents": {}, "outputPaths": { "context": "author-future" }, "outputs": { "context": { "path": "author-future", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "context" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "documentIndex": { "context": { "readPolicy": "required", "authority": "binding", "appliesAt": "planning", "priority": 100, "description": "作者未来意图原文与完整目录。" } } } },
-    { "id": "plan", "type": "agent", "agentId": "world-narrative-deep-director", "dependsOn": ["prepare-private", "prepare-author-future"], "context": { "mode": "previous-output", "fromNodes": ["prepare-private", "prepare-author-future"] }, "promptFile": "prompts/modules/world-narrative-coordinator/workflows/deep-director-planning/plan.md", "outputs": {"result": {"path": "deep-report.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["summary", "content", "coverage", "assumptions", "invalidatingSignals", "worldNarrativeTopics", "nextReviewTriggers"], "properties": {"summary": {"type": "string"}, "content": {"type": "string"}, "coverage": {"type": "array"}, "assumptions": {"type": "array"}, "invalidatingSignals": {"type": "array"}, "worldNarrativeTopics": {"type": "array"}, "nextReviewTriggers": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"}, "moduleAccess": [], "workflowCalls": [{ "target": "narrative-memory/narrative-memory-retrieve", "fixedArguments": { "budget": { "entityQueryLimit": 40, "initialInspectLimit": 60, "supplementalInspectLimit": 15, "informationLimit": 45, "elasticInformationLimit": 10, "possiblePerQueryLimit": 3 } }, "maxCalls": 2 }], "dataCommit": { "onNodeEnd": [] }, "metadata": { "documentWorkspace": true, "argumentInputs": ["triggerReasons"], "callInputs": ["story-context"] } },
-    { "id": "materialize-report", "type": "code", "dependsOn": ["plan"], "outputs": { "report": { "path": "deep-report.json", "format": "json", "kind": "file", "scope": "workflow", "retain": "run" } }, "workspaceHandoff": { "include": [{ "output": "report" }] }, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/materialize-deep-report.mjs", "sourceNode": "plan", "sourceOutput": "report", "outputName": "report" } },
-    { "id": "commit", "type": "code", "dependsOn": ["materialize-report"], "context": { "mode": "previous-output", "fromNodes": ["materialize-report"] }, "outputs": {}, "moduleAccess": [{ "moduleId": "world-narrative-coordinator", "collectionId": "deep-workbench", "capabilities": ["director.deep.write"], "views": ["deep-director"], "queryBudget": { "maxRecords": 10, "maxCharacters": 1000000 } }], "dataCommit": { "onNodeEnd": [] }, "metadata": { "entryFile": "features/world-narrative-coordinator/runtime/workflow/commit-deep-report.mjs", "reportNode": "materialize-report" } },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["commit"], "exports": {}, "moduleAccess": [], "dataCommit": { "onNodeEnd": [] } }
+    {
+      "id": "mark-running",
+      "type": "code",
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "deep-workbench",
+          "capabilities": [
+            "director.deep.write"
+          ],
+          "views": [
+            "deep-director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/mark-deep-running.mjs"
+      }
+    },
+    {
+      "id": "prepare-private",
+      "type": "call",
+      "target": "world-narrative-coordinator/prepare-private-context",
+      "dependsOn": [
+        "mark-running"
+      ],
+      "arguments": {},
+      "documents": {},
+      "outputPaths": {
+        "context": "director-private"
+      },
+      "outputs": {
+        "context": {
+          "path": "director-private",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentIndex": {
+          "context": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "planning",
+            "priority": 100,
+            "description": "完整导演私有资料；先读CURRENT.md和DOCUMENTS.md。"
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-author-future",
+      "type": "call",
+      "target": "card-context-library/export-context",
+      "dependsOn": [
+        "mark-running"
+      ],
+      "arguments": {
+        "categories": [
+          "director-future"
+        ]
+      },
+      "documents": {},
+      "outputPaths": {
+        "context": "author-future"
+      },
+      "outputs": {
+        "context": {
+          "path": "author-future",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentIndex": {
+          "context": {
+            "readPolicy": "required",
+            "authority": "binding",
+            "appliesAt": "planning",
+            "priority": 100,
+            "description": "作者未来意图原文与完整目录。"
+          }
+        }
+      }
+    },
+    {
+      "id": "plan",
+      "type": "agent",
+      "agentId": "world-narrative-coordinator/world-narrative-deep-director",
+      "dependsOn": [
+        "prepare-private",
+        "prepare-author-future"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-private",
+          "prepare-author-future"
+        ]
+      },
+      "promptFile": "prompts/workflows/deep-director-planning/plan.md",
+      "outputs": {
+        "result": {
+          "path": "deep-report.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "summary",
+              "content",
+              "coverage",
+              "assumptions",
+              "invalidatingSignals",
+              "worldNarrativeTopics",
+              "nextReviewTriggers"
+            ],
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "coverage": {
+                "type": "array"
+              },
+              "assumptions": {
+                "type": "array"
+              },
+              "invalidatingSignals": {
+                "type": "array"
+              },
+              "worldNarrativeTopics": {
+                "type": "array"
+              },
+              "nextReviewTriggers": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "moduleAccess": [],
+      "workflowCalls": [
+        {
+          "target": "narrative-memory/narrative-memory-retrieve",
+          "fixedArguments": {
+            "budget": {
+              "entityQueryLimit": 40,
+              "initialInspectLimit": 60,
+              "supplementalInspectLimit": 15,
+              "informationLimit": 45,
+              "elasticInformationLimit": 10,
+              "possiblePerQueryLimit": 3
+            }
+          },
+          "maxCalls": 2
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "argumentInputs": [
+          "triggerReasons"
+        ],
+        "callInputs": [
+          "story-context"
+        ]
+      }
+    },
+    {
+      "id": "materialize-report",
+      "type": "code",
+      "dependsOn": [
+        "plan"
+      ],
+      "outputs": {
+        "report": {
+          "path": "deep-report.json",
+          "format": "json",
+          "kind": "file",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "report"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/materialize-deep-report.mjs",
+        "sourceNode": "plan",
+        "sourceOutput": "report",
+        "outputName": "report"
+      }
+    },
+    {
+      "id": "commit",
+      "type": "code",
+      "dependsOn": [
+        "materialize-report"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "materialize-report"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "deep-workbench",
+          "capabilities": [
+            "director.deep.write"
+          ],
+          "views": [
+            "deep-director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/commit-deep-report.mjs",
+        "reportNode": "materialize-report"
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "commit"
+      ],
+      "exports": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
   ]
 }

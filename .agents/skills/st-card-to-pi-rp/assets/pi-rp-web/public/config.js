@@ -32,7 +32,10 @@ function field(labelText, value, description, { type="text", wide=false, options
 function card(title, description="") { const root=document.createElement("article");root.className="config-card";const header=document.createElement("header");const copy=document.createElement("div");const h=document.createElement("h3");h.textContent=title;copy.append(h);if(description){const p=document.createElement("p");p.textContent=description;copy.append(p);}header.append(copy);root.append(header);return {root,header}; }
 function optionGroups(select, items, selected, labelOf) { const groups=new Map(); for(const item of items){if(!groups.has(item.group))groups.set(item.group,[]);groups.get(item.group).push(item);} for(const [name,values] of groups){const group=document.createElement("optgroup");group.label=name;for(const item of values){const option=document.createElement("option");option.value=item.key;option.textContent=labelOf(item);group.append(option);}select.append(group);}select.value=selected||items[0]?.key||""; }
 function modelOptions() { return [{value:"",label:"继承/未指定"},{value:"pi:current",label:"当前 Pi 模型"},...(state.profile?.models||[]).map(item=>({value:item.id,label:item.name||item.model||item.id}))]; }
-function agentOptions() { return [{value:"",label:"继承/未指定"},...state.catalog.agents.map(item=>({value:item.base.id,label:`${item.group} · ${item.base.name||item.base.id}`}))]; }
+function moduleLabel(item) { return item.group?.replace(/^模块 · /,"") || item.moduleId; }
+function ownedAgents() { return state.catalog.agents.filter(item=>item.moduleId); }
+function ownedWorkflows() { return state.catalog.workflows.filter(item=>item.moduleId); }
+function agentOptions() { return [{value:"",label:"继承/未指定"},...ownedAgents().map(item=>({value:item.base.id,label:`${moduleLabel(item)} · ${item.base.name||item.base.id}`}))]; }
 
 function renderModels() {
   const panel=$("#config-panel-models");panel.replaceChildren();
@@ -41,22 +44,38 @@ function renderModels() {
   for(const model of state.profile.models){const item=card(model.name||model.id,`配置 ID：${model.id}${model.hasSecret?" · 已保存本机凭据":" · 未保存凭据"}`);const grid=document.createElement("div");grid.className="field-grid";
     const bind=(key,description,options={})=>field(options.label||key,model[key],description,{...options,onInput:value=>{model[key]=value||null;}}).label;
     grid.append(bind("name","用于界面显示，不影响工作流引用。",{label:"显示名称"}),bind("provider","选择服务预设；自定义服务可使用 custom。",{label:"服务类型",options:["openai","anthropic","deepseek","openrouter","gemini","moonshot","dashscope","siliconflow","custom"]}),bind("baseUrl","模型服务 API 根地址。",{label:"API URL",type:"url",wide:true}),bind("api","请求协议格式。",{label:"API 格式",options:["openai-responses","openai-completions","anthropic-messages"]}),bind("model","发送给服务的实际模型名。",{label:"模型名"}),bind("contextWindow","模型可接受的上下文 Token 上限。",{label:"上下文长度",type:"number",min:1}),bind("maxOutputTokens","单次输出 Token 上限。",{label:"最大输出",type:"number",min:1}),field("思考强度",model.thinking??model.thinkingLevel??"off","模型支持时使用的思考强度。",{options:[{value:"off",label:"关闭/默认"},"minimal","low","medium","high","xhigh","max"],onInput:value=>{model.thinking=value;delete model.thinkingLevel;}}).label,bind("maxConcurrency","该模型允许的最大并发调用数。",{label:"最大并发",type:"number",min:1,max:10}),bind("headPrompt","追加在 Agent 提示词之前的模型级提示。",{label:"前置提示词",type:"textarea",wide:true}),bind("tailPrompt","每次模型调用前都会从旧位置移除并追加到上下文最末尾；工具调用后再次请求模型时也会重新置底。",{label:"后置提示词",type:"textarea",wide:true}));
-    const secret=field("API Key", "", "凭据只保存到操作系统缓存，不会返回浏览器或进入导出 JSON。",{type:"password",wide:true}).label;secret.querySelector("input").placeholder=model.hasSecret?"留空保留已保存的 Key":"输入后随保存写入本机缓存";secret.querySelector("input").dataset.secretFor=model.id;grid.append(secret);item.root.append(grid);const actions=document.createElement("div");actions.className="model-actions";if(model.hasSecret){const clearSecret=document.createElement("button");clearSecret.className="danger";clearSecret.textContent="清除 API Key";clearSecret.disabled=Boolean(state.profile.builtin);clearSecret.title="从本机项目隔离缓存删除此方案和模型对应的凭据。";clearSecret.onclick=async()=>{if(!confirm(`清除模型 ${model.id} 的本机 API Key？`))return;try{await api(`/api/config/profiles/${state.profile.id}/secrets/models/${model.id}`,{method:"PUT",body:{apiKey:""}});model.hasSecret=false;renderModels();status("已清除本机 API Key。");}catch(error){status(error.message,true)}};actions.append(clearSecret);}const remove=document.createElement("button");remove.className="danger";remove.textContent="移除模型";remove.disabled=Boolean(state.profile.builtin);remove.onclick=()=>{if(confirm(`从方案中移除模型 ${model.id}？`)){state.profile.models=state.profile.models.filter(m=>m!==model);markDirty();renderModels();}};actions.append(remove);item.root.append(actions);panel.append(item.root);}
+    const secret=field("API Key", "", "凭据只保存到操作系统缓存，不会返回浏览器或进入导出 JSON。",{type:"password",wide:true}).label;secret.querySelector("input").placeholder=model.hasSecret?"留空保留已保存的 Key":"输入后随保存写入本机缓存";secret.querySelector("input").dataset.secretFor=model.id;grid.append(secret);item.root.append(grid);const actions=document.createElement("div");actions.className="model-actions";
+    const profileId=state.profile.id;
+    for(const [label,path] of [["获取模型列表","discover"],["测试连接","test"]]){
+      const button=document.createElement("button");button.textContent=label;
+      button.disabled=state.context?.mode!=="play"||Boolean(state.profile.builtin);
+      button.title="先保存并激活当前方案，再进行连接操作；不会改变配置。";
+      button.onclick=async()=>{
+        if(state.dirty||state.listing.activeProfileId!==profileId)return status("请先保存并激活当前方案，再进行连接操作。",true);
+        button.disabled=true;
+        try{
+          const value=await api(`/api/models/${path}`,{method:"POST",body:path==="discover"?{modelId:model.id,baseUrl:model.baseUrl,api:model.api}:{modelId:model.id}});
+          if(state.profile.id!==profileId)return;
+          status(path==="discover"?(value.models.length?`可用模型：${value.models.join("、")}`:"服务未返回模型列表。"):`连接成功（${value.elapsedMs}ms）：${value.reply||""}`);
+        }catch(error){status(error.message,true)}finally{button.disabled=false}
+      };actions.append(button);
+    }
+    if(model.hasSecret){const clearSecret=document.createElement("button");clearSecret.className="danger";clearSecret.textContent="清除 API Key";clearSecret.disabled=Boolean(state.profile.builtin);clearSecret.title="从本机项目隔离缓存删除此方案和模型对应的凭据。";clearSecret.onclick=async()=>{if(!confirm(`清除模型 ${model.id} 的本机 API Key？`))return;try{await api(`/api/config/profiles/${state.profile.id}/secrets/models/${model.id}`,{method:"PUT",body:{apiKey:""}});model.hasSecret=false;renderModels();status("已清除本机 API Key。");}catch(error){status(error.message,true)}};actions.append(clearSecret);}const remove=document.createElement("button");remove.className="danger";remove.textContent="移除模型";remove.disabled=Boolean(state.profile.builtin);remove.onclick=()=>{if(confirm(`从方案中移除模型 ${model.id}？`)){state.profile.models=state.profile.models.filter(m=>m!==model);markDirty();renderModels();}};actions.append(remove);item.root.append(actions);panel.append(item.root);}
 }
 
 function renderAgents() {
   const panel=$("#config-panel-agents");panel.replaceChildren();
   const toolbar=document.createElement("div");toolbar.className="list-toolbar agent-pickers";
-  const sourceLabel=document.createElement("label");sourceLabel.className="field";sourceLabel.append(fieldCaption("模块","“通用”只包含不属于任何模块的 Agent；其余 Agent 按所属模块筛选。").caption);
+  const sourceLabel=document.createElement("label");sourceLabel.className="field";sourceLabel.append(fieldCaption("模块","按所属模块筛选 Agent。").caption);
   const sourceSelect=document.createElement("select");sourceLabel.append(sourceSelect);
   const agentLabel=document.createElement("label");agentLabel.className="field";agentLabel.append(fieldCaption("Agent","选择要在当前配置方案中覆盖的 Agent；不会修改源文件。").caption);
   const agentSelect=document.createElement("select");agentLabel.append(agentSelect);
   toolbar.append(sourceLabel,agentLabel);panel.append(toolbar);
 
   const sources=new Map();
-  for(const item of state.catalog.agents){
-    const id=item.moduleId||"general";
-    if(!sources.has(id))sources.set(id,{id,label:item.moduleId?item.group.replace(/^模块 · /,""):"通用"});
+  for(const item of ownedAgents()){
+    const id=item.moduleId;
+    if(!sources.has(id))sources.set(id,{id,label:moduleLabel(item)});
   }
   for(const source of sources.values()){const option=document.createElement("option");option.value=source.id;option.textContent=source.label;sourceSelect.append(option);}
 
@@ -67,7 +86,7 @@ function renderAgents() {
     const base=item.base;
     const override=state.profile.agentOverrides[item.key]||{};
     const effective={...deepClone(base),...deepClone(override)};
-    const sourceName=item.moduleId?item.group.replace(/^模块 · /,""):"通用";
+    const sourceName=moduleLabel(item);
     const view=card(effective.name||base.id,`${sourceName} · ${base.id}`);
     const grid=document.createElement("div");grid.className="field-grid";
     const assign=(key,value)=>{state.profile.agentOverrides[item.key]??={};state.profile.agentOverrides[item.key][key]=value;};
@@ -84,7 +103,7 @@ function renderAgents() {
   };
   const refreshAgentOptions=()=>{
     agentSelect.replaceChildren();
-    const items=state.catalog.agents.filter(item=>(item.moduleId||"general")===sourceSelect.value);
+    const items=ownedAgents().filter(item=>item.moduleId===sourceSelect.value);
     for(const item of items){const option=document.createElement("option");option.value=item.key;option.textContent=item.base.name||item.base.id;agentSelect.append(option);}
     agentSelect.disabled=!items.length;render();
   };
@@ -94,12 +113,12 @@ function renderAgents() {
 function renderWorkflows() {
   const panel=$("#config-panel-workflows");panel.replaceChildren();
   const toolbar=document.createElement("div");toolbar.className="list-toolbar workflow-pickers";
-  const sourceLabel=document.createElement("label");sourceLabel.className="field";sourceLabel.append(fieldCaption("模块","“通用”只包含不属于任何模块的工作流；其余工作流按所属模块筛选。").caption);
+  const sourceLabel=document.createElement("label");sourceLabel.className="field";sourceLabel.append(fieldCaption("模块","按所属模块筛选工作流。").caption);
   const sourceSelect=document.createElement("select");sourceLabel.append(sourceSelect);
   const workflowLabel=document.createElement("label");workflowLabel.className="field";workflowLabel.append(fieldCaption("工作流","编辑工作流运行策略、触发方式和所有节点；运行状态请在侧栏“工作流”页面查看。").caption);
   const workflowSelect=document.createElement("select");workflowLabel.append(workflowSelect);toolbar.append(sourceLabel,workflowLabel);panel.append(toolbar);
   const sources=new Map();
-  for(const item of state.catalog.workflows){const id=item.moduleId||"general";if(!sources.has(id))sources.set(id,{id,label:item.moduleId?item.group.replace(/^模块 · /,""):"通用"});}
+  for(const item of ownedWorkflows()){const id=item.moduleId;if(!sources.has(id))sources.set(id,{id,label:moduleLabel(item)});}
   for(const source of sources.values()){const option=document.createElement("option");option.value=source.id;option.textContent=source.label;sourceSelect.append(option);}
 
   const updateWorkflow=(item,path,value)=>{
@@ -136,7 +155,7 @@ function renderWorkflows() {
     const item=state.catalog.workflows.find(value=>value.key===workflowSelect.value);
     if(!item){const empty=document.createElement("div");empty.className="empty";empty.textContent="该分类没有工作流。";panel.append(empty);return;}
     const current=deepClone(state.profile.workflowOverrides[item.key]||item.base);
-    const sourceName=item.moduleId?item.group.replace(/^模块 · /,""):"通用";
+    const sourceName=moduleLabel(item);
     const overview=card(item.base.title||item.base.id,`${sourceName} · ${item.base.description||"无说明"}`);
     overview.root.classList.add("workflow-overview");
     const overviewMeta=document.createElement("div");overviewMeta.className="workflow-meta";
@@ -170,7 +189,7 @@ function renderWorkflows() {
       const triggerType=current.trigger?.type||"manual";
       grid.append(field("触发类型",triggerType,"决定该后台工作流何时启动。",{options:[{value:"manual",label:"手动触发"},{value:"after-opening",label:"开场选定后"},{value:"after-workflow",label:"工作流完成后"},{value:"node",label:"节点完成后"}],onInput:value=>{updateWorkflow(item,"/trigger/type",value);render();}}).label);
       if(["after-workflow","node"].includes(triggerType)){
-        const workflowOptions=state.catalog.workflows.filter(value=>value.key!==item.key).map(value=>({value:value.base.id,label:`${value.moduleId?value.group.replace(/^模块 · /,""):"通用"} · ${value.base.title||value.base.id}`}));
+        const workflowOptions=ownedWorkflows().filter(value=>value.key!==item.key).map(value=>({value:value.base.id,label:`${moduleLabel(value)} · ${value.base.title||value.base.id}`}));
         grid.append(field("目标工作流",current.trigger?.workflowId,"作为触发来源的工作流。",{options:workflowOptions,onInput:value=>{updateWorkflow(item,"/trigger/workflowId",value||null);render();}}).label);
         if(triggerType==="node"){
           const target=state.catalog.workflows.find(value=>value.base.id===current.trigger?.workflowId);
@@ -225,7 +244,7 @@ function renderWorkflows() {
       panel.append(view.root);
     }
   };
-  const refreshWorkflowOptions=()=>{workflowSelect.replaceChildren();const items=state.catalog.workflows.filter(item=>(item.moduleId||"general")===sourceSelect.value);for(const item of items){const option=document.createElement("option");option.value=item.key;option.textContent=item.base.title||item.base.id;workflowSelect.append(option);}workflowSelect.disabled=!items.length;render();};
+  const refreshWorkflowOptions=()=>{workflowSelect.replaceChildren();const items=ownedWorkflows().filter(item=>item.moduleId===sourceSelect.value);for(const item of items){const option=document.createElement("option");option.value=item.key;option.textContent=item.base.title||item.base.id;workflowSelect.append(option);}workflowSelect.disabled=!items.length;render();};
   sourceSelect.onchange=refreshWorkflowOptions;workflowSelect.onchange=render;refreshWorkflowOptions();
 }
 

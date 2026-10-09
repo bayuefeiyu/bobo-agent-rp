@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { readFrontendSource, readPublic } from "./frontend-source.mjs";
+
 test("retires the initiating page and renders the reading-style avatar layout", async () => {
-  const [app, page, styles] = await Promise.all([
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+  // 前端已按职责拆分（方案 §11 第 6 条）：生图交互在 app-image.js，模块区域在 app-modules.js。
+  // 本测试核对的是"页面与前端源码共同提供的界面契约"，与文件如何切分无关，
+  // 因此读取所有前端模块的合并视图，而不是删掉相关断言。
+  const [{ source: app }, page, styles] = await Promise.all([
+    readFrontendSource(),
+    readPublic("index.html"),
+    readPublic("styles.css"),
   ]);
 
   assert.match(page, /id="handoff-overlay"/);
@@ -49,7 +53,7 @@ test("retires the initiating page and renders the reading-style avatar layout", 
   assert.match(app, /if \(node\.type === "agent"\)/);
   assert.match(app, /binding\.textContent = `Agent：\$\{agentLabel/);
   assert.doesNotMatch(app, /node-binding-controls/);
-  assert.match(page, /id="workflow-policy-form"[^>]*hidden/);
+  assert.doesNotMatch(page, /id="workflow-policy-form"/);
   assert.match(app, /function beginMessageEdit/);
   assert.match(app, /function deleteSavedMessage/);
   assert.match(app, /function deleteSavedProfile/);

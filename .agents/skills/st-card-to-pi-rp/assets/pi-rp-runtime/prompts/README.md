@@ -2,7 +2,9 @@ Prompt source files in this directory are read by the play runtime; they are not
 
 The project-wide list of creative, non-creative, system, Agent, and workflow prompt sources is [prompt-inventory.md](../../../references/prompt-inventory.md). Conversion-only starter material lives separately under [prompt-templates](../../prompt-templates/README.md) and is not copied into a card unless the conversion proposal selects it and places it in an existing Agent prompt, node prompt, or static-resource destination.
 
-Imported modules keep their authored sources under `global-modules/<module-id>/prompts/`. Conversion copies those files into this card-owned prompt tree at `prompts/modules/<module-id>/`; module Agent and workflow JSON already point at those destination paths.
+Imported modules keep their authored sources under `global-modules/<module-id>/prompts/`. Conversion copies the complete selected package to `features/<module-id>/`, so its Agent, workflow, and runtime files continue to resolve their module-relative `promptFile` and `entryFile` paths under that module. Do not copy module prompts, Agents, or workflows into card-root `prompts/`, `agents/`, or `workflows/` directories.
+
+The card-root public layer contains only shared prompts: `prompts/system/`, model head and tail files, and common prefix/tail messages. Module-specific prompts remain inside their owning feature module. The shared runtime's public layer supplies the engine, tools, system prompts, model heads/tails, and other common prompts; it does not define a second copy of a module Agent or workflow.
 
 Repository development mode resolves that destination-style path back to the matching global module source. An isolated packaged card never uses this fallback; a missing card-owned module prompt is an error.
 

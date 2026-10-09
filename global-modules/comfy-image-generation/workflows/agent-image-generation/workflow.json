@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "agent-image-generation",
   "title": "Agent 剧情生图",
   "description": "解析显式输入范围，为每类模型生成一次画面内容片段，并调用已适配的 ComfyUI 工作流。",
   "kind": "module-internal",
   "revision": "1",
   "defaults": {
-    "agentId": "image-prompt-writer",
+    "agentId": "comfy-image-generation/image-prompt-writer",
     "modelId": "pi:current",
     "context": {
       "mode": "fixed"
@@ -18,8 +18,14 @@
     "dedupeKey": "$.request.operationId"
   },
   "writeLocks": [
-    { "moduleId": "comfy-image-generation", "collectionId": "requests" },
-    { "moduleId": "comfy-image-generation", "collectionId": "renders" }
+    {
+      "moduleId": "comfy-image-generation",
+      "collectionId": "requests"
+    },
+    {
+      "moduleId": "comfy-image-generation",
+      "collectionId": "renders"
+    }
   ],
   "nodes": [
     {
@@ -44,7 +50,9 @@
       },
       "workspaceHandoff": {
         "include": [
-          { "output": "prompt-context" }
+          {
+            "output": "prompt-context"
+          }
         ]
       },
       "moduleAccess": [
@@ -82,7 +90,7 @@
       },
       "routeFromOutput": "route",
       "metadata": {
-        "entryFile": "features/comfy-image-generation/runtime/workflow/resolve-input.mjs",
+        "entryFile": "runtime/workflow/resolve-input.mjs",
         "documentIndex": {
           "prompt-context": {
             "readPolicy": "required",
@@ -96,11 +104,12 @@
       }
     },
     {
-      "id": "generate-content-prompts", "promptFile": "prompts/modules/comfy-image-generation/workflows/agent-image-generation/generate-content-prompts.md",
+      "id": "generate-content-prompts",
+      "promptFile": "prompts/workflows/agent-image-generation/generate-content-prompts.md",
       "title": "生成画面内容提示词",
       "description": "按每个不同模型指导，仅生成随剧情变化的画面内容片段。",
       "type": "agent",
-      "agentId": "image-prompt-writer",
+      "agentId": "comfy-image-generation/image-prompt-writer",
       "modelId": "pi:current",
       "dependsOn": [
         "resolve-input"
@@ -119,7 +128,29 @@
       "context": {
         "mode": "fixed"
       },
-      "outputs": {"result": {"path": "content-prompts.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["prompts"], "properties": {"prompts": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
+      "outputs": {
+        "result": {
+          "path": "content-prompts.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "prompts"
+            ],
+            "properties": {
+              "prompts": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []
@@ -183,7 +214,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/comfy-image-generation/runtime/workflow/persist-and-render.mjs",
+        "entryFile": "runtime/workflow/persist-and-render.mjs",
         "unboundData": true
       }
     },

@@ -81,7 +81,7 @@ export async function createDataReadView({ sessionDirectory, store, sourceId, vi
   });
 }
 
-export async function readDataReadViewCollection({ sessionDirectory, store, viewId, batchIds = [], moduleId, collectionId }) {
+export async function readDataReadViewCollection({ sessionDirectory, store, viewId, batchIds = /** @type {string[]} */ ([]), moduleId, collectionId }) {
   const root = safeResolve(sessionDirectory, "workspace", "data-read-views", viewId);
   const manifest = await json(safeResolve(root, "manifest.json"));
   if (manifest?.schemaVersion !== 1 || manifest.viewId !== viewId) throw Object.assign(new Error(`Data read view ${viewId} is invalid.`), { code: "data_read_view_invalid" });
@@ -109,7 +109,7 @@ export async function readDataReadViewCollection({ sessionDirectory, store, view
   return { history: [], records: [...records.values()] };
 }
 
-export async function resolveDataReadViewIdentity({ sessionDirectory, store, viewId, batchIds = [], value }) {
+export async function resolveDataReadViewIdentity({ sessionDirectory, store, viewId, batchIds = /** @type {string[]} */ ([]), value }) {
   if (typeof value !== "string" || !value.trim()) return [];
   const entries = [];
   for (const module of store.modules.values()) {

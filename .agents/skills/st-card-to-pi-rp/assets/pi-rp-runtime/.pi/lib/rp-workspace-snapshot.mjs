@@ -64,7 +64,7 @@ function enforceInventoryLimits(files) {
   return total;
 }
 
-export async function createDocumentWorkspaceSnapshot({ nodeWorkspace, outputPath, documents, dynamicOutputs = [], currentInput = "", narrative = "", turnContext = null }) {
+export async function createDocumentWorkspaceSnapshot({ nodeWorkspace, outputPath, documents, dynamicOutputs = /** @type {Array<Record<string,any>>} */ ([]), currentInput = "", narrative = "", turnContext = null }) {
   const root = safeChild(nodeWorkspace, outputPath, "Document workspace snapshot");
   const existing = await readFile(resolve(root, "SNAPSHOT.json"), "utf8").then(JSON.parse).catch(error => {
     if (error?.code === "ENOENT") return null;

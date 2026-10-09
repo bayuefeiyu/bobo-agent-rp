@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "id": "narrative-memory",
   "moduleKind": "data",
   "basedOn": null,
@@ -14,12 +14,22 @@
   "skillFile": "skill/SKILL.md",
   "workflowFiles": [
     "workflows/narrative-memory-archive/workflow.json",
+    "workflows/narrative-memory-archive-entry/workflow.json",
     "workflows/narrative-memory-compression/workflow.json",
-    "workflows/narrative-memory-reference-snapshot/workflow.json",
-    "workflows/narrative-memory-retrieve/workflow.json",
+    "workflows/narrative-memory-compression-entry/workflow.json",
     "workflows/narrative-memory-entity-selection/workflow.json",
     "workflows/narrative-memory-maintenance/workflow.json",
+    "workflows/narrative-memory-maintenance-entry/workflow.json",
     "workflows/narrative-memory-range-repair/workflow.json",
+    "workflows/narrative-memory-range-repair-entry/workflow.json",
+    "workflows/narrative-memory-reference-snapshot/workflow.json",
+    "workflows/narrative-memory-retrieve/workflow.json",
     "workflows/narrative-memory-source-capture/workflow.json"
+  ],
+  "agentFiles": [
+    "agents/narrative-memory-archive-editor/agent.json",
+    "agents/narrative-memory-compressor/agent.json",
+    "agents/narrative-memory-maintainer/agent.json",
+    "agents/narrative-memory-retriever/agent.json"
   ]
 }

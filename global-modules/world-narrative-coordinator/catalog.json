@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "world-narrative-coordinator",
+  "categories": {
+    "director-prompt-option": {
+      "title": "导演拨档源资源",
+      "description": "独立保存完整档位；仅所选内容经过 Agent 归属过滤后进入导演提示词。"
+    }
+  },
+  "selectionGroups": {
+    "protagonist-treatment": {
+      "title": "主角待遇",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择一个档位；代码仅交付当前选择。",
+      "fallback": null
+    },
+    "other-requirements": {
+      "title": "其他要求",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择一个档位；代码仅交付当前选择。",
+      "fallback": null
+    }
+  },
+  "documents": [
+    {
+      "id": "treatment-ordinary",
+      "path": "documents/options/protagonist-treatment/ordinary.md",
+      "title": "普通角色",
+      "summary": "导演要求：普通角色",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "protagonist-treatment",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "protagonist-treatment",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "按用户确认的导演拨档方案编写。"
+      ]
+    },
+    {
+      "id": "treatment-favored",
+      "path": "documents/options/protagonist-treatment/favored.md",
+      "title": "主角优待",
+      "summary": "导演要求：主角优待",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "protagonist-treatment",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "protagonist-treatment",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "按用户确认的导演拨档方案编写。"
+      ]
+    },
+    {
+      "id": "treatment-pressured",
+      "path": "documents/options/protagonist-treatment/pressured.md",
+      "title": "主角承压",
+      "summary": "导演要求：主角承压",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "protagonist-treatment",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "protagonist-treatment",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "按用户确认的导演拨档方案编写。"
+      ]
+    },
+    {
+      "id": "other-requirements-default",
+      "path": "documents/options/other-requirements/default.md",
+      "title": "其他要求默认",
+      "summary": "由创作者或转卡者填写的额外导演要求，允许留空。",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "other-requirements",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "other-requirements",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": []
+    }
+  ]
+}

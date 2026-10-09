@@ -1,0 +1,50 @@
+name: verify
+
+# 复用与本地完全相同的验证入口（npm run verify / npm run typecheck），不另建一套检查。
+#
+# 先建立 Windows 主验证环境，符合实际开发与启动器场景。方案允许在无平台依赖的
+# 基础测试稳定后追加 Linux，但那不是本阶段目标，因此这里暂不声明未经验证的平台。
+#
+# 不配置模型或 ComfyUI 凭据：真实外部调用不是合并前必需检查。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: verify (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # 校验器与 Skill 契约测试需要真实 Python 3 与 PyYAML。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: Show toolchain
+        run: |
+          node --version
+          npm --version
+          python --version
+
+      # 编译器用于类型检查和 import 图分析，typebox 用于真实工具 Schema 与交付夹具。
+      - name: Install development dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install pinned Pi host
+        run: npm install --global @earendil-works/pi-coding-agent@0.86.0 --no-audit --no-fund
+
+      - name: Verify (all offline suites)
+        run: npm run verify:all
+
+      - name: Typecheck (all Pi host TypeScript)
+        run: npm run typecheck

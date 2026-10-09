@@ -98,7 +98,7 @@ export function deliveryPrompt(contract) {
   ].join("\n");
 }
 
-export async function createAgentDelivery({ workspace, node, agent, inputPaths = [], beforeComplete = async () => {} }) {
+export async function createAgentDelivery({ workspace, node, agent, inputPaths = /** @type {string[]} */ ([]), beforeComplete = async () => {} }) {
   const contract = agentDeliveryContract(node, agent);
   const protectedPaths = [...DEFAULT_INPUTS, ...inputPaths].filter(Boolean).map(canonical);
   const generatedPaths = Object.entries(node.outputs || {}).filter(([id]) => !(id in contract.outputs)).map(([, value]) => canonical(value.path));

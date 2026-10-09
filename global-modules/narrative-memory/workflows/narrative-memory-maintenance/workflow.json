@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "narrative-memory-maintenance",
   "title": "叙事记忆手动维护",
   "description": "只对用户明确指定的记录和任务执行语义维护。",
   "kind": "module-internal",
   "revision": "2",
   "defaults": {
-    "agentId": "narrative-memory-maintainer",
+    "agentId": "narrative-memory/narrative-memory-maintainer",
     "modelId": "pi:current",
     "context": {
       "mode": "fixed"
@@ -23,14 +23,43 @@
       "description": "通过公共快照工作流取得维护所需的完整目录。",
       "type": "call",
       "target": "narrative-memory/narrative-memory-reference-snapshot",
-      "arguments": { "catalog": {} },
+      "arguments": {
+        "catalog": {}
+      },
       "documents": {},
-      "outputPaths": { "snapshot": "reference-snapshot" },
-      "outputs": { "snapshot": { "path": "reference-snapshot", "format": "document-set", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "snapshot" }] },
+      "outputPaths": {
+        "snapshot": "reference-snapshot"
+      },
+      "outputs": {
+        "snapshot": {
+          "path": "reference-snapshot",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "snapshot"
+          }
+        ]
+      },
       "moduleAccess": [],
-      "dataCommit": { "onNodeEnd": [] },
-      "metadata": { "documentIndex": { "snapshot": { "readPolicy": "required", "authority": "canonical", "appliesAt": "archiving", "priority": 100, "description": "完整记忆目录；先读其中DOCUMENTS.md。" } } }
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentIndex": {
+          "snapshot": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "archiving",
+            "priority": 100,
+            "description": "完整记忆目录；先读其中DOCUMENTS.md。"
+          }
+        }
+      }
     },
     {
       "id": "prepare-maintenance",
@@ -120,7 +149,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/prepare-maintenance.mjs"
+        "entryFile": "runtime/workflow/prepare-maintenance.mjs"
       }
     },
     {
@@ -128,24 +157,58 @@
       "title": "生成维护任务资料",
       "description": "把用户请求与按ID读取的目标完整记录组装为文档集。",
       "type": "code",
-      "dependsOn": ["prepare-maintenance"],
-      "retry": { "maxAttempts": 1 },
-      "context": { "mode": "previous-output", "fromNodes": ["prepare-maintenance"] },
-      "outputs": { "task": { "path": "maintenance-task", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "task" }] },
+      "dependsOn": [
+        "prepare-maintenance"
+      ],
+      "retry": {
+        "maxAttempts": 1
+      },
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare-maintenance"
+        ]
+      },
+      "outputs": {
+        "task": {
+          "path": "maintenance-task",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "task"
+          }
+        ]
+      },
       "moduleAccess": [],
-      "dataCommit": { "onNodeEnd": [] },
+      "dataCommit": {
+        "onNodeEnd": []
+      },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/materialize-maintenance-task.mjs",
-        "documentIndex": { "task": { "readPolicy": "required", "authority": "canonical", "appliesAt": "maintenance", "priority": 100, "description": "本次维护请求和带revision的目标记录。" } }
+        "entryFile": "runtime/workflow/materialize-maintenance-task.mjs",
+        "documentIndex": {
+          "task": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "maintenance",
+            "priority": 100,
+            "description": "本次维护请求和带revision的目标记录。"
+          }
+        }
       }
     },
     {
-      "id": "maintenance-model", "promptFile": "prompts/modules/narrative-memory/workflows/narrative-memory-maintenance/maintenance-model.md",
+      "id": "maintenance-model",
+      "promptFile": "prompts/workflows/narrative-memory-maintenance/maintenance-model.md",
       "title": "生成限定维护变更",
       "description": "只处理指定目标，输出原子统一变更批次。",
       "type": "agent",
-      "agentId": "narrative-memory-maintainer",
+      "agentId": "narrative-memory/narrative-memory-maintainer",
       "modelId": "pi:current",
       "dependsOn": [
         "prepare-reference-snapshot",
@@ -161,7 +224,29 @@
           "materialize-maintenance-task"
         ]
       },
-      "outputs": {"result": {"path": "maintenance-change-batch.json", "kind": "file", "format": "json", "scope": "workflow", "retain": "run", "jsonSchema": {"type": "object", "required": ["operations"], "properties": {"operations": {"type": "array"}}}}}, "delivery": {"primaryOutput": "result"},
+      "outputs": {
+        "result": {
+          "path": "maintenance-change-batch.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "required": [
+              "operations"
+            ],
+            "properties": {
+              "operations": {
+                "type": "array"
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
       "moduleAccess": [
         {
           "moduleId": "narrative-memory",
@@ -265,7 +350,9 @@
       "dataCommit": {
         "onNodeEnd": []
       },
-      "metadata": { "documentWorkspace": true }
+      "metadata": {
+        "documentWorkspace": true
+      }
     },
     {
       "id": "commit-maintenance",
@@ -390,7 +477,7 @@
         "onNodeEnd": []
       },
       "metadata": {
-        "entryFile": "features/narrative-memory/runtime/workflow/commit-maintenance.mjs"
+        "entryFile": "runtime/workflow/commit-maintenance.mjs"
       }
     },
     {

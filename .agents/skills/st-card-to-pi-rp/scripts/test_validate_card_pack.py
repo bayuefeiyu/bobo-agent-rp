@@ -19,11 +19,33 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_workflow(root: Path, workflow_id: str, value: dict) -> None:
+    module = root / "features" / "test"
+    value["ownerModuleId"] = "test"
+    module_path = module / "module.json"
+    definition = json.loads(module_path.read_text(encoding="utf-8")) if module_path.is_file() else {
+        "schemaVersion": 7, "id": "test", "moduleKind": "resource", "basedOn": None,
+        "title": "Test", "description": "Fixture", "surface": "background", "contextOrder": 0, "displayOrder": 0,
+        "dataContractFile": None, "resourceCatalogFile": "catalog.json", "frontendViewFile": None,
+        "skillFile": "skill/SKILL.md", "agentFiles": [], "workflowFiles": [],
+    }
+    path = f"workflows/{workflow_id}/workflow.json"
+    if path not in definition["workflowFiles"]:
+        definition["workflowFiles"].append(path)
+    write_json(module_path, definition)
+    write_json(module / path, value)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {"feature_modules": []}
+    if "features/test/module.json" not in manifest["feature_modules"]:
+        manifest["feature_modules"].append("features/test/module.json")
+    write_json(manifest_path, manifest)
+
+
 class ValidateCardPackTests(unittest.TestCase):
     def make_output_module(self, root: Path, surface: str = "frontend") -> str:
         module = root / "features" / "meanwhile"
         write_json(module / "module.json", {
-            "schemaVersion": 6,
+            "schemaVersion": 7,
             "id": "meanwhile",
             "moduleKind": "data",
             "basedOn": None,
@@ -35,7 +57,7 @@ class ValidateCardPackTests(unittest.TestCase):
             "dataContractFile": "data-contract.json",
             "resourceCatalogFile": None,
             "frontendViewFile": "frontend-view.json" if surface == "frontend" else None,
-            "skillFile": "skill/SKILL.md",
+            "agentFiles": [], "skillFile": "skill/SKILL.md",
             "workflowFiles": ["workflows/query-scenes/workflow.json"],
         })
         write_json(module / "data-contract.json", {
@@ -67,7 +89,7 @@ class ValidateCardPackTests(unittest.TestCase):
         skill.parent.mkdir(parents=True, exist_ok=True)
         skill.write_text("---\nname: meanwhile\ndescription: Generate the authored meanwhile output when triggered.\n---\n\n# Meanwhile\n", encoding="utf-8")
         write_json(module / "workflows" / "query-scenes" / "workflow.json", {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "id": "query-scenes",
             "ownerModuleId": "meanwhile",
             "kind": "module-external",
@@ -76,7 +98,7 @@ class ValidateCardPackTests(unittest.TestCase):
         })
         return "features/meanwhile/module.json"
 
-    def test_accepts_module_v6_data_contract(self) -> None:
+    def test_accepts_module_v7_data_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = self.make_output_module(root)
@@ -95,8 +117,8 @@ class ValidateCardPackTests(unittest.TestCase):
     def test_accepts_a_structurally_valid_public_team_node(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_json(root / "workflows" / "team-check" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "team-check", {
+                "schemaVersion": 4,
                 "id": "team-check",
                 "kind": "global-background",
                 "nodes": [{
@@ -104,16 +126,30 @@ class ValidateCardPackTests(unittest.TestCase):
                     "type": "team",
                     "team": {
                         "schemaVersion": 1,
-                        "leader": {"id": "leader", "agentId": "leader-agent"},
-                        "secretary": {"id": "secretary", "agentId": "secretary-agent"},
-                        "experts": [{"id": "logic", "agentId": "expert-agent", "focus": "logic"}],
+                        "leader": {"id": "leader", "agentId": "test/leader-agent"},
+                        "secretary": {"id": "secretary", "agentId": "test/secretary-agent"},
+                        "experts": [{"id": "logic", "agentId": "test/expert-agent", "focus": "logic"}],
                         "assistants": [],
                     },
                 }],
             })
+            module = root / "features" / "test"
+            definition = json.loads((module / "module.json").read_text(encoding="utf-8"))
+            for agent_id in ("leader-agent", "secretary-agent", "expert-agent"):
+                path = f"agents/{agent_id}/agent.json"
+                definition["agentFiles"].append(path)
+                write_json(module / path, {"id": agent_id, "ownerModuleId": "test"})
+            write_json(module / "module.json", definition)
             errors: list[str] = []
             VALIDATOR.validate_workflows(root, errors)
             self.assertEqual(errors, [])
+
+            # A well-formed qualified ID must still name an installed, registered Agent.
+            definition["agentFiles"].pop()
+            write_json(module / "module.json", definition)
+            errors = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertTrue(any("registered module Agent" in error and "expert-agent" in error for error in errors))
 
     def test_module_workflow_team_nodes_use_the_same_adapter_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -125,8 +161,8 @@ class ValidateCardPackTests(unittest.TestCase):
                 "id": "meeting",
                 "type": "team",
                 "team": {
-                    "leader": {"id": "same", "agentId": "leader-agent"},
-                    "secretary": {"id": "same", "agentId": "secretary-agent"},
+                    "leader": {"id": "same", "agentId": "test/leader-agent"},
+                    "secretary": {"id": "same", "agentId": "test/secretary-agent"},
                     "assistants": [{"id": "tool", "kind": "tool", "adapter": "unknown-tool", "inputAdapter": "unknown-input"}],
                 },
             })
@@ -141,8 +177,8 @@ class ValidateCardPackTests(unittest.TestCase):
     def test_rejects_duplicate_team_members_and_unknown_ability_kinds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_json(root / "workflows" / "team-check" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "team-check", {
+                "schemaVersion": 4,
                 "id": "team-check",
                 "kind": "global-background",
                 "nodes": [{
@@ -150,8 +186,8 @@ class ValidateCardPackTests(unittest.TestCase):
                     "type": "team",
                     "team": {
                         "schemaVersion": 1,
-                        "leader": {"id": "same", "agentId": "leader-agent"},
-                        "secretary": {"id": "same", "agentId": "secretary-agent"},
+                        "leader": {"id": "same", "agentId": "test/leader-agent"},
+                        "secretary": {"id": "same", "agentId": "test/secretary-agent"},
                         "experts": [],
                         "assistants": [{"id": "bad", "kind": "anything"}],
                     },
@@ -167,7 +203,7 @@ class ValidateCardPackTests(unittest.TestCase):
             root = Path(directory)
             path = self.make_output_module(root, surface="background")
             write_json(root / "features" / "meanwhile" / "workflows" / "query-scenes" / "workflow.json", {
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "id": "query-scenes",
                 "ownerModuleId": "meanwhile",
                 "kind": "module-internal",
@@ -209,8 +245,8 @@ class ValidateCardPackTests(unittest.TestCase):
     def test_validates_random_runtime_service_on_code_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_json(root / "workflows" / "random-event" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "random-event", {
+                "schemaVersion": 4,
                 "id": "random-event",
                 "kind": "turn-background",
                 "nodes": [{"id": "roll", "type": "code", "runtimeServices": ["random"]}],
@@ -219,8 +255,8 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_workflows(root, errors)
             self.assertEqual(errors, [])
 
-            write_json(root / "workflows" / "random-event" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "random-event", {
+                "schemaVersion": 4,
                 "id": "random-event",
                 "kind": "turn-background",
                 "nodes": [{"id": "roll", "type": "agent", "runtimeServices": ["random", "fortune"]}],
@@ -230,15 +266,15 @@ class ValidateCardPackTests(unittest.TestCase):
             self.assertTrue(any("only for code nodes" in error for error in errors))
             self.assertTrue(any("unsupported services" in error for error in errors))
 
-    def test_accepts_module_v6_resource_catalog(self) -> None:
+    def test_accepts_module_v7_resource_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             module = root / "features" / "card-context-library"
             write_json(module / "module.json", {
-                "schemaVersion": 6, "id": "card-context-library", "moduleKind": "resource", "basedOn": None,
+                "schemaVersion": 7, "id": "card-context-library", "moduleKind": "resource", "basedOn": None,
                 "title": "资料库", "description": "静态资料", "surface": "background", "contextOrder": 100, "displayOrder": 100,
                 "dataContractFile": None, "resourceCatalogFile": "catalog.json", "frontendViewFile": None,
-                "skillFile": "skill/SKILL.md", "workflowFiles": ["workflows/export-context/workflow.json"],
+                "agentFiles": [], "skillFile": "skill/SKILL.md", "workflowFiles": ["workflows/export-context/workflow.json"],
             })
             write_json(module / "catalog.json", {
                 "schemaVersion": 1, "moduleId": "card-context-library",
@@ -256,7 +292,7 @@ class ValidateCardPackTests(unittest.TestCase):
             skill.parent.mkdir(parents=True)
             skill.write_text("---\nname: card-context-library\ndescription: Export card context.\n---\n", encoding="utf-8")
             write_json(module / "workflows" / "export-context" / "workflow.json", {
-                "schemaVersion": 3, "id": "export-context", "ownerModuleId": "card-context-library", "kind": "module-external",
+                "schemaVersion": 4, "id": "export-context", "ownerModuleId": "card-context-library", "kind": "module-external",
                 "interface": {
                     "inputs": {"categories": {"type": "parameter", "required": True, "valueType": "string-array"}},
                     "exports": {"context": {"format": "document-set"}},
@@ -270,8 +306,8 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_feature_modules(root, ["features/card-context-library/module.json"], errors)
             self.assertEqual(errors, [])
             write_json(root / "manifest.json", {"feature_modules": ["features/card-context-library/module.json"]})
-            write_json(root / "workflows" / "standard-rp" / "workflow.json", {
-                "schemaVersion": 3, "id": "standard-rp", "kind": "foreground",
+            write_workflow(root, "standard-rp", {
+                "schemaVersion": 4, "id": "standard-rp", "kind": "foreground",
                 "nodes": [
                     {
                         "id": "resources", "type": "call", "target": "card-context-library/export-context",
@@ -325,8 +361,8 @@ class ValidateCardPackTests(unittest.TestCase):
             root = Path(directory)
             module_path = self.make_output_module(root)
             write_json(root / "manifest.json", {"feature_modules": [module_path]})
-            write_json(root / "workflows" / "conflict" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "conflict", {
+                "schemaVersion": 4,
                 "id": "conflict",
                 "kind": "turn-background",
                 "nodes": [
@@ -344,8 +380,8 @@ class ValidateCardPackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_json(root / "manifest.json", {"feature_modules": []})
-            write_json(root / "workflows" / "handoff" / "workflow.json", {
-                "schemaVersion": 3,
+            write_workflow(root, "handoff", {
+                "schemaVersion": 4,
                 "id": "handoff",
                 "kind": "turn-background",
                 "nodes": [

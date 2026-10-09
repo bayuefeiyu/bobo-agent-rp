@@ -3,9 +3,19 @@
   "id": "world-narrative-writer",
   "name": "广域叙事创作 Agent",
   "description": "根据导演委托创作一篇广域候选故事。",
-  "promptFile": "prompts/modules/world-scope-narrative/agents/world-narrative-writer.md",
-  "tools": ["edit", "read", "write", "rp_call"],
-  "contextPermissions": ["workspace:node", "workflow:scoped-output", "card:modules"],
+  "promptFile": "prompts/agents/world-narrative-writer.md",
+  "tools": [
+    "edit",
+    "read",
+    "write",
+    "rp_call"
+  ],
+  "contextPermissions": [
+    "workspace:node",
+    "workflow:scoped-output",
+    "card:modules"
+  ],
   "outputMode": "text",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "world-scope-narrative"
 }

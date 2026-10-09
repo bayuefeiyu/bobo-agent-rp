@@ -10,6 +10,10 @@ import { createRpConfigStore } from "../../st-card-to-pi-rp/assets/pi-rp-runtime
 import { defaultCommonSettings, normalizeCommonSettings } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-common-settings.mjs";
 import { removeSavedUserProfile } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-user-profiles.mjs";
 import { createApplication } from "../../st-card-to-pi-rp/assets/pi-rp-web/server.mjs";
+import { normalizeDataContract } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-contracts.mjs";
+import { normalizeModuleFrontendView } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-module-frontend.mjs";
+import { buildConfigCatalog } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-config-catalog.mjs";
+import { loadModuleComponents } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-module-registry.mjs";
 
 const repositoryRoot = resolve(process.cwd());
 const runtimeRoot = resolve(repositoryRoot, ".agents", "skills", "st-card-to-pi-rp", "assets", "pi-rp-runtime");
@@ -24,106 +28,36 @@ async function json(path, fallback = null) {
   catch (error) { if (error?.code === "ENOENT") return fallback; throw error; }
 }
 
-async function filesNamed(root, name) {
-  const result = [];
-  async function visit(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true }).catch(error => error?.code === "ENOENT" ? [] : Promise.reject(error))) {
-      const path = resolve(directory, entry.name);
-      if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile() && entry.name === name) result.push(path);
-    }
-  }
-  await visit(root);
-  return result.sort();
-}
-
-function workflowFields(workflow) {
-  const fields = [];
-  if (workflow.kind === "foreground") {
-    fields.push({ path: "/turnContext/recentCompleteTurns", label: "最近完整正文回合数", type: "integer", minimum: 1, maximum: 50, help: "决定正文 Agent 和依赖正文快照的工作流可读取多少个最近完整回合；下一次工作流实例生效。" });
-  }
-  if (workflow.defaults && typeof workflow.defaults === "object") {
-    fields.push({ path: "/defaults/agentId", label: "默认 Agent", type: "agent", help: "节点没有单独指定 Agent 时使用；下一次工作流实例生效。" });
-    fields.push({ path: "/defaults/modelId", label: "默认模型", type: "model", help: "节点和 Agent 都没有更高优先级模型时使用；下一次工作流实例生效。" });
-  }
-  for (let index = 0; index < (workflow.nodes || []).length; index += 1) {
-    const node = workflow.nodes[index];
-    if (node.type !== "agent") continue;
-    fields.push({ path: `/nodes/${index}/agentId`, label: `${node.title || node.id} · Agent`, type: "agent", help: `${node.description || "Agent 节点"} 修改只影响之后启动的实例。` });
-    fields.push({ path: `/nodes/${index}/modelId`, label: `${node.title || node.id} · 模型`, type: "model", help: "节点级模型覆盖，优先于工作流和 Agent 默认模型；下一次实例生效。" });
-  }
-  return fields;
-}
-
-function mergeConfigValue(base, override) {
-  if (!override || typeof override !== "object" || Array.isArray(override)) return structuredClone(base);
-  const result = structuredClone(base);
-  for (const [key, value] of Object.entries(override)) {
-    if (value && typeof value === "object" && !Array.isArray(value) && result[key] && typeof result[key] === "object" && !Array.isArray(result[key])) result[key] = mergeConfigValue(result[key], value);
-    else result[key] = structuredClone(value);
-  }
-  return result;
-}
-
-async function moduleDefaults(moduleDirectory, manifest, view) {
-  if (!manifest.dataContractFile) return {};
-  const contract = await json(resolve(moduleDirectory, manifest.dataContractFile), {});
-  const regions = (view?.regions || []).filter(region => region.type === "settings-form");
-  for (const region of regions) {
-    const storage = contract.collections?.[region.collectionId]?.storage;
-    const initial = storage?.initialSnapshotFile || storage?.initialRecordsFile;
-    if (!initial) continue;
-    const value = await json(resolve(moduleDirectory, initial), []);
-    const records = Array.isArray(value) ? value : [value];
-    const record = records.find(item => item?.id === region.recordId)
-      || records.find(item => item?.recordType === region.recordType);
-    if (record?.data && typeof record.data === "object") return record.data;
-  }
-  return {};
-}
-
 async function buildCatalog() {
+  // 与单卡游玩模式共用同一份目录装配实现（rp-config-catalog.mjs）。开发模式只负责提供
+  // 模块来源（global-modules/ 下的包）、文件读取与"无卡、无聊天"的作用域。
   const agents = [];
   const workflows = [];
   const modules = [];
 
-  for (const path of await filesNamed(resolve(runtimeRoot, "agents"), "agent.json")) {
-    const value = await json(path);
-    agents.push({ key: `runtime/agent/${value.id}`, group: "通用", base: value });
-  }
-  for (const path of await filesNamed(resolve(runtimeRoot, "workflows"), "workflow.json")) {
-    const value = await json(path);
-    workflows.push({ key: `runtime/workflow/${value.id}`, group: "通用", base: value, fields: workflowFields(value) });
-  }
-
   const entries = await readdir(modulesRoot, { withFileTypes: true });
   for (const entry of entries.filter(item => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
     const directory = resolve(modulesRoot, entry.name);
-    const manifest = await json(resolve(directory, "module.json"));
-    if (!manifest?.id) continue;
-    const group = `模块 · ${manifest.title || manifest.id}`;
-    for (const path of await filesNamed(resolve(directory, "agents"), "agent.json")) {
-      const value = await json(path);
-      agents.push({ key: `module/${manifest.id}/agent/${value.id}`, group, moduleId: manifest.id, base: value });
+    const manifest = await loadModuleComponents(directory);
+    const moduleTitle = manifest.title || manifest.id;
+    for (const value of manifest.agents) {
+      agents.push({ moduleId: manifest.id, moduleTitle, base: value });
     }
-    const seen = new Set();
-    for (const path of await filesNamed(directory, "workflow.json")) {
-      const value = await json(path);
-      if (!value?.id) continue;
-      const key = `module/${manifest.id}/workflow/${value.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      workflows.push({ key, group, moduleId: manifest.id, base: value, fields: workflowFields(value) });
+    for (const value of manifest.workflows) {
+      workflows.push({ moduleId: manifest.id, moduleTitle, base: value });
     }
-    const view = manifest.frontendViewFile ? await json(resolve(directory, manifest.frontendViewFile), null) : null;
-    const fields = [];
-    for (const region of view?.regions || []) {
-      if (region.type !== "settings-form") continue;
-      for (const field of region.fields || []) fields.push({ ...field, help: field.help || region.description || manifest.description, applyMode: "new-session", regionId: region.id });
-    }
-    modules.push({ id: manifest.id, title: manifest.title || manifest.id, description: manifest.description || "", base: await moduleDefaults(directory, manifest, view), fields });
+    // 交给共享构造函数的是**模块对象**：归一化的数据契约 + 归一化的前端视图 + 模块目录。
+    const contract = manifest.dataContractFile ? normalizeDataContract(await json(resolve(directory, manifest.dataContractFile), {}), manifest.id) : null;
+    const view = manifest.frontendViewFile ? normalizeModuleFrontendView(await json(resolve(directory, manifest.frontendViewFile), {}), contract) : null;
+    modules.push({ ...manifest, contract, view });
   }
-  return { schemaVersion: 1, agents, workflows, modules };
+
+  return buildConfigCatalog({
+    modules,
+    readModuleDocument: async (relativePath, module) => json(resolve(module.moduleDirectory, relativePath), null),
+    listAgents: async () => agents,
+    listWorkflows: async () => workflows,
+  });
 }
 
 function unavailable() {
@@ -162,7 +96,7 @@ async function builtinProfile() {
   return {
     schemaVersion: 1, kind: "pi-rp-config-profile", scope: "global", id: "builtin", name: "内置默认", builtin: true,
     models, agentOverrides: {}, workflowOverrides: {}, moduleOverrides: {},
-    compatibility: { moduleProtocol: 6, workflowProtocol: 3 },
+    compatibility: { moduleProtocol: 7, workflowProtocol: 4 },
   };
 }
 
@@ -176,7 +110,10 @@ if (initialProfiles.profiles.length === 1) {
   });
   await profileStore.activate("development-default");
 }
-const configStore = createRpConfigStore(runtimeRoot, resolve(localRoot, "preview-card"), { profileStore });
+const configStore = createRpConfigStore(runtimeRoot, resolve(localRoot, "preview-card"), {
+  profileStore,
+  getModules: async () => Promise.all((await readdir(modulesRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => loadModuleComponents(resolve(modulesRoot, entry.name)))),
+});
 
 const previewState = () => ({
   sessionId: null,
@@ -225,32 +162,7 @@ const bridge = {
   getImageGeneration: async () => ({ available: false, sessionId: null, profiles: [], connections: [], preferences: null, requests: [], renders: [] }),
   listModels: async () => ({ current: { id: "pi:current", name: "当前 Pi 模型", virtual: true }, profiles: await configStore.listModels() }),
   listAgents: async () => ({ agents: await configStore.listAgents() }),
-  listWorkflows: async () => {
-    const topLevel = (await configStore.listWorkflows()).map(workflow => ({ ...workflow, reference: workflow.id }));
-    const profile = await profileStore.getActive();
-    const moduleWorkflows = [];
-    const entries = await readdir(modulesRoot, { withFileTypes: true });
-    for (const entry of entries.filter(item => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-      const directory = resolve(modulesRoot, entry.name);
-      const manifest = await json(resolve(directory, "module.json"));
-      if (!manifest?.id) continue;
-      for (const path of await filesNamed(directory, "workflow.json")) {
-        const base = await json(path);
-        if (!base?.id) continue;
-        const owned = Boolean(base.ownerModuleId);
-        const qualified = `module/${manifest.id}/workflow/${base.id}`;
-        const override = owned ? profile?.workflowOverrides?.[qualified] || profile?.workflowOverrides?.[base.id] : null;
-        const relativePath = path.slice(directory.length + 1).replaceAll("\\", "/");
-        moduleWorkflows.push({
-          ...mergeConfigValue(base, override),
-          source: "module",
-          moduleTitle: manifest.title || manifest.id,
-          reference: owned ? `${manifest.id}/${base.id}` : `template/${manifest.id}/${relativePath}`,
-        });
-      }
-    }
-    return { activeWorkflowId: topLevel.find(item => item.kind === "foreground")?.id || "standard-rp", workflows: [...topLevel, ...moduleWorkflows] };
-  },
+  listWorkflows: async () => ({ activeWorkflowId: null, workflows: await configStore.listWorkflows() }),
   listWorkflowRuns: async () => ({ runs: [] }),
   getWorkflowPolicy: async () => configStore.getRuntimePolicy(),
 

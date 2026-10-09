@@ -2,6 +2,19 @@
   "schemaVersion": 2,
   "regions": [
     {
+      "id": "director-prompt-controls",
+      "type": "prompt-controls",
+      "title": "导演要求",
+      "description": "保存后从下一次相关导演运行生效。预览保留 Agent 归属标记；发送时按当前 Agent 过滤。",
+      "collectionId": "prompt-preferences",
+      "recordType": "director.prompt-preferences",
+      "recordId": "director-prompt-preferences",
+      "view": "frontend",
+      "readCapability": "director.preferences.read",
+      "updateCapability": "director.preferences.update",
+      "controlsFile": "controls.json"
+    },
+    {
       "id": "director-status", "type": "record-browser", "title": "导演运行状态",
       "description": "查看当前深度导演状态和最近一次深度规划。", "spoiler": true,
       "collectionId": "deep-workbench", "recordTypes": ["director.deep-state", "director.deep-report"], "view": "frontend", "readCapability": "director.frontend.read",

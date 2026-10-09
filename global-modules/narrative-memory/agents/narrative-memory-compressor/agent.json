@@ -3,9 +3,16 @@
   "id": "narrative-memory-compressor",
   "name": "叙事记忆事件压缩 Agent",
   "description": "只根据有效事件目录提出语义相关的已完成事件分组。",
-  "promptFile": "prompts/modules/narrative-memory/agents/narrative-memory-compressor.md",
-  "tools": ["edit", "write", "read"],
-  "contextPermissions": ["workflow:scoped-output"],
+  "promptFile": "prompts/agents/narrative-memory-compressor.md",
+  "tools": [
+    "edit",
+    "write",
+    "read"
+  ],
+  "contextPermissions": [
+    "workflow:scoped-output"
+  ],
   "outputMode": "json",
-  "defaultModelId": "pi:current"
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "narrative-memory"
 }

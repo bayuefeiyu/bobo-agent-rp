@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "id": "deep-director-team-planning",
   "ownerModuleId": "world-narrative-coordinator",
   "title": "团队深度导演推演",
@@ -8,18 +8,58 @@
   "agentCallable": false,
   "interface": {
     "inputs": {
-      "operationId": { "type": "parameter", "required": true, "valueType": "string" },
-      "triggerReasons": { "type": "parameter", "required": true, "valueType": "array" },
-      "story-context": { "type": "document", "required": true, "kind": "directory", "formats": ["document-workspace-snapshot", "document-set"] }
+      "operationId": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "string"
+      },
+      "triggerReasons": {
+        "type": "parameter",
+        "required": true,
+        "valueType": "array"
+      },
+      "story-context": {
+        "type": "document",
+        "required": true,
+        "kind": "directory",
+        "formats": [
+          "document-workspace-snapshot",
+          "document-set"
+        ]
+      }
     },
     "exports": {
-      "report": { "format": "json", "kind": "file", "description": "团队定稿的深度导演报告。" },
-      "references": { "format": "json", "kind": "file", "description": "与报告清单严格对应的参考文档变化。" }
+      "report": {
+        "format": "json",
+        "kind": "file",
+        "description": "团队定稿的深度导演报告。"
+      },
+      "references": {
+        "format": "json",
+        "kind": "file",
+        "description": "与报告清单严格对应的参考文档变化。"
+      }
     }
   },
   "revision": "1",
-  "terminalFinalizer": { "target": "world-narrative-coordinator/finish-deep-operation", "statuses": ["failed", "cancelled", "skipped"], "forwardArguments": ["operationId", "terminalStatus", "terminalError"] },
-  "instancePolicy": { "mode": "multiple", "maxConcurrentInstances": 2, "dedupeKey": "$.operationId" },
+  "terminalFinalizer": {
+    "target": "world-narrative-coordinator/finish-deep-operation",
+    "statuses": [
+      "failed",
+      "cancelled",
+      "skipped"
+    ],
+    "forwardArguments": [
+      "operationId",
+      "terminalStatus",
+      "terminalError"
+    ]
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 2,
+    "dedupeKey": "$.operationId"
+  },
   "nodes": [
     {
       "id": "prepare-private",
@@ -27,32 +67,85 @@
       "target": "world-narrative-coordinator/prepare-private-context",
       "arguments": {},
       "documents": {},
-      "outputPaths": { "context": "director-private" },
-      "outputs": { "context": { "path": "director-private", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "context" }] }
+      "outputPaths": {
+        "context": "director-private"
+      },
+      "outputs": {
+        "context": {
+          "path": "director-private",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      }
     },
     {
       "id": "prepare-author-future",
       "type": "call",
       "target": "card-context-library/export-context",
-      "arguments": { "categories": ["director-future"] },
+      "arguments": {
+        "categories": [
+          "director-future"
+        ]
+      },
       "documents": {},
-      "outputPaths": { "context": "author-future" },
-      "outputs": { "context": { "path": "author-future", "format": "document-set", "kind": "directory", "scope": "workflow", "retain": "run" } },
-      "workspaceHandoff": { "include": [{ "output": "context" }] }
+      "outputPaths": {
+        "context": "author-future"
+      },
+      "outputs": {
+        "context": {
+          "path": "author-future",
+          "format": "document-set",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "context"
+          }
+        ]
+      }
     },
     {
       "id": "meeting",
       "type": "team",
-      "dependsOn": ["prepare-private", "prepare-author-future"],
-      "promptFile": "prompts/modules/world-narrative-coordinator/workflows/deep-director-team-planning/meeting.md",
+      "dependsOn": [
+        "prepare-private",
+        "prepare-author-future"
+      ],
+      "promptFile": "prompts/workflows/deep-director-team-planning/meeting.md",
       "team": {
         "schemaVersion": 1,
-        "leader": { "id": "leader", "agentId": "world-narrative-team-leader" },
-        "secretary": { "id": "secretary", "agentId": "world-narrative-team-secretary" },
+        "leader": {
+          "id": "leader",
+          "agentId": "world-narrative-coordinator/world-narrative-team-leader"
+        },
+        "secretary": {
+          "id": "secretary",
+          "agentId": "world-narrative-coordinator/world-narrative-team-secretary"
+        },
         "experts": [
-          { "id": "world-logic", "agentId": "world-narrative-team-expert", "focus": "世界底层逻辑、势力与地区演化、信息传播、烈度边界" },
-          { "id": "story-structure", "agentId": "world-narrative-team-expert", "focus": "作者意图、长期分支、伏笔回收、戏剧张力与节奏" }
+          {
+            "id": "world-logic",
+            "agentId": "world-narrative-coordinator/world-narrative-team-expert",
+            "focus": "世界底层逻辑、势力与地区演化、信息传播、烈度边界"
+          },
+          {
+            "id": "story-structure",
+            "agentId": "world-narrative-coordinator/world-narrative-team-expert",
+            "focus": "作者意图、长期分支、伏笔回收、戏剧张力与节奏"
+          }
         ],
         "baseRetrieval": {
           "id": "base-memory",
@@ -60,10 +153,26 @@
           "target": "narrative-memory/narrative-memory-retrieve",
           "budgetPool": "base-assistance",
           "inputAdapter": "memory-request-v1",
-          "fixedArguments": { "budget": { "entityQueryLimit": 40, "initialInspectLimit": 60, "supplementalInspectLimit": 15, "informationLimit": 45, "elasticInformationLimit": 10, "possiblePerQueryLimit": 3 } },
-          "exports": ["memory-context"],
+          "fixedArguments": {
+            "budget": {
+              "entityQueryLimit": 40,
+              "initialInspectLimit": 60,
+              "supplementalInspectLimit": 15,
+              "informationLimit": 45,
+              "elasticInformationLimit": 10,
+              "possiblePerQueryLimit": 3
+            }
+          },
+          "exports": [
+            "memory-context"
+          ],
           "timeoutMs": 900000,
-          "publicDescription": { "title": "基础记忆检索", "purpose": "正式推演前广泛核实已有实体、事件、关系、认知与世界状态", "limitations": "只负责检索与证据提供，不代替导演推理", "requestExample": "梳理与当前主要势力变化、未决事件和活跃角色有关的既有记录。" }
+          "publicDescription": {
+            "title": "基础记忆检索",
+            "purpose": "正式推演前广泛核实已有实体、事件、关系、认知与世界状态",
+            "limitations": "只负责检索与证据提供，不代替导演推理",
+            "requestExample": "梳理与当前主要势力变化、未决事件和活跃角色有关的既有记录。"
+          }
         },
         "assistants": [
           {
@@ -72,31 +181,120 @@
             "target": "narrative-memory/narrative-memory-retrieve",
             "budgetPool": "supplemental-assistance",
             "inputAdapter": "memory-request-v1",
-            "fixedArguments": { "budget": { "entityQueryLimit": 10, "initialInspectLimit": 15, "supplementalInspectLimit": 4, "informationLimit": 12, "elasticInformationLimit": 2, "possiblePerQueryLimit": 2 } },
-            "exports": ["memory-context"],
+            "fixedArguments": {
+              "budget": {
+                "entityQueryLimit": 10,
+                "initialInspectLimit": 15,
+                "supplementalInspectLimit": 4,
+                "informationLimit": 12,
+                "elasticInformationLimit": 2,
+                "possiblePerQueryLimit": 2
+              }
+            },
+            "exports": [
+              "memory-context"
+            ],
             "timeoutMs": 600000,
-            "publicDescription": { "title": "定向记忆检索", "purpose": "中途核实一个明确的实体、事件、关系或认知问题", "limitations": "预算较低，不适合重新做全局检索", "requestExample": "请核实A是否知道旧案真相，以及现有记录中的证据。" }
+            "publicDescription": {
+              "title": "定向记忆检索",
+              "purpose": "中途核实一个明确的实体、事件、关系或认知问题",
+              "limitations": "预算较低，不适合重新做全局检索",
+              "requestExample": "请核实A是否知道旧案真相，以及现有记录中的证据。"
+            }
           }
         ],
-        "agenda": { "normalRounds": 2, "maxRounds": 4, "assistantConcurrency": 2, "speechCharacterTarget": 4000, "referenceDocumentCharacterTarget": 3000, "referenceTotalCharacterTarget": 16000 },
-        "budgets": { "preparation": 8, "base-assistance": 1, "discussion": 16, "supplemental-assistance": 4, "coordination": 6, "closing": 4, "draft": 1, "review": 4, "revision": 1, "references": 1, "retries": 3 },
-        "deliverables": { "report": "deliverables/report.json", "references": "deliverables/references.json" }
+        "agenda": {
+          "normalRounds": 2,
+          "maxRounds": 4,
+          "assistantConcurrency": 2,
+          "speechCharacterTarget": 4000,
+          "referenceDocumentCharacterTarget": 3000,
+          "referenceTotalCharacterTarget": 16000
+        },
+        "budgets": {
+          "preparation": 8,
+          "base-assistance": 1,
+          "discussion": 16,
+          "supplemental-assistance": 4,
+          "coordination": 6,
+          "closing": 4,
+          "draft": 1,
+          "review": 4,
+          "revision": 1,
+          "references": 1,
+          "retries": 3
+        },
+        "deliverables": {
+          "report": "deliverables/report.json",
+          "references": "deliverables/references.json"
+        }
       },
-      "workflowCalls": [{ "target": "narrative-memory/narrative-memory-retrieve", "maxCalls": 5 }],
+      "workflowCalls": [
+        {
+          "target": "narrative-memory/narrative-memory-retrieve",
+          "maxCalls": 5
+        }
+      ],
       "outputs": {
-        "report": { "path": "deliverables/report.json", "format": "json", "scope": "workflow", "retain": "run" },
-        "references": { "path": "deliverables/references.json", "format": "json", "scope": "workflow", "retain": "run" }
+        "report": {
+          "path": "deliverables/report.json",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run"
+        },
+        "references": {
+          "path": "deliverables/references.json",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run"
+        }
       },
-      "workspaceHandoff": { "include": [{ "output": "report" }, { "output": "references" }] },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "report"
+          },
+          {
+            "output": "references"
+          }
+        ]
+      },
       "metadata": {
-        "argumentInputs": ["operationId", "triggerReasons"],
-        "callInputs": ["story-context"],
+        "argumentInputs": [
+          "operationId",
+          "triggerReasons"
+        ],
+        "callInputs": [
+          "story-context"
+        ],
         "handoffInputs": [
-          { "nodeId": "prepare-private", "output": "context" },
-          { "nodeId": "prepare-author-future", "output": "context" }
+          {
+            "nodeId": "prepare-private",
+            "output": "context"
+          },
+          {
+            "nodeId": "prepare-author-future",
+            "output": "context"
+          }
         ]
       }
     },
-    { "id": "return", "type": "workflow-return", "dependsOn": ["meeting"], "exports": { "report": { "fromNode": "meeting", "output": "report" }, "references": { "fromNode": "meeting", "output": "references" } } }
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "meeting"
+      ],
+      "exports": {
+        "report": {
+          "fromNode": "meeting",
+          "output": "report"
+        },
+        "references": {
+          "fromNode": "meeting",
+          "output": "references"
+        }
+      }
+    }
   ]
 }

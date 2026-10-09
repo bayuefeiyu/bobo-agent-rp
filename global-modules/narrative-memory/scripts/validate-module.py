@@ -40,7 +40,7 @@ def main() -> int:
         for error in errors:
             print(f"- {error}")
         return 1
-    print("Narrative-memory Module v6 package and owned workflow registry are structurally valid.")
+    print("Narrative-memory Module v7 package and owned workflow registry are structurally valid.")
     return 0
 
 

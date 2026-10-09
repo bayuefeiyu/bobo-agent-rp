@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,9 @@ import test from "node:test";
 const execute = promisify(execFile);
 const scriptDirectory = resolve(fileURLToPath(import.meta.url), "..");
 
-test("analyzer identifies prompt, seed, LoRA, and output candidates", async () => {
+test("analyzer identifies prompt, seed, LoRA, and output candidates", async t => {
   const root = await mkdtemp(resolve(tmpdir(), "comfy-analyze-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
   const workflowPath = resolve(root, "workflow.json");
   await writeFile(workflowPath, JSON.stringify({
     "3": { class_type: "KSampler", inputs: { seed: 1 } },
@@ -26,10 +27,13 @@ test("analyzer identifies prompt, seed, LoRA, and output candidates", async () =
   assert.ok(report.nodes.some(node => node.candidates.some(item => item.role === "output")));
 });
 
-test("profile validator rejects a binding absent from the API workflow", async () => {
+test("profile validator rejects a binding absent from the API workflow", async t => {
   const root = await mkdtemp(resolve(tmpdir(), "comfy-profile-"));
-  const directory = resolve(root, "demo");
-  await mkdir(directory);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = resolve(root, "profiles", "demo");
+  await mkdir(directory, { recursive: true });
+  await mkdir(resolve(root, "skill", "guides", "demo"), { recursive: true });
+  await writeFile(resolve(root, "skill", "guides", "demo", "SKILL.md"), "# Demo guide\n");
   await writeFile(resolve(directory, "workflow.api.json"), JSON.stringify({ "1": { class_type: "CLIPTextEncode", inputs: { text: "" } }, "2": { class_type: "SaveImage", inputs: { filename_prefix: "" } } }));
   await writeFile(resolve(directory, "profile.json"), JSON.stringify({ schemaVersion: 1, id: "demo", title: "Demo", revision: "1", guideId: "demo", connectionId: "local", workflowFile: "workflow.api.json", bindings: { positive: [{ nodeId: "1", input: "missing" }], negative: [], seed: [], filenamePrefix: [{ nodeId: "2", input: "filename_prefix" }] }, prompt: { separator: ", ", positivePrefix: "", positiveSuffix: "", negative: "" }, output: { nodeIds: ["2"] }, seedRange: { min: 0, max: 1125899906842624, source: "explicit" } }));
   await assert.rejects(execute(process.execPath, [resolve(scriptDirectory, "validate-profile.mjs"), directory]), error => /does not exist/.test(error.stderr));
@@ -38,10 +42,13 @@ test("profile validator rejects a binding absent from the API workflow", async (
 // RC-07: the seed derived by the runtime exceeded the bound node's limit, so ComfyUI accepted the
 // queue entry, skipped the save branch, and still reported success. The profile must state the range
 // the bound node accepts, and the validator must refuse a range it cannot prove.
-test("profile validator requires a declared, node-compatible seed range", async () => {
+test("profile validator requires a declared, node-compatible seed range", async t => {
   const root = await mkdtemp(resolve(tmpdir(), "comfy-profile-seed-"));
-  const directory = resolve(root, "seed-demo");
-  await mkdir(directory);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = resolve(root, "profiles", "seed-demo");
+  await mkdir(directory, { recursive: true });
+  await mkdir(resolve(root, "skill", "guides", "seed-demo"), { recursive: true });
+  await writeFile(resolve(root, "skill", "guides", "seed-demo", "SKILL.md"), "# Seed guide\n");
   await writeFile(resolve(directory, "workflow.api.json"), JSON.stringify({
     "1": { class_type: "CLIPTextEncode", inputs: { text: "" } },
     "2": { class_type: "SaveImage", inputs: { filename_prefix: "" } },

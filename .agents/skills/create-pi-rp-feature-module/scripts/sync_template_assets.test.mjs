@@ -13,7 +13,7 @@ const script = resolve(import.meta.dirname, "sync_template_assets.mjs");
 test("template verification detects edited generated copies and duplicate Agent owners", async t => {
   const fixture = await mkdtemp(join(tmpdir(), "rp-template-sources-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
-  for (const directory of ["global-modules", ".agents/skills/create-pi-rp-feature-module/assets", ".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime"]) {
+  for (const directory of ["global-modules", ".agents/skills/create-pi-rp-feature-module/assets"]) {
     await cp(resolve(root, directory), resolve(fixture, directory), { recursive: true });
   }
   await execute(process.execPath, [script, "--root", fixture, "--check"]);
@@ -26,10 +26,14 @@ test("template verification detects edited generated copies and duplicate Agent 
   assert.equal(await readFile(generated, "utf8"), original);
   assert.equal(await readFile(source, "utf8"), original);
   const agent = resolve(fixture, "global-modules/comfy-image-generation/agents/image-prompt-writer");
-  const duplicate = resolve(fixture, ".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/agents/image-prompt-writer");
+  const duplicate = resolve(fixture, "global-modules/comfy-image-generation/agents/image-prompt-writer-duplicate");
   await cp(agent, duplicate, { recursive: true });
   const duplicateDefinition = JSON.parse(await readFile(resolve(duplicate, "agent.json"), "utf8"));
-  duplicateDefinition.promptFile = "prompts/agents/narrative-writer.md";
+  duplicateDefinition.promptFile = "prompts/agents/image-prompt-writer.md";
   await writeFile(resolve(duplicate, "agent.json"), `${JSON.stringify(duplicateDefinition, null, 2)}\n`);
+  const manifestPath = resolve(fixture, "global-modules/comfy-image-generation/module.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.agentFiles.push("agents/image-prompt-writer-duplicate/agent.json");
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await assert.rejects(execute(process.execPath, [script, "--root", fixture, "--check"]), /multiple template owners/);
 });

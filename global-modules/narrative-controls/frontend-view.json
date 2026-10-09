@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "regions": [
+    {
+      "id": "creative-requirements",
+      "type": "prompt-controls",
+      "title": "创作要求",
+      "description": "选择各项正文创作要求，保存后用于下一次正文生成。",
+      "collectionId": "settings",
+      "recordType": "narrative.preferences",
+      "recordId": "narrative-preferences",
+      "view": "frontend",
+      "readCapability": "narrative.preferences.frontend",
+      "updateCapability": "narrative.preferences.frontend",
+      "controlsFile": "controls.json"
+    }
+  ]
+}

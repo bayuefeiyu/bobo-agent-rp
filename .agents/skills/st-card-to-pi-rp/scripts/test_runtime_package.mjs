@@ -5,22 +5,32 @@ import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { loadCardComponents } from "../assets/pi-rp-runtime/.pi/lib/rp-module-registry.mjs";
 import { packageCardRuntime } from "./package_card_runtime.mjs";
 import { validateRuntimePackage } from "./validate_runtime_package.mjs";
 import { playPromptSources } from "../assets/pi-rp-runtime/.pi/lib/rp-author-prompts.mjs";
 const execFileAsync = promisify(execFile);
+async function draft(source, id = "demo") {
+  const modules = ["narrative-controls", "narrative-memory", "world-narrative-coordinator", "local-scene-narrative", "world-scope-narrative", "comfy-image-generation", "card-context-library"];
+  await mkdir(source, { recursive: true });
+  for (const module of modules) {
+    const from = module === "card-context-library" ? resolve(import.meta.dirname, "../assets/card-context-library") : resolve(import.meta.dirname, "../../../../global-modules", module);
+    await cp(from, join(source, "features", module), { recursive: true });
+  }
+  await writeFile(join(source, "manifest.json"), JSON.stringify({schema_version: 2, id, name: "Demo", feature_modules: modules.map(id => "features/" + id + "/module.json")}));
+}
+
 
 test("packages card-owned runtime and reports missing or edited dependencies", async () => {
   const root = await mkdtemp(join(tmpdir(), "rp-package-test-"));
   try {
     const source = join(root, "draft"), target = join(root, "demo");
-    await mkdir(source);
-    await writeFile(join(source, "manifest.json"), JSON.stringify({ schema_version: 2, id: "demo", name: "Demo" }));
+    await draft(source);
     const result = await packageCardRuntime({ sourceCard: source, targetCard: target });
     assert.equal(result.cardId, "demo");
     assert.ok(result.fileCount > 50);
     assert.equal((await validateRuntimePackage(target)).ok, true);
-    const writerPrompt = await readFile(join(target, "prompts", "agents", "narrative-writer.md"), "utf8");
+    const writerPrompt = await readFile(join(target, "features", "narrative-controls", "prompts", "agents", "narrative-writer.md"), "utf8");
     assert.ok(writerPrompt.indexOf("你是专心写作的写手Haruki") < writerPrompt.indexOf("<第一写作指导>"));
     assert.ok(writerPrompt.includes("<第一写作指导>"));
     assert.doesNotMatch(writerPrompt, /\{\{include:/);
@@ -48,14 +58,13 @@ test("a card-specific Agent prompt expands its includes and rejects missing temp
   const root = await mkdtemp(join(tmpdir(), "rp-agent-include-test-"));
   try {
     const source = join(root, "draft"), target = join(root, "demo");
-    await mkdir(join(source, "prompts", "agents"), { recursive: true });
-    await writeFile(join(source, "manifest.json"), JSON.stringify({ schema_version: 2, id: "demo", name: "Demo" }));
-    await writeFile(join(source, "prompts", "agents", "narrative-writer.md"), "卡片专属开头\n{{include:agent-preferences/创作agent身份定位.md}}\n卡片专属结尾\n");
+    await draft(source);
+    await writeFile(join(source, "features", "narrative-controls", "prompts", "agents", "narrative-writer.md"), "卡片专属开头\n{{include:agent-preferences/创作agent身份定位.md}}\n卡片专属结尾\n");
     await packageCardRuntime({ sourceCard: source, targetCard: target });
-    const result = await readFile(join(target, "prompts", "agents", "narrative-writer.md"), "utf8");
+    const result = await readFile(join(target, "features", "narrative-controls", "prompts", "agents", "narrative-writer.md"), "utf8");
     assert.match(result, /卡片专属开头[\s\S]*你是专心写作的写手Haruki[\s\S]*卡片专属结尾/);
     assert.doesNotMatch(result, /\{\{include:/);
-    await writeFile(join(source, "prompts", "agents", "narrative-writer.md"), "{{include:agent-preferences/missing.md}}\n");
+    await writeFile(join(source, "features", "narrative-controls", "prompts", "agents", "narrative-writer.md"), "{{include:agent-preferences/missing.md}}\n");
     await assert.rejects(packageCardRuntime({ sourceCard: source, targetCard: join(root, "another", "demo") }), /Missing Agent preference include/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -67,21 +76,20 @@ test("an imported image module supplies its only Agent definition and prompt ins
     const module = resolve(import.meta.dirname, "../../../../global-modules/comfy-image-generation");
     await mkdir(source);
     await writeFile(join(source, "manifest.json"), JSON.stringify({ schema_version: 2, id: "image-demo", name: "Image Demo", feature_modules: ["features/comfy-image-generation/module.json"] }));
-    await cp(module, join(source, "features", "comfy-image-generation"), { recursive: true, filter: path => resolve(path) !== join(module, "prompts") });
-    await cp(join(module, "agents"), join(source, "agents"), { recursive: true });
-    await cp(join(module, "prompts"), join(source, "prompts", "modules", "comfy-image-generation"), { recursive: true });
+    await cp(module, join(source, "features", "comfy-image-generation"), { recursive: true });
     await packageCardRuntime({ sourceCard: source, targetCard: target });
     const validation = await validateRuntimePackage(target);
     assert.equal(validation.ok, true, validation.errors.join("\n"));
-    const agent = JSON.parse(await readFile(join(target, "agents", "image-prompt-writer", "agent.json"), "utf8"));
+    const agent = JSON.parse(await readFile(join(target, "features", "comfy-image-generation", "agents", "image-prompt-writer", "agent.json"), "utf8"));
+    await assert.rejects(readFile(join(target, "agents", "image-prompt-writer", "agent.json")), { code: "ENOENT" });
     const moduleAgent = JSON.parse(await readFile(join(target, "features", "comfy-image-generation", "agents", "image-prompt-writer", "agent.json"), "utf8"));
     assert.deepEqual(agent, moduleAgent);
-    assert.equal(agent.promptFile, "prompts/modules/comfy-image-generation/agents/image-prompt-writer.md");
-    const context = { context: { cwd: root }, cardDirectory: target, playerName: "阿岚", isolatedRuntime: true };
+    assert.equal(agent.promptFile, "prompts/agents/image-prompt-writer.md");
+    const context = { context: { cwd: root }, cardDirectory: target, featureModules: await loadCardComponents(target), playerName: "阿岚", isolatedRuntime: true };
     const result = await playPromptSources(context, null, agent, { id: "generate" }, join(root, "workspace"), ["read"]);
     assert.match(JSON.stringify(result.agent), /画面内容提示词撰写者/);
     assert.doesNotMatch(JSON.stringify(result.agent), /guideId/);
-    const nodePrompt = await readFile(join(target, "prompts", "modules", "comfy-image-generation", "workflows", "agent-image-generation", "generate-content-prompts.md"), "utf8");
+    const nodePrompt = await readFile(join(target, "features", "comfy-image-generation", "prompts", "workflows", "agent-image-generation", "generate-content-prompts.md"), "utf8");
     assert.match(nodePrompt, /guideId/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -90,8 +98,7 @@ test("a new conversion and changed source templates do not change an older card 
   const root = await mkdtemp(join(tmpdir(), "rp-package-test-"));
   try {
     const source = join(root, "draft"), template = join(root, "template");
-    await mkdir(source);
-    await writeFile(join(source, "manifest.json"), JSON.stringify({ schema_version: 2, id: "demo", name: "Demo" }));
+    await draft(source);
     await cp(resolve(import.meta.dirname, "../assets"), join(template, "assets"), { recursive: true });
     const first = join(root, "card-a", "demo"), second = join(root, "card-b", "demo");
     await packageCardRuntime({ sourceCard: source, targetCard: first, templateRoot: template });

@@ -25,6 +25,11 @@ function id(value, label) {
   return value;
 }
 
+function componentRef(value, label) {
+  if (typeof value !== "string" || value.split("/").length !== 2) throw new Error(`${label} must be module-id/agent-id.`);
+  return value.split("/").map(part => id(part, label)).join("/");
+}
+
 function positiveInteger(value, fallback, maximum = 1000) {
   return Number.isSafeInteger(value) && value > 0 ? Math.min(value, maximum) : fallback;
 }
@@ -33,7 +38,7 @@ function member(value, role, index = null) {
   const label = index === null ? `team.${role}` : `team.${role}[${index}]`;
   const input = object(value, label);
   const memberId = id(input.id || role, `${label}.id`);
-  const agentId = id(input.agentId, `${label}.agentId`);
+  const agentId = componentRef(input.agentId, `${label}.agentId`);
   const modelId = typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : null;
   return {
     id: memberId,
@@ -82,7 +87,7 @@ function ability(value, label, { required = false } = {}) {
     if (typeof input.target !== "string" || input.target.split("/").length !== 2) throw new Error(`${label}.target must be a module/workflow reference.`);
     result.target = input.target;
   } else if (kind === "agent") {
-    result.agentId = id(input.agentId, `${label}.agentId`);
+    result.agentId = componentRef(input.agentId, `${label}.agentId`);
     result.modelId = typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : null;
     result.prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   } else {

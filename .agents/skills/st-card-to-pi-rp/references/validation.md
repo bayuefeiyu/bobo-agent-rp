@@ -10,7 +10,7 @@ Run:
 python .agents/skills/st-card-to-pi-rp/scripts/validate_card_pack.py play/cards/<card-id>
 ```
 
-The validator checks card manifest v2, the single fixed foundation path, required card-context-library registration, safe paths, openings, provenance, context processors, module v6 kinds and owned workflow files, resource catalog/document coverage, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, top-level workflow v3 nodes/outputs/access/commits, frontend declarations, and referenced files.
+The validator checks card manifest v2, the single fixed foundation path, required card-context-library registration, safe paths, openings, provenance, context processors, module schema 7 kinds with complete `agentFiles` and `workflowFiles` ownership, resource catalog/document coverage, data-contract v1 collections, record envelope v2 initial data, indexes, views, capabilities, Workflow schema 4 nodes/outputs/access/commits, `ownerModuleId` on every owned workflow, module-relative `promptFile`/`entryFile` paths, fully qualified module/component references, frontend declarations, and referenced files. A selected `global-modules/<id>/` package must be copied intact to `features/<id>/`; module agents, prompts, workflows, runtime, and documents may not be replaced by card-root copies.
 
 ### Loadable Skill headers
 
@@ -36,18 +36,18 @@ A card that wants a convention enforced writes it into `manifest.design_invarian
 
 ```json
 "design_invariants": {
-  "foregroundWorkflow": "standard-rp",
+  "foregroundWorkflow": "narrative-controls/standard-rp",
   "requiresCardContextResources": true,
   "requiresEffectiveMemoryTimeline": true,
   "requiresNarrativeAgentCallable": ["narrative-memory/narrative-memory-retrieve"]
 }
 ```
 
-- `foregroundWorkflow` is the card-local foreground workflow the other invariants apply to, and it is required whenever anything else is declared.
+- `foregroundWorkflow` is the fully qualified installed module foreground workflow the other invariants apply to, and it is required whenever anything else is declared.
 - every key is optional, and a card that declares none is never judged against a template it left behind;
 - a declared invariant is an **error** when violated, and the matching `design:` warning is then suppressed.
 
-**Write the declaration for a card built on the shipped templates.** A card whose foreground workflow is the shipped `standard-rp` declares `foregroundWorkflow` plus `requiresCardContextResources`; one built on `advanced-memory-rp` adds `requiresEffectiveMemoryTimeline` and `requiresNarrativeAgentCallable` for every retrieval entry its narrative Agent is supposed to expose. A card that deliberately renames, replaces, or decouples its foreground workflow declares only what it keeps, or nothing at all.
+**Write the declaration for a card built on the shipped templates.** A card whose foreground workflow is the shipped `narrative-controls/standard-rp` declares `foregroundWorkflow` plus `requiresCardContextResources`; one built on `narrative-controls/advanced-memory-rp` adds `requiresEffectiveMemoryTimeline` and `requiresNarrativeAgentCallable` for every retrieval entry its narrative Agent is supposed to expose. A card that deliberately renames, replaces, or decouples its foreground module declares only what it keeps, or nothing at all; an alternative implementation must still provide a valid foreground entry rather than leaving narration without one.
 
 **Never declare an invariant the card does not satisfy in order to silence a warning.** The declaration is exactly what makes the check binding; a false one converts an honest warning into a failing card.
 
@@ -85,14 +85,14 @@ For each module call, also verify that the target is a declared module workflow,
 
 Across workflows, build a trigger and ownership map. Detect cycles, duplicate starts, unstable dedupe keys, incompatible concurrent writes, and conflicting assumptions about record status or schema.
 
-For every `after-workflow` trigger, also resolve `trigger.documents` against the workflow it names — do not settle for "the reference is syntactically valid":
+For every retained entry trigger and every `after-workflow` trigger, resolve its fully qualified `workflowId` and `trigger.documents` against the workflow it names — do not settle for "the reference is syntactically valid":
 
 - `fromNode` must be a node of that workflow, and `output` must be an output that node really declares;
 - the mapped output's `scope` must be `turn`, `session`, or `public`;
 - every node's `metadata.triggerInputs` entry must have a matching `trigger.documents` mapping;
-- an unreplaced placeholder ID (`DIRECTOR_ENABLED_FOREGROUND_ID`, `DIRECTOR_POST_WORKFLOW_ID`) is an error even though it passes the ID pattern check, because the trigger would silently never fire.
+- the trigger must bind to the selected real foreground or post workflow ID; placeholder IDs and unqualified local IDs are errors even when they pass a generic ID pattern check.
 
-All four are converter errors, and the validator reports them as such. They exist because swapping an integration template for one that produces different outputs — the RC-06 defect — leaves a reference that looks fine and fails during play. Trigger documents reach a consuming node at the authored `trigger/<documentId>` address inside that node's own workspace, so a call node's `documents`, a code node's hardcoded path, and an Agent document index all read the same controlled copy.
+All four are converter errors, and the validator reports them as such. They exist because swapping a module workflow for one that produces different outputs — the RC-06 defect — leaves a reference that looks fine and fails during play. Trigger documents reach a consuming node at the authored `trigger/<documentId>` address inside that node's own workspace, so a call node's `documents`, a code node's hardcoded path, and an Agent document index all read the same controlled copy. Foreground and background entry workflows keep their triggers inside the owning module; ordinary `module-external` and `module-internal` workflows have no triggers and end in exactly one `workflow-return`.
 
 ## Runtime audit
 

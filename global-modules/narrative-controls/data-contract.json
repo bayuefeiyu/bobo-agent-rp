@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "moduleId": "narrative-controls",
+  "collections": {
+    "settings": {
+      "storage": {
+        "kind": "snapshot",
+        "partition": {
+          "mode": "single"
+        },
+        "initialSnapshotFile": "collections/settings/initial/snapshot.json"
+      },
+      "recordTypes": {
+        "narrative.preferences": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/preferences.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data",
+                  "label": "settings"
+                }
+              ]
+            },
+            "processor": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data",
+                  "label": "settings"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "narrative.preferences.read": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "processor"
+      ]
+    },
+    "narrative.preferences.frontend": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "frontend"
+      ]
+    }
+  }
+}

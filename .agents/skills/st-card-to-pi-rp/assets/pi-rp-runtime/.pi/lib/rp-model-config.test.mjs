@@ -20,11 +20,13 @@ test("normalizes optional model head and tail prompts", () => {
 });
 
 test("keeps agent default model as a low-priority convenience", () => {
-  const agent = normalizeAgentProfile({ schemaVersion: 1, id: "writer", defaultModelId: "agent-default" });
+  const agent = normalizeAgentProfile({ schemaVersion: 1, ownerModuleId: "test", id: "writer", defaultModelId: "agent-default" });
+  assert.equal(agent.id, "test/writer");
+  assert.equal(agent.ownerModuleId, "test");
   const workflow = { defaults: { modelId: "workflow-default" } };
-  assert.equal(resolveNodeProfiles({ node: { agentId: "writer", modelId: "node-model" }, workflow, agent }).modelId, "node-model");
-  assert.equal(resolveNodeProfiles({ node: { agentId: "writer", modelId: null }, workflow, agent }).modelId, "workflow-default");
-  assert.equal(resolveNodeProfiles({ node: { agentId: "writer", modelId: null }, workflow: { defaults: {} }, agent }).modelId, "agent-default");
+  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: "node-model" }, workflow, agent }).modelId, "node-model");
+  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: null }, workflow, agent }).modelId, "workflow-default");
+  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: null }, workflow: { defaults: {} }, agent }).modelId, "agent-default");
 });
 
 test("places the model head after Pi system text and leaves the call-time tail out of persistent context", () => {

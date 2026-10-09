@@ -11,7 +11,10 @@ features/<module-id>/
 ├── catalog.json             # resource/hybrid only
 ├── collections/<collection-id>/initial/
 ├── frontend-view.json
+├── agents/
+├── prompts/
 ├── runtime/
+├── workflows/
 └── skill/
 
 sessions/<card-id>/<chat-id>/
@@ -23,13 +26,15 @@ sessions/<card-id>/<chat-id>/
 └── workspace/receipts/
 ```
 
+Project-global modules are authored as complete trees under `global-modules/<module-id>/`; card imports copy the same owned Agents, prompts, workflows, and runtime files into `features/<module-id>/`. Card packages do not use legacy root `agents/`, `workflows/`, `prompts/`, or `modules/` component trees.
+
 `data-contract.json` is the only machine-readable module data declaration. A module owns one or more collections; a collection owns one or more record types. JSON/JSONL collection files are authoritative. Indexes, catalogs, and generated documents are derived and rebuildable.
 
-## Module v6
+## Module v7
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "id": "rumor-system",
   "moduleKind": "data",
   "basedOn": null,
@@ -42,6 +47,9 @@ sessions/<card-id>/<chat-id>/
   "resourceCatalogFile": null,
   "frontendViewFile": "frontend-view.json",
   "skillFile": "skill/SKILL.md",
+  "agentFiles": [
+    "agents/narrator/agent.json"
+  ],
   "workflowFiles": [
     "workflows/query-rumors/workflow.json",
     "workflows/update-rumors/workflow.json"
@@ -49,15 +57,17 @@ sessions/<card-id>/<chat-id>/
 }
 ```
 
-The exact v6 manifest additionally distinguishes three module kinds:
+The exact v7 manifest additionally distinguishes three module kinds:
 
 - `data`: owns session collections; `dataContractFile` is required and `resourceCatalogFile` is null;
 - `resource`: owns static authored resources; `resourceCatalogFile` is required and `dataContractFile` is null;
 - `hybrid`: owns both and requires both files.
 
+Earlier module and workflow schema versions are unsupported; migration is an explicit maintenance task.
+
 Resource-only modules use `surface: "background"` and `frontendViewFile: null`; a frontend requires authoritative data and a frontend view. Background data/hybrid modules also use `frontendViewFile: null`. This avoids fake collections and prevents static authored Markdown from being copied into session authority merely to satisfy a package shape.
 
-Every module owns only complete Workflow v3 definitions listed by `workflowFiles`; it does not publish naked nodes or internal tools. Each listed workflow is `module-external` or `module-internal`, declares the same `ownerModuleId`, has no trigger, and ends in exactly one `workflow-return` node. Substantial card-specific changes use a distinct module ID. `basedOn` may name the source module but never implies data compatibility, synchronization, or permission to change its source package.
+Every Agent, workflow, node, code entry file, and prompt is owned by a module and registered by its manifest. Every Workflow v4 has `ownerModuleId`. Entry kinds (`foreground`, `turn-background`, and `global-background`) are module-owned entry workflows; they may declare triggers and need not end in `workflow-return`. Callable `module-external` and `module-internal` workflows have no trigger and end in exactly one `workflow-return` node. Runtime references use normalized `module-id/local-id` forms, and `promptFile`/`entryFile` resolve relative to the owning module. Substantial card-specific changes use a distinct module ID. `basedOn` may name the source module but never implies data compatibility, synchronization, or permission to change its source package. The common engine, tools, system models, and cross-module prompt templates are public host resources and remain outside modules; a module need not run independently.
 
 Internal workflows default to a whole-owner-module execution lock. A module with deliberately independent collection write domains may declare non-empty collection `writeLocks`; all writable node capabilities must be covered, and locks remain separate from capabilities, transactions, and expected revisions.
 
@@ -210,9 +220,9 @@ Runtime transaction context may include normalized `sourceReferences` for every 
 
 Session-wide integrity inspection can report that a currently visible message revision differs from a revision used by an authorized module transaction. It is diagnostic only. Modules that support user-selected review ranges may persist their own coverage acknowledgements through normal guarded changes; these acknowledgements do not rewrite transcript history or grant cross-module repair authority.
 
-## Workflow v3 integration
+## Workflow v4 integration
 
-Modules define capabilities and own complete internal/external workflows. Top-level workflow nodes invoke them through the common call-and-wait boundary; module nodes may invoke external workflows only. Workflows grant a subset of data capabilities to concrete nodes. Skills explain semantics but never grant access. Agent tools, code nodes, and node-end submission all inherit the node's effective capabilities.
+Modules define capabilities and own complete Workflow v4 definitions. Every workflow kind carries `ownerModuleId`; entry kinds (`foreground`, `turn-background`, and `global-background`) may be triggered and do not require a return node, while callable `module-external` and `module-internal` workflows have no trigger and exactly one `workflow-return`. Entry workflow nodes invoke callable module workflows through the common call-and-wait boundary; module nodes may invoke external workflows only, while entry workflows may invoke internal workflows. Workflow, Agent, node, code, and prompt references use normalized `module-id/local-id` values and module-relative `promptFile`/`entryFile` paths. Skills explain semantics but never grant access. Agent tools, code nodes, and node-end submission all inherit the node's effective capabilities. Shared engine, tools, system models, and cross-module prompt templates remain host-owned public resources.
 
 Node outputs are registered by logical name with file/directory kind and `node`, `workflow`, `turn`, `session`, or `public` scope. `workspaceHandoff.include` is the only node-to-node filesystem allowlist: every entry references one declared output. Its destination defaults to the declared output path below `handoff/<producer-node-id>/`, preserving an allowlisted mirror in which transferred knowledge maps retain their relative references. Optional `as` deliberately overrides that path and may invalidate such references. The runtime never scans or transfers a whole node workspace, and it supports no wildcard or exclusion-list form. Missing or mismatched included outputs fail before downstream release. Change drafts remain node-owned. Node-end commits occur before the node is marked successful and before downstream nodes run.
 
