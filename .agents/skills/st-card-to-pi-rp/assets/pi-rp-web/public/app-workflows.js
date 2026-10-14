@@ -4,6 +4,7 @@
 // 工作流激活，以及工作流相关的标签/引用解析。
 //
 import { componentReference, elements, modelPresets, request, runWorkflowReference, showError, state } from "./app-context.js";
+import { openCallRecords } from "./app-call-records.js";
 
 const terminalWorkflowStatuses = new Set(["completed", "skipped", "failed", "cancelled"]);
 
@@ -12,7 +13,7 @@ export function workflowKindLabel(kind) { return ({ foreground: "前台", "turn-
 
 export function workflowReference(workflow) { return workflow.reference || componentReference(workflow.ownerModuleId, workflow.id); }
 
-export function isActiveWorkflowRun(run) { return run.live !== false && !terminalWorkflowStatuses.has(run.status); }
+export function isActiveWorkflowRun(run) { return run.live !== false && (run.blocksNextTurn || !terminalWorkflowStatuses.has(run.status)); }
 
 export function runningWorkflowReferences() { return new Set(state.workflowRuns.filter(isActiveWorkflowRun).map(runWorkflowReference)); }
 
@@ -30,12 +31,15 @@ export function renderWorkflow() {
   const running = runningWorkflowReferences().has(reference);
   const sourceLabel = workflow.source === "module" ? `模块 · ${workflow.moduleTitle || workflow.ownerModuleId}` : workflow.source === "card" ? "当前卡工作流" : "通用工作流";
   const summaryTitle = document.createElement("strong"); summaryTitle.textContent = workflow.title;
-  const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${sourceLabel}${workflow.kind === "foreground" && workflow.id === state.activeWorkflowId ? " · 下轮默认前台" : ""}${running ? " · 正在运行" : ""}`;
+  const summaryMeta = document.createElement("span"); summaryMeta.textContent = `${workflowKindLabel(workflow.kind)} · ${sourceLabel}${workflow.kind === "foreground" && reference === state.activeWorkflowId ? " · 下轮默认前台" : ""}${running ? " · 正在运行" : ""}`;
   const summaryDescription = document.createElement("p"); summaryDescription.textContent = workflow.description || "无简介";
   elements.workflowSummary.replaceChildren(summaryTitle, summaryMeta, summaryDescription);
   elements.workflowSelect.classList.toggle("has-running-selection", running);
-  elements.activateWorkflow.disabled = Boolean(workflow.ownerModuleId) || state.snapshot?.previewMode === true;
-  elements.activateWorkflow.title = workflow.ownerModuleId ? "模块工作流只能由所属模块或上级工作流调用；此处用于查看定义和运行状态。" : "激活前台工作流，或手动启动允许直接运行的后台工作流。";
+  const canActivate=workflow.kind==="foreground";
+  elements.activateWorkflow.disabled = !canActivate || state.snapshot?.previewMode === true;
+  elements.activateWorkflow.textContent = "设为下轮前台";
+  elements.activateWorkflow.hidden = !canActivate;
+  elements.activateWorkflow.title = "设为下一条输入使用的前台工作流。";
   if (workflow.kind !== "foreground") {
     const trigger = document.createElement("p");
     trigger.className = "workflow-runtime-detail";
@@ -54,13 +58,19 @@ export function renderWorkflow() {
     if (node.type === "agent") {
       const binding = document.createElement("p");
       binding.className = "workflow-runtime-detail";
-      binding.textContent = `Agent：${agentLabel(node.agentId || workflow.defaults?.agentId)} · 模型：${modelLabel(node.modelId || inheritedModel(workflow, node.agentId).id)}`;
+      binding.textContent = `Agent：${agentLabel(node.agentId || workflow.defaults?.agentId)} · 模型：${modelLabel(inheritedModel(workflow, node.agentId).id)}`;
+      card.append(binding);
+    } else if (node.type === "team" && node.team?.protocol === "collaboration") {
+      const members = node.team?.members || [];
+      const binding = document.createElement("p");
+      binding.className = "workflow-runtime-detail";
+      binding.textContent = `协作成员：${members.map(member => `${member.label || member.id}=${agentLabel(member.agentId)} / ${modelLabel(inheritedModel(workflow, member.agentId).id)}`).join("；")}`;
       card.append(binding);
     } else if (node.type === "team") {
       const members = [node.team?.leader, ...(node.team?.experts || []), node.team?.secretary].filter(Boolean);
       const binding = document.createElement("p");
       binding.className = "workflow-runtime-detail";
-      binding.textContent = `会议成员：${members.map(member => `${member.role || member.id}=${agentLabel(member.agentId)} / ${modelLabel(member.modelId || inheritedModel(workflow, member.agentId).id)}`).join("；")} · 助理能力 ${node.team?.assistants?.length || 0}`;
+      binding.textContent = `会议成员：${members.map(member => `${member.role || member.id}=${agentLabel(member.agentId)} / ${modelLabel(inheritedModel(workflow, member.agentId).id)}`).join("；")} · 助理能力 ${node.team?.assistants?.length || 0}`;
       card.append(binding);
     }
     fragment.append(card);
@@ -71,12 +81,24 @@ export function renderWorkflow() {
 
 export function renderWorkflowRuns() {
   const fragment = document.createDocumentFragment();
-  for (const run of state.workflowRuns.slice().reverse().slice(0, 20)) {
+  const newest = state.workflowRuns.slice().reverse();
+  const displayedRuns = [...newest.filter(isActiveWorkflowRun), ...newest.filter(run => !isActiveWorkflowRun(run)).slice(0, 20)];
+  for (const run of displayedRuns) {
     const card = document.createElement("article"); card.className = `workflow-run-card status-${run.status}`;
     const head = document.createElement("div"); head.className = "workflow-run-head";
-    const runTitle = document.createElement("strong"); runTitle.textContent = run.workflowId;
+    const reference = runWorkflowReference(run);
+    const workflow = state.workflows.find(item => workflowReference(item) === reference);
+    const runHeading = document.createElement("div"); runHeading.className = "workflow-run-heading";
+    const runTitle = document.createElement("strong"); runTitle.textContent = workflow?.title || run.workflowTitle || reference;
+    const runId = document.createElement("code"); runId.textContent = reference;
+    runHeading.append(runTitle, runId);
     const runMeta = document.createElement("span"); runMeta.textContent = `${statusLabel(run.status)} · 回合 ${run.turn ?? "—"}${run.blocksNextTurn ? " · 正在阻止下一轮" : ""}`;
-    head.append(runTitle, runMeta); card.append(head);
+    head.append(runHeading, runMeta); card.append(head);
+    for(const fallback of run.modelFallbacks||[]){
+      const detail=document.createElement("p");detail.className="workflow-runtime-detail";
+      detail.textContent=`模型兜底：${fallback.agentId||fallback.nodeId}${fallback.memberId?` / ${fallback.memberId}`:""} · ${modelLabel(fallback.fromModelId)} → ${modelLabel(fallback.toModelId)} · 原因：${fallback.reason}`;
+      card.append(detail);
+    }
     if (run.status === "completed") {
       const usage = document.createElement("p"); usage.className = "workflow-run-usage";
       usage.textContent = run.usage
@@ -89,15 +111,30 @@ export function renderWorkflowRuns() {
       const runNodeId = document.createElement("span"); runNodeId.textContent = node.id;
       const runNodeStatus = document.createElement("strong"); runNodeStatus.textContent = statusLabel(node.status);
       row.append(runNodeId, runNodeStatus);
+      if(node.error&&["failed","awaiting-model-choice","awaiting-recovery"].includes(node.status)){
+        const error=document.createElement("span");error.className="workflow-node-error";error.textContent=node.error;row.append(error);
+      }
       if (node.team) {
         row.classList.add("team-run-node");
         const detail = document.createElement("span");
         detail.className = "workflow-runtime-detail";
+        if (node.team.protocol === "collaboration") {
+          const deliveries = node.team.deliveries || node.team.deliveryStatus || {};
+          const calls = node.team.calls || node.team.callStatus || {};
+          const deliveryText = Array.isArray(deliveries)
+            ? deliveries.map(item => `${item.output || item.id || "output"}:${statusLabel(item.status || "pending")}${item.version ? ` v${item.version}` : ""}`).join(" / ")
+            : Object.entries(deliveries).map(([id, value]) => `${id}:${value?.status || value || "pending"}`).join(" / ");
+          const callText = Array.isArray(calls)
+            ? calls.map(item => `${item.target || item.id || "call"}:${statusLabel(item.status || "pending")}`).join(" / ")
+            : Object.entries(calls).map(([id, value]) => `${id}:${value?.status || value || "pending"}`).join(" / ");
+          detail.textContent = `协作：成员 ${node.team.activeMemberId || "-"} / 阶段 ${node.team.currentStage || "-"} / 激活 ${node.team.activation || 0}${node.team.error ? ` / 错误 ${node.team.error}` : ""}${node.team.failedMember ? ` / 失败成员 ${node.team.failedMember.memberId || node.team.failedMember.id || node.team.failedMember}` : ""}${deliveryText ? ` / 交付 ${deliveryText}` : ""}${callText ? ` / 调用 ${callText}` : ""}`;
+        } else {
         const tasks = Object.entries(node.team.taskCounts || {}).map(([status, count]) => `${status} ${count}`).join(" / ") || "无";
         const budgets = Object.entries(node.team.budgets || {}).map(([id, value]) => `${id} ${value.used || 0}/${value.limit || 0}`).join("；");
         detail.textContent = `会议：${node.team.phase} · 第 ${node.team.round || 0} 轮 · 发言 ${node.team.speechCount || 0} · 协助任务 ${tasks}${node.team.error ? ` · ${node.team.error}` : ""}${budgets ? ` · 额度 ${budgets}` : ""}`;
         if (node.team.failedMember?.memberId) detail.textContent += ` · 失败成员 ${node.team.failedMember.memberId}`;
         if ((node.team.usage?.unrecordedCalls || 0) > 0) detail.textContent += ` · ${node.team.usage.unrecordedCalls} 次调用用量未知`;
+        }
         row.append(detail);
         if (node.team.transcriptAvailable) {
           const openTranscript = document.createElement("button");
@@ -106,7 +143,7 @@ export function renderWorkflowRuns() {
           openTranscript.textContent = "打开会议记录";
           openTranscript.addEventListener("click", async () => {
             openTranscript.disabled = true;
-            try { await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/nodes/${encodeURIComponent(node.id)}/team-transcript/open`, { method: "POST", body: "{}" }); }
+            try { await request(`/api/v1/workflow-runs/${encodeURIComponent(run.id)}/nodes/${encodeURIComponent(node.id)}/team-transcript/open`, { method: "POST", body: "{}" }); }
             catch (error) { showError(error); }
             finally { openTranscript.disabled = false; }
           });
@@ -117,14 +154,14 @@ export function renderWorkflowRuns() {
         const openProcessRecord = document.createElement("button");
         openProcessRecord.type = "button";
         openProcessRecord.className = "process-record-button";
-        openProcessRecord.textContent = "打开过程记录";
-        openProcessRecord.title = "使用系统默认编辑器打开此节点最后一次 Agent 收发记录";
+        openProcessRecord.textContent = "查看运行记录";
+        openProcessRecord.title = "查看每次模型调用的输入、响应、工具执行及 token 用量";
         openProcessRecord.addEventListener("click", async () => {
           const original = openProcessRecord.textContent;
           openProcessRecord.disabled = true;
           openProcessRecord.textContent = "正在打开……";
           try {
-            await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/nodes/${encodeURIComponent(node.id)}/process-record/open`, { method: "POST", body: "{}" });
+            await openCallRecords(run, node);
           } catch (error) {
             showError(error);
           } finally {
@@ -136,7 +173,7 @@ export function renderWorkflowRuns() {
       }
       if (run.live && !(run.kind === "foreground" && terminalWorkflowStatuses.has(run.status)) && ["failed", "awaiting-model-choice", "awaiting-retry"].includes(node.status) && (node.type !== "team" || node.team?.failedMember?.freezeKey)) {
         const retryModel = node.attempts?.at(-1)?.modelId || "pi:current";
-        const retryWith = async (saveAsCardDefault, modelId) => { try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
+        const retryWith = async (saveAsCardDefault, modelId) => { try { await request(`/api/v1/workflow-runs/${run.id}/nodes/${node.id}/retry`, { method: "POST", body: JSON.stringify({ modelId, saveAsCardDefault, ...(node.team?.failedMember?.freezeKey ? { memberId: node.team.failedMember.freezeKey } : {}) }) }); await refreshWorkflowData(); } catch (error) { showError(error); } };
         if (node.failureKind === "deterministic") {
           // The runtime decided this before any model call, so swapping the model cannot help.
           const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "重试";
@@ -155,25 +192,24 @@ export function renderWorkflowRuns() {
           const model = modelOptions(retryModel); model.className = "setting-select";
           const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "用所选模型重试";
           retry.addEventListener("click", () => retryWith(false, model.value));
-          const saveAndRetry = document.createElement("button"); saveAndRetry.type = "button"; saveAndRetry.textContent = "保存为卡默认并重试"; saveAndRetry.addEventListener("click", () => retryWith(true, model.value));
-          row.append(model, retry, saveAndRetry);
+          row.append(model, retry);
         }
       }
       if (run.live && node.status === "awaiting-recovery") {
         const recover = document.createElement("button"); recover.type = "button"; recover.textContent = "恢复原任务";
-        recover.addEventListener("click", async () => { recover.disabled = true; try { await request(`/api/workflow-runs/${run.id}/nodes/${node.id}/recover`, { method: "POST" }); await refreshWorkflowData(); } catch (error) { showError(error); recover.disabled = false; } });
+        recover.addEventListener("click", async () => { recover.disabled = true; try { await request(`/api/v1/workflow-runs/${run.id}/nodes/${node.id}/recover`, { method: "POST" }); await refreshWorkflowData(); } catch (error) { showError(error); recover.disabled = false; } });
         row.append(recover);
       }
       card.append(row);
     }
-    if (run.live && !["completed", "skipped", "failed", "cancelled"].includes(run.status)) {
+    if (run.live && (run.blocksNextTurn || !terminalWorkflowStatuses.has(run.status))) {
       if (run.blocksNextTurn) {
         const skip = document.createElement("button"); skip.type = "button"; skip.className = "run-skip"; skip.textContent = "跳过并放行";
-        skip.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/skip`, { method: "POST" }); await refreshWorkflowData(); });
+        skip.addEventListener("click", async () => { await request(`/api/v1/workflow-runs/${run.id}/skip`, { method: "POST" }); await refreshWorkflowData(); });
         card.append(skip);
       }
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary-danger run-cancel"; cancel.textContent = "取消实例";
-      cancel.addEventListener("click", async () => { await request(`/api/workflow-runs/${run.id}/cancel`, { method: "POST" }); await refreshWorkflowData(); });
+      cancel.addEventListener("click", async () => { await request(`/api/v1/workflow-runs/${run.id}/cancel`, { method: "POST" }); await refreshWorkflowData(); });
       card.append(cancel);
     }
     fragment.append(card);
@@ -271,7 +307,7 @@ export function renderTokenUsage() {
 }
 
 export async function refreshTokenUsage(force = false) {
-  const payload = await request("/api/workflow-runs");
+  const payload = await request("/api/v1/workflow-runs");
   state.workflowRuns = payload.runs || [];
   const signature = JSON.stringify(state.workflowRuns.map(run => ({ id: run.id, updatedAt: run.updatedAt, nodes: run.nodes })));
   if (!force && signature === state.tokenRenderSignature) return;
@@ -279,11 +315,14 @@ export async function refreshTokenUsage(force = false) {
   renderTokenUsage();
 }
 
+let workflowRefreshSequence = 0;
 export async function refreshWorkflowData(selectId, forceRender = false) {
-  const [workflowData, runData] = await Promise.all([request("/api/workflows"), request("/api/workflow-runs")]);
+  const sequence = ++workflowRefreshSequence;
+  const [workflowData, runData] = await Promise.all([request("/api/v1/workflows"), request("/api/v1/workflow-runs")]);
+  if (sequence !== workflowRefreshSequence) return;
   state.workflows = workflowData.workflows || []; state.activeWorkflowId = workflowData.activeWorkflowId; state.workflowRuns = runData.runs || [];
   renderTokenUsage();
-  if (!forceRender && workflowPanelHasFocus()) return;
+  if (!forceRender && workflowPanelHasFocus()) { renderWorkflowRuns(); return; }
   const signature = JSON.stringify({ workflows: state.workflows, activeWorkflowId: state.activeWorkflowId, runs: state.workflowRuns });
   if (!forceRender && signature === state.workflowRenderSignature) return;
   state.workflowRenderSignature = signature;
@@ -304,9 +343,9 @@ export async function refreshWorkflowData(selectId, forceRender = false) {
 }
 
 export async function activateSelectedWorkflow() {
-  const workflow = selectedWorkflow(); if (!workflow) return;
-  elements.workflowStatus.textContent = workflow.kind === "foreground" ? "正在复制到当前卡并激活……" : "正在启动后台实例……";
-  try { const reference = workflowReference(workflow); const result = await request(`/api/workflows/${encodeURIComponent(reference)}/activate`, { method: "POST", body: "{}" }); await refreshWorkflowData(reference); elements.workflowStatus.textContent = result.startsOnNextInput ? "已激活；下一条用户消息使用此工作流。" : "后台工作流已启动。"; }
+  const workflow = selectedWorkflow(); if (!workflow || workflow.kind !== "foreground") return;
+  elements.workflowStatus.textContent = workflow.kind === "foreground" ? "正在设置前台工作流……" : "正在启动后台实例……";
+  try { const reference = workflowReference(workflow); const result = await request(`/api/v1/workflows/${encodeURIComponent(reference)}/activate`, { method: "POST", body: "{}" }); await refreshWorkflowData(reference,true); elements.workflowStatus.textContent = result.startsOnNextInput ? "已激活；下一条用户消息使用此工作流。" : "后台工作流已启动。"; }
   catch (error) { elements.workflowStatus.textContent = "操作失败"; showError(error); }
 }
 
@@ -325,10 +364,9 @@ export function modelOptions(selected = "pi:current") {
 }
 
 export function inheritedModel(workflow, nodeAgentId = "") {
-  if (workflow.defaults?.modelId) return { source: "工作流默认模型", id: workflow.defaults.modelId };
   const agentId = nodeAgentId || workflow.defaults?.agentId || "";
   const agent = state.agents.find(item => item.effective.id === agentId)?.effective;
-  return { source: "Agent 默认模型", id: agent?.defaultModelId || "pi:current" };
+  return { source: "Agent 指定模型", id: agent?.defaultModelId || null };
 }
 
 export function formatSessionTime(value) {

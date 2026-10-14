@@ -87,7 +87,10 @@ function resolvedOutput(persisted, requestId, route) {
 
 export async function execute({ run, conversation, services, data, workspace }) {
   const request = run.arguments?.request || {};
-  const operationId = request.operationId || run.callContext?.callId || run.id;
+  const originalOperationId = request.operationId || run.callContext?.callId || run.id;
+  // A deliberate new workflow execution creates a new external job. Recovery within that
+  // execution keeps this identity, including after restart or a delivery retry.
+  const operationId = run.newExecutionRootId ? `${originalOperationId}-${run.newExecutionRootId}` : originalOperationId;
   const invocationIntent = normalizeImageOperationIntent({ ...request, operationId });
 
   // Recovery is deliberately resolved before current preferences, chat selection, or profiles.

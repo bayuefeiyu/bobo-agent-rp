@@ -11,7 +11,7 @@ import { validateRuntimePackage } from "./validate_runtime_package.mjs";
 import { playPromptSources } from "../assets/pi-rp-runtime/.pi/lib/rp-author-prompts.mjs";
 const execFileAsync = promisify(execFile);
 async function draft(source, id = "demo") {
-  const modules = ["narrative-controls", "narrative-memory", "world-narrative-coordinator", "local-scene-narrative", "world-scope-narrative", "comfy-image-generation", "card-context-library"];
+  const modules = ["narrative-controls", "narrative-memory", "world-narrative-coordinator", "local-scene-narrative", "world-scope-narrative", "comfy-image-generation", "creative-reference-library", "card-context-library"];
   await mkdir(source, { recursive: true });
   for (const module of modules) {
     const from = module === "card-context-library" ? resolve(import.meta.dirname, "../assets/card-context-library") : resolve(import.meta.dirname, "../../../../global-modules", module);
@@ -40,12 +40,12 @@ test("packages card-owned runtime and reports missing or edited dependencies", a
     const launch = JSON.parse(await readFile(join(target, "runtime", "launch.json"), "utf8"));
     const lock = JSON.parse(await readFile(join(target, "runtime-lock.json"), "utf8"));
     assert.equal(launch.engine.testedNodeMajor, Number(process.versions.node.split(".")[0]));
-    assert.equal(lock.launchProtocolVersion, 1);
+    assert.equal(lock.launchProtocolVersion, 2);
     assert.deepEqual(lock.externalDependencies, [{ name: launch.engine.name, testedVersion: launch.engine.testedVersion }]);
     await assert.rejects(packageCardRuntime({ sourceCard: source, targetCard: target }), /already exists/);
     await writeFile(join(target, "prompts", "system", "base.md"), "Creator edit\n");
     const edited = await validateRuntimePackage(target);
-    assert.equal(edited.ok, true);
+    assert.equal(edited.ok, false);
     assert.ok(edited.changed.includes("prompts/system/base.md"));
     await rm(join(target, "runtime", "engine", "lib", "rp-workflows.mjs"));
     const missing = await validateRuntimePackage(target);

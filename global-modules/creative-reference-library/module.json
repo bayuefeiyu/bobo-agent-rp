@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 8,
+  "id": "creative-reference-library",
+  "moduleKind": "resource",
+  "externalResource": "creative-reference-library/v1",
+  "basedOn": null,
+  "title": "创作参考资料库",
+  "description": "从用户私有资料库按需搜集创作参考，支持自主检索、普通模型评分与向量片段检索。",
+  "surface": "background",
+  "contextOrder": 550,
+  "displayOrder": 550,
+  "dataContractFile": null,
+  "resourceCatalogFile": null,
+  "frontendViewFile": null,
+  "skillFile": "skill/SKILL.md",
+  "workflowFiles": ["workflows/retrieve/workflow.json", "workflows/search-units/workflow.json", "workflows/search-passages/workflow.json"],
+  "agentFiles": ["agents/retriever/agent.json", "agents/scorer/agent.json"]
+}

@@ -154,13 +154,14 @@ export function normalizeDataContract(value, expectedModuleId = null) {
   for (const [id, raw] of Object.entries(object(input.collections, "data contract collections"))) {
     safeId(id, "collection ID");
     const collection = object(raw, `collection ${id}`);
-    knownFields(collection, ["storage", "recordTypes"], `collection ${id}`, ["storage", "recordTypes"]);
+    knownFields(collection, ["storage", "recordTypes", "executionScope"], `collection ${id}`, ["storage", "recordTypes"]);
+    if (collection.executionScope !== undefined && !["story", "session"].includes(collection.executionScope)) throw new Error(`collection ${id}.executionScope must be story or session.`);
     const recordTypes = {};
     for (const [typeId, definition] of Object.entries(object(collection.recordTypes, `collection ${id}.recordTypes`))) {
       recordTypes[safeId(typeId, `collection ${id} record type`)] = normalizeRecordType(definition, `collection ${id}.recordTypes.${typeId}`);
     }
     if (Object.keys(recordTypes).length === 0) throw new Error(`Collection ${id} requires at least one record type.`);
-    collections[id] = { storage: normalizeStorage(collection.storage, `collection ${id}.storage`), recordTypes };
+    collections[id] = { storage: normalizeStorage(collection.storage, `collection ${id}.storage`), recordTypes, ...(collection.executionScope ? { executionScope: collection.executionScope } : {}) };
   }
   if (Object.keys(collections).length === 0) throw new Error("A data contract requires at least one collection.");
 

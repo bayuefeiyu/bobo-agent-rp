@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1, "id": "scorer", "name": "创作资料相关度评分", "description": "使用普通LLM判断有限候选与查询的主题和启发关联；推荐在模型配置中关闭思考。",
+  "ownerModuleId": "creative-reference-library", "promptFile": "prompts/agents/scorer.md",
+  "tools": ["read", "write", "edit"], "contextPermissions": ["workflow:scoped-output"], "outputMode": "json", "defaultModelId": "pi:current"
+}

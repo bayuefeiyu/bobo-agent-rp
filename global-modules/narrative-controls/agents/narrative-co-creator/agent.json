@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "narrative-co-creator",
+  "name": "正文团队共创者 Agent",
+  "description": "与主笔平等参与分析和构思，负责集中反馈、资料核实及获准的模块工作流调用。",
+  "promptFile": "prompts/agents/narrative-co-creator.md",
+  "tools": [
+    "read",
+    "write",
+    "edit",
+    "rp_files",
+    "rp_call"
+  ],
+  "contextPermissions": [
+    "card:fixed",
+    "chat:selected",
+    "modules:selected",
+    "workspace:public"
+  ],
+  "outputMode": "text",
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "narrative-controls"
+}

@@ -73,7 +73,7 @@
     "validate_design_invariants",
     "validate_director_prompt",
     "validate_feature_modules",
-    "validate_frontend_view_v2",
+    "validate_frontend_view_v3",
     "validate_manifest",
     "validate_module_call_surface",
     "validate_name_templates",

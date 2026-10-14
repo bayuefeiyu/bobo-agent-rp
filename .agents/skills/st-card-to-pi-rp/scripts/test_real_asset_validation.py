@@ -43,7 +43,7 @@ LOCAL_TEMP = ROOT / "local-development-records" / "temp"
 FIXTURE = LOCAL_TEMP / "card-validation"
 SOURCE_FIXTURE = LOCAL_TEMP / "module-source-validation"
 MODULE_IDS = ["card-context-library", "narrative-memory", "local-scene-narrative",
-              "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation", "narrative-controls"]
+              "world-scope-narrative", "world-narrative-coordinator", "comfy-image-generation", "narrative-controls", "creative-reference-library"]
 DIRECTOR_MODULE_ID = "world-narrative-coordinator"
 TRIGGER_WORKFLOW_DEFAULTS = {
     "director-archive-source-capture": "world-narrative-coordinator/director-post-turn",
@@ -625,6 +625,26 @@ report("the same card still reports no error", run_cli(FIXTURE))
 restore("standard-rp", standard_original)
 report("positive: the shipped workflow reports no design warning", design_warnings(FIXTURE))
 
+reference_target = "creative-reference-library/search-units"
+for workflow_id, node_id in [("standard-rp", "write-narrative"), ("advanced-memory-rp", "write-narrative"),
+                              ("deep-director-planning", "plan"), ("deep-director-team-planning", "meeting")]:
+    document = load(workflow_path(workflow_id))
+    calls = next(node["workflowCalls"] for node in document["nodes"] if node["id"] == node_id)
+    original = set_node_field(workflow_id, node_id, "workflowCalls", [c for c in calls if (c if isinstance(c, str) else c.get("target")) != reference_target])
+    report(f"negative: {workflow_id} missing default b wiring is found",
+           [w for w in design_warnings(FIXTURE) if f"{workflow_id} default creative-reference integration" in w], expect_empty=False)
+    restore(workflow_id, original)
+
+team_document = load(workflow_path("deep-director-team-planning"))
+assistants = next(node["team"] for node in team_document["nodes"] if node["id"] == "meeting")
+without_reference = json.loads(json.dumps(assistants))
+without_reference["assistants"] = [a for a in without_reference["assistants"] if a.get("id") != "creative-reference"]
+original = set_node_field("deep-director-team-planning", "meeting", "team", without_reference)
+report("negative: a missing team reference assistant is found",
+       [w for w in design_warnings(FIXTURE) if "must declare the shared b assistant" in w], expect_empty=False)
+restore("deep-director-team-planning", original)
+report("positive: restored reference defaults report no design warning", design_warnings(FIXTURE))
+
 manifest_path = FIXTURE / "manifest.json"
 manifest_original = load(manifest_path)
 declared = json.loads(json.dumps(manifest_original))
@@ -766,7 +786,7 @@ write_json(controls_source_path, controls_source)
 controls_view_path = controls_module / "frontend-view.json"
 controls_view = load(controls_view_path)
 broken_controls = json.loads(json.dumps(controls_view))
-broken_controls["regions"][0]["controlsFile"] = "missing-controls.json"
+broken_controls["bindings"][0]["controlsFile"] = "missing-controls.json"
 write_json(controls_view_path, broken_controls)
 report("negative: a missing prompt-controls source must fail",
        [e for e in run_cli(FIXTURE) if "missing-controls.json" in e], expect_empty=False)
@@ -795,7 +815,7 @@ for workflow_id, original in saved_workflows.items():
 for module_id in ("local-scene-narrative", "world-scope-narrative"):
     module_root = FIXTURE / "features" / module_id
     errors: list[str] = []
-    V.validate_frontend_view_v2(load(module_root / "frontend-view.json"),
+    V.validate_frontend_view_v3(load(module_root / "frontend-view.json"),
                                 load(module_root / "data-contract.json"),
                                 f"{module_id}.frontend-view", errors)
     report(f"{module_id} story-browser region passes", errors)
@@ -803,9 +823,9 @@ for module_id in ("local-scene-narrative", "world-scope-narrative"):
 view = load(FIXTURE / "features" / "local-scene-narrative" / "frontend-view.json")
 contract = load(FIXTURE / "features" / "local-scene-narrative" / "data-contract.json")
 broken_view = json.loads(json.dumps(view))
-broken_view["regions"][0]["indexView"] = "not-a-declared-view"
+broken_view["bindings"][0]["indexView"] = "not-a-declared-view"
 errors = []
-V.validate_frontend_view_v2(broken_view, contract, "negative.indexView", errors)
+V.validate_frontend_view_v3(broken_view, contract, "negative.indexView", errors)
 report("negative: an undeclared indexView must fail", errors, expect_empty=False)
 
 advanced = count_advanced_bindings()

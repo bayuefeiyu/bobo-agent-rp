@@ -54,6 +54,8 @@ async function registerNodeArtifactsUnlocked({ sessionDirectory, workflow, run, 
       id,
       workflowId: workflow.id,
       workflowRunId: run.id,
+      executionId: run.executionId || null,
+      attemptId: run.narrativeAttemptId || null,
       nodeId: node.id,
       turn: Number.isSafeInteger(run.turn) ? run.turn : null,
       path,
@@ -80,6 +82,7 @@ export async function registerNodeArtifacts(options) {
 }
 
 export function artifactVisibleTo(artifact, target) {
+  if (artifact.attemptId && artifact.attemptId !== target.attemptId) return false;
   if (artifact.scope === "node") return artifact.workflowRunId === target.workflowRunId && artifact.nodeId === target.nodeId;
   if (artifact.scope === "workflow") return artifact.workflowRunId === target.workflowRunId;
   if (artifact.scope === "turn") return artifact.turn === target.turn;
@@ -116,6 +119,8 @@ async function cleanupArtifactsUnlocked(sessionDirectory, event) {
     throw error;
   });
   const shouldRemove = artifact => {
+    // Managed candidates retain explicitly registered results until their execution is pruned.
+    if (artifact.executionId) return event.type === "execution" && (event.executionIds || []).includes(artifact.executionId);
     if (event.type === "node") return artifact.retain === "node" && artifact.workflowRunId === event.workflowRunId && artifact.nodeId === event.nodeId;
     if (event.type === "run") return artifact.retain === "run" && artifact.workflowRunId === event.workflowRunId;
     if (event.type === "turn") return artifact.retain === "turn" && Number.isSafeInteger(artifact.turn) && artifact.turn < event.turn;

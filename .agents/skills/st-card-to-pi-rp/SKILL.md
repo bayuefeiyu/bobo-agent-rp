@@ -63,6 +63,8 @@ Give each listed module a letter (`A`, `B`, `C` and so on) alongside its stable 
 
 Skip the question when the user already explicitly chose or declined modules, or authorized you to choose. With delegated choice, state the chosen set and rationale. When there are no valid modules, state that once and continue. A general request to start conversion does not silently select a module.
 
+The approved default creative-reference integration is an explicit exception to individual opt-in: when `narrative-controls` or the coordinator's deep-director workflows are selected, include `creative-reference-library` as their default companion unless the user explicitly declines it. Show this companion in preselection and the formal proposal; do not infer its usefulness from the source card, inspect the user's private library, or ask for a library path during conversion. Follow [the default integration rules](references/global-modules.md#default-creative-reference-library-integration): only narrative creation and deep-director planning receive one b (`search-units`) call; no other module receives a default grant. This companion choice does not authorize card writes before proposal confirmation.
+
 Read every selected module's `dependencies.json` before sending that message. An `orchestratedBy` entry means the module is driven from outside and is not a standalone feature: say so in the preselection list, and if the user selects the module without its orchestrator, present the two paths from [global-modules.md](references/global-modules.md) — add the orchestrator, or decouple inside the card — with the disclosed workload and risk, and record the choice. Do not drop the integration silently and do not refuse the selection.
 
 Do not produce a formal conversion proposal while module scope is unresolved. Module selection does not authorize writes and does not replace the later whole-proposal confirmation gate.
@@ -132,6 +134,24 @@ Once confirmed, treat the latest proposal and decisions as the implementation co
 7. Generate `provenance.json`, `unresolved.md`, and `conversion-report.md`. Every non-empty source unit must be mapped, explicitly archived as metadata, marked unsupported, or marked unresolved. When the card is built on the shipped foreground templates, also write `manifest.design_invariants` so validation holds it to the design it actually keeps, and record every remaining `design:` warning there with the reason the card differs on purpose.
 8. Read [validation.md](references/validation.md), run `scripts/validate_card_pack.py`, and perform the semantic fidelity checks it cannot automate.
 9. Read [web-runtime.md](references/web-runtime.md), create the card's typed `settings.json`, and copy `assets/pi-rp-web/` into the staging card's `web/`. Run `scripts/package_card_runtime.mjs` to publish the complete independent card, then `scripts/validate_runtime_package.mjs` on the published target. The packager copies the project's Pi RP extension, libraries, gameplay Skills, Agent definitions, prompts and behavior defaults into that card and writes `runtime-lock.json`. It never updates an existing card, installed legacy runtime, launcher, player settings, or sessions. Installing or upgrading the lightweight selector is a separate explicit operation with `scripts/install_launcher.mjs`. An existing card upgrade uses the named-card maintenance process, not this new-card packager.
+10. After the published card passes validation, complete the launcher check and play handoff below. Do not omit this step because the launcher is installed separately from the card.
+
+## Post-conversion launcher check and play handoff
+
+Check the actual destination play root for all three launcher files: `launcher/server.mjs`, `launcher/index.html`, and `launcher/validate-runtime-package.mjs`. Report whether the launcher is installed, absent, or incomplete; the existence of `play/` or a card runtime alone does not establish launcher installation.
+
+Give the user copyable installation and startup commands with the actual repository/play paths and required working directory. From the repository root, the commands are:
+
+```powershell
+node .agents/skills/st-card-to-pi-rp/scripts/install_launcher.mjs play
+node play/launcher/server.mjs play
+```
+
+Explain that startup opens the card selector in the browser; if it does not open automatically, use the printed `Card selector` URL. The user selects the converted card, then chooses an authored opening or an existing chat in the card's Web interface. Keep the launcher process running during play. Mention the Node major and Pi version recorded in the card's `runtime/launch.json`, which the launcher checks before launching that card. A Pi version mismatch produces a warning and startup continues; do not require a downgrade or rewrite the recorded tested version merely to match the installed version.
+
+If the launcher is absent, ask whether the user wants you to install it. If it is incomplete, identify the missing files and offer a repair; do not use `--update` to replace existing launcher code without authorization for that repair/update. Once installation or repair is authorized, run `scripts/install_launcher.mjs` with the actual play root and verify that all three files are present. A complete existing installation needs no reinstall or upgrade merely because another card was converted.
+
+Also ask whether the user wants one-click startup, even when the launcher is already installed. Clarify that you can start the selector now or create a reusable startup script/shortcut (for example, a Windows `.cmd` entry), and follow the user's chosen scope. A reusable entry must target the actual play root, handle paths containing spaces, and start the existing launcher rather than a development Pi session. Installing the launcher does not by itself authorize immediate startup or creating an entry. Honor authorization already given in the conversation without asking again; if installation is a prerequisite, complete it before startup. Verify any created entry's command and paths; after an authorized immediate startup, confirm the selector is reachable and provide its URL without starting a new chat or sending player input.
 
 ## Conversion decisions
 
@@ -162,3 +182,5 @@ This invariant applies to ordinary static creative documents. A switchable promp
 ## Required result
 
 Deliver a runnable independent card pack under `play/cards/`, the original/extracted source, a complete provenance map, unresolved content, a conversion report, and validation results. Each new card includes its own runtime and Web view; the lightweight launcher is installed separately. Template maintenance follows [template-sources.md](references/template-sources.md); ordinary conversion copies the declared sources and does not update generated root assets. Summarize what was preserved verbatim, what was split or merged, every generated anchor or bridge, and all unsupported material.
+
+Include the checked launcher installation status, installation/startup instructions, and the installation and one-click startup questions or the results of already-authorized assistance in the delivery message.

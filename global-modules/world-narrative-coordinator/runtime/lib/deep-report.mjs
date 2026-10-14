@@ -53,6 +53,15 @@ export function validateDeepReport(value, { basisTurn } = {}) {
   if (!Array.isArray(proposed.referenceUpdates)) throw new Error("Deep report referenceUpdates must be an array.");
   if (proposed.worldNarrativeTopics.filter(item => item?.status === "active").length !== 1) throw new Error("Deep report must contain exactly one active world narrative topic.");
   if (!proposed.worldNarrativeTopics.some(item => item?.status === "backup")) throw new Error("Deep report must contain at least one backup world narrative topic.");
+  for (const [index, topic] of proposed.worldNarrativeTopics.entries()) {
+    const fields = ["topicId", "title", "status", "premise", "conditions", "boundaries", "suggestedAngles", "invalidatingSignals"];
+    if (!topic || typeof topic !== "object" || Array.isArray(topic)) throw new Error(`worldNarrativeTopics[${index}] must be an object.`);
+    for (const field of ["topicId", "title", "premise"]) if (typeof topic[field] !== "string" || !topic[field].trim()) throw new Error(`worldNarrativeTopics[${index}].${field} must be non-empty text.`);
+    if (!["active", "backup"].includes(topic.status)) throw new Error(`worldNarrativeTopics[${index}].status is invalid.`);
+    for (const field of ["conditions", "boundaries", "suggestedAngles", "invalidatingSignals"]) if (!Array.isArray(topic[field]) || topic[field].some(item => typeof item !== "string")) throw new Error(`worldNarrativeTopics[${index}].${field} must be an array of text.`);
+    if (Object.keys(topic).some(field => !fields.includes(field))) throw new Error(`worldNarrativeTopics[${index}] contains unknown fields. Use topicId, conditions, boundaries and suggestedAngles exactly.`);
+  }
+  for (const field of ["coverage", "assumptions", "invalidatingSignals", "nextReviewTriggers"]) if (proposed[field].some(item => typeof item !== "string")) throw new Error(`Deep report ${field} must contain text only.`);
   return proposed;
 }
 

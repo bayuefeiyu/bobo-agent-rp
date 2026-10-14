@@ -6,6 +6,10 @@
 
 ## 文档导航
 
+- [前后端分离实施计划](FRONTEND-BACKEND-SEPARATION-PLAN.md)与[实施记录](FRONTEND-SEPARATION-IMPLEMENTATION.md)：新 API、无 DOM SDK、独立服务与可替换游玩区域。本次是破坏性更新，只支持新基线卡包。
+- [游玩前端创作者指南](FRONTEND-CREATOR-GUIDE.md)与[功能交接](FRONTEND-FUNCTIONAL-HANDOFF.md)：复用官方管理界面，独立设计整个游玩区域；更深定制从 main 派生分支。
+- [工作流新执行与正文尝试协议](.agents/skills/design-pi-rp-data/references/workflow-executions.md)：当前回合重执行、版本隔离、正文切换、归档回溯和模块作者约定。
+
 - [PROJECT_STATUS.md](PROJECT_STATUS.md)：**当前**开发快照、已完成能力、当前验证结果、已知边界和接手注意事项。后续开发者应先读此文件。
 - [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md)：从干净检出执行的开发与验证指南，包含可用的验证入口和交付命令。
 - [DEVELOPMENT-HISTORY.md](DEVELOPMENT-HISTORY.md)：历史实施记录（逐批次修复清单、当时验证计数与实机取证）；**不是当前规范**。
@@ -16,9 +20,13 @@
 - [.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md](.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md)：工程架构优化的实施方案与实施状态表。
 - `global-modules/<module-id>/IMPORT.md`：全局模块的导入、运行时依赖和卡级适配要求。
 
-当前根目录提供六个可选全局模块源：`narrative-controls`、`narrative-memory`、`world-narrative-coordinator`、`local-scene-narrative`、`world-scope-narrative` 与 `comfy-image-generation`。它们都只影响未来明确选择并导入它们的卡，不会同步更新 `play/` 中已有副本。
+当前根目录提供七个可选全局模块源：`narrative-controls`、`narrative-memory`、`world-narrative-coordinator`、`local-scene-narrative`、`world-scope-narrative`、`comfy-image-generation` 与 `creative-reference-library`。它们都只影响未来明确选择并导入它们的卡，不会同步更新 `play/` 中已有副本。
+
+`creative-reference-library` 提供用户私有创作参考库：用户审查后收录社区世界书或本地资料，按需自主检索或由普通模型评分筛选。正文、来源维护记录和索引不进入Git/卡包，资料不是故事事实或硬规则。库格式与CLI可独立使用，要求Node.js 24.14.0+；`search-passages`是独立代码工作流，执行向量召回与rerank，不调用普通LLM，`retrieve`可调用它，`search-units`的`includeSemanticCandidates`默认关闭并可显式额外召回它。向量能力默认关闭，用户在资料库配置页保存参数、显式测试并手动构建/更新或取消/恢复，保存和查询不会自动向量化；内置扫描上限为100000片段及512MiB原始Float32向量，旧索引会过滤当前资料中已修改或删除的内容并以`partial`标记覆盖不足。见[资料库使用说明](packages/creative-reference-library/README.md)与[转换Skill](.agents/skills/convert-reference-library/SKILL.md)。
 
 `narrative-controls` 是默认置顶的“正文”模块，提供叙事节奏、抢话方式，以及字数（800以内/800-1500/1500以上/自定义）、语言（中文/自定义）、扩写（扩写/部分扩写/续写）的互斥拨档，提示词沿用已整理的夏瑾系列原文与字数变量句式，并在全部拨档最后提供“其他要求”的默认/自定义两档；默认由创作者或转卡者填写，玩家自定义独立保存。项目源和卡内副本都将完整档位资源与普通静态资料分开保存；正文生成时只把当前选择组合成《创作要求》，与其他静态创作准则放进同一资料目录、按同级要求交付。设置按聊天保存，切换后保存即用于下一次正文生成。导入与扩展见 [正文模块说明](global-modules/narrative-controls/IMPORT.md)。
+
+正文模块的 `conversation` 集合统一保存玩家输入、第0轮开场和正式正文，手动编辑追加修订；主界面、运行时转录、最近上下文及记忆归档读取同一文档视图。`messages.jsonl` 改为可重建的投影缓存，删除楼层时按原规则清理该楼层及后续文档的全部修订和绑定数据。卡包的 `transcript_provider` 为将来替代正文模块留下最小接口，聊天建立后固定。旧聊天须另行明确范围迁移，根目录更新不会自动改动已安装卡或真实聊天。
 
 导演模块也提供独立的拨档要求：首项“主角待遇”，固定末项“其他要求”（创作者默认/玩家自定义）。档位文档以 `director-only` 注释标注专用段落，未标注内容适用于全部登记的导演 Agent；运行时按原文顺序过滤并加入对应导演的提示词。全部源资源随卡保留，当前选择按聊天保存，下一次导演运行生效。格式与扩展见 [导演拨档说明](global-modules/world-narrative-coordinator/DIRECTOR-CONTROLS.md)。
 
@@ -102,7 +110,7 @@ pi --approve
 
 生图运行时只让 Agent 生成随画面变化的内容片段；固定质量、风格、LoRA 触发词和负面提示词由 profile 组装。图片始终保留在 ComfyUI 的 `output/bobo-agent-rp/<聊天目录>/`，项目只保存会话期内的提示词和 ComfyUI 输出引用，不复制、缓存或随聊天删除图片。
 
-新转换卡在临时目录构建并校验后，用 `scripts/package_card_runtime.mjs` 发布为带 `runtime-lock.json` 的独立卡包。项目运行库、提示词、Agent、工作流和 Web 随卡复制；升级根目录模板或转换另一张卡不会自动改动它。卡包记录打包时的 Node 主版本及已测试 Pi 版本，启动器在启动前检查；使用其他引擎组合需先验证再更新兼容声明。启动器独立安装，不由每次转卡顺带覆盖。功能模块是最小组织和交付单元：项目源码统一放在 `global-modules/<id>/`，转卡时整体复制到 `features/<id>/`，所属 Agent、工作流、节点提示词、脚本与资源保持在模块内。正文和生图遵循同一处理方式；模块可依赖其他模块。公共引擎、工具、系统和模型前后置保留在公共层，跨模块转卡素材继续放在 `assets/prompt-templates/`。模板维护位置和自动生成副本见[模板的唯一维护来源](.agents/skills/st-card-to-pi-rp/references/template-sources.md)。需要直接运行打包器时，从仓库根目录执行：
+新转换卡在临时目录构建并校验后，用 `scripts/package_card_runtime.mjs` 发布为带 `runtime-lock.json` 的独立卡包。项目运行库、提示词、Agent、工作流和 Web 随卡复制；升级根目录模板或转换另一张卡不会自动改动它。卡包记录打包时的 Node 主版本及已测试 Pi 版本，启动器在启动前检查；Pi 版本不一致时会提醒并继续启动，Node 主版本不一致仍会阻止启动。已测试版本保持真实记录，只有完成对应组合验证后才更新兼容声明。启动器独立安装，不由每次转卡顺带覆盖。功能模块是最小组织和交付单元：项目源码统一放在 `global-modules/<id>/`，转卡时整体复制到 `features/<id>/`，所属 Agent、工作流、节点提示词、脚本与资源保持在模块内。正文和生图遵循同一处理方式；模块可依赖其他模块。公共引擎、工具、系统和模型前后置保留在公共层，跨模块转卡素材继续放在 `assets/prompt-templates/`。模板维护位置和自动生成副本见[模板的唯一维护来源](.agents/skills/st-card-to-pi-rp/references/template-sources.md)。需要直接运行打包器时，从仓库根目录执行：
 
 ```powershell
 node .agents/skills/st-card-to-pi-rp/scripts/package_card_runtime.mjs <临时卡目录> play/cards/<新卡ID>
@@ -139,9 +147,9 @@ node play/launcher/server.mjs play
 
 ## 工作流与多 Agent
 
-Web UI 将模型、Agent 和工作流配置统一收进命名配置方案。模型配置以 ID 保存，可设置上下文/输出限制、思考强度、并发量及可选的首尾提示词；Agent 与工作流配置可建立覆盖层，工作流节点只引用这些 ID。独立工作流页面用于查看定义、节点和运行实例，并提供运行期操作，不再直接修改配置。
+Web UI 将模型、Agent 和工作流配置统一收进配置方案。模型配置以 ID 保存，可设置上下文/输出限制、思考强度、并发量及可选的首尾提示词。Agent 的模型统一在“模型指定”页管理：所有模块展开展示，单项下拉选择和勾选后的批量指定均立即保存。工作流、节点、团队成员及 Agent 助理只选择 Agent，模型由对应 Agent 决定；不再独立指定模型。该页还管理当前方案下所有工作流共用的兜底开关和模型，默认关闭，关闭时明确报告模型问题。开启后仅针对模型问题尝试兜底，并记录原模型、实际模型和原因。独立工作流页面用于查看定义、节点和运行实例，并提供运行期操作。
 
-在仓库根目录运行 `node .agents/skills/manage-pi-rp-config-ui/scripts/start-config-ui.mjs` 会以“无卡、无聊天”的开发预览状态打开与 `play` 完全相同的 Web UI。正文区、角色卡页和模块栏可用于检查通用前端效果，但不会创建虚拟卡、会话或运行工作流；用户资料与正文字号等通用默认可以修改并保存在 `.pi-rp-local/`。游玩时共享 `settings/common.json` 作为全局回退，卡内 `settings.json.settings.common` 覆盖对应类别且优先级更高。从同一侧栏进入“配置方案”即可统一管理模型、Agent、工作流和模块参数，不再保留重复的独立编辑页。首次启动会从作者默认值建立并激活可编辑的“开发默认”方案，内置默认仍作为只读基线保留。Agent 和工作流都先选所属功能模块，再选具体对象。所有组件使用模块限定引用，方案覆盖保存在对应模块的精确配置键下。工作流档案包含运行策略、触发方式和全部节点，并且只有 Agent 节点显示 Agent、模型、提示词和上下文选项。模块参数从 `settings-form` 初始值载入。全局开发模式与单卡游玩模式分别维护命名方案，支持新建、改名、复制、切换、删除和不含凭据的 JSON 导入导出；单卡方案只对当前卡生效。所有字段均带同排用途提示，模型 API Key 仍只保存在本机项目隔离缓存中。
+在仓库根目录运行 `node .agents/skills/manage-pi-rp-config-ui/scripts/start-config-ui.mjs` 会以“无卡、无聊天”的开发预览状态打开与 `play` 完全相同的 Web UI。正文区、角色卡页和模块栏可用于检查通用前端效果，但不会创建虚拟卡、会话或运行工作流；用户资料与正文字号等通用默认可以修改并保存在 `.pi-rp-local/`。游玩时共享 `settings/common.json` 作为全局回退，卡内 `settings.json.settings.common` 覆盖对应类别且优先级更高。从同一侧栏进入“配置方案”即可统一管理模型、Agent、模型指定、工作流和模块参数，不再保留重复的独立编辑页。首次启动会从作者默认值建立并激活可编辑的“开发默认”方案，内置默认仍作为只读基线保留。Agent 和工作流详细编辑都先选所属功能模块，再选具体对象；模型指定页直接展开所有模块和 Agent。所有组件使用模块限定引用，方案覆盖保存在对应模块的精确配置键下。工作流档案包含并发策略、触发方式和全部节点，Agent 节点显示 Agent、提示词和上下文选项。未指定模型时不自动选用当前 Pi 模型；使用当前 Pi 模型需明确选定。模块参数从 `settings-form` 初始值载入。全局开发模式与单卡游玩模式分别维护配置方案，支持新建、改名、复制、切换、删除和不含凭据的 JSON 导入导出；单卡方案只对当前卡生效。所有字段均带同排用途提示，模型 API Key 仍只保存在本机项目隔离缓存中。
 
 API Key 不写入项目目录：运行时按 `play/` 绝对路径生成隔离标识，保存到操作系统缓存目录下的 `bobo-agent-rp/projects/<project-hash>/model-secrets.json`。分享或上传项目不会携带凭据；旧版 `model-profiles.json` 中的 Key 会在下次启动时自动迁移并从项目文件删除。
 

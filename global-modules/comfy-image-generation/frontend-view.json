@@ -1,20 +1,13 @@
 {
-  "schemaVersion": 2,
-  "regions": [
+  "schemaVersion": 3,
+  "bindings": [
     {
-      "type": "image-generation",
-      "title": "剧情生图",
-      "settingsPath": "collections.settings.records",
-      "requestsPath": "collections.requests.records",
-      "rendersPath": "collections.renders.records",
-      "empty": "尚未配置 ComfyUI 生图工作流。请在项目根目录使用 adapt-comfyui-workflow Skill 完成适配。"
+      "id": "image-generation-0",
+      "kind": "images"
     },
     {
       "id": "image-input-defaults",
-      "type": "settings-form",
-      "title": "默认输入范围",
-      "description": "设置新聊天首次建立剧情生图偏好时使用的输入范围；不会改写已有聊天中的生图设置。",
-      "spoiler": false,
+      "kind": "settings",
       "collectionId": "settings",
       "recordType": "image.preferences",
       "recordId": "image-preferences",
@@ -28,7 +21,10 @@
           "label": "默认输入类型",
           "type": "select",
           "required": true,
-          "options": ["recent-turns", "custom-brief"],
+          "options": [
+            "recent-turns",
+            "custom-brief"
+          ],
           "help": "recent-turns 自动读取最近完整剧情；custom-brief 默认打开本次画面描述输入。"
         },
         {
@@ -45,10 +41,28 @@
           "label": "默认画面目标",
           "type": "select",
           "required": true,
-          "options": ["latest", "all"],
+          "options": [
+            "latest",
+            "all"
+          ],
           "help": "latest 仅把最新回合作为画面目标，较早回合作为连续性参考；all 把所选全部回合都作为画面目标。"
         }
       ]
+    }
+  ],
+  "regions": [
+    {
+      "id": "image-generation-0",
+      "type": "image-generation",
+      "title": "剧情生图",
+      "bindingId": "image-generation-0"
+    },
+    {
+      "id": "image-input-defaults",
+      "type": "settings-form",
+      "title": "默认输入范围",
+      "bindingId": "image-input-defaults",
+      "description": "设置新聊天首次建立剧情生图偏好时使用的输入范围；不会改写已有聊天中的生图设置。"
     }
   ]
 }

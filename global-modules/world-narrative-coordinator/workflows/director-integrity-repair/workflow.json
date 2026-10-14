@@ -29,7 +29,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-integrity-repairer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -192,5 +191,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

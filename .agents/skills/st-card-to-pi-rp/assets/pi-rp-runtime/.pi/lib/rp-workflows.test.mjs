@@ -43,7 +43,8 @@ test("normalizes a dynamic team node without assigning it one outer Agent or mod
   assert.equal(workflow.nodes[0].type, "team");
   assert.equal(workflow.nodes[0].agentId, null);
   assert.equal(workflow.nodes[0].team.experts.length, 1);
-  assert.equal(workflow.nodes[0].team.leader.modelId, null);
+  assert.equal(workflow.nodes[0].team.leader.modelId, undefined);
+  assert.equal(workflow.nodes[0].team.experts[0].modelId, undefined);
 });
 
 test("rejects team configuration on ordinary nodes and missing team configuration on team nodes", () => {

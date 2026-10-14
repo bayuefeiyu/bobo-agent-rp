@@ -7,7 +7,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-daily-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -18,8 +17,8 @@
   },
   "trigger": {
     "type": "after-workflow",
-    "workflowId": "narrative-controls/advanced-memory-rp",
     "blockNextTurnUntilReady": true,
+    "workflowId": "narrative-controls/advanced-memory-rp",
     "documents": {
       "turn-context": {
         "fromNode": "write-narrative",
@@ -29,15 +28,51 @@
   },
   "nodes": [
     {
-      "id": "review",
+      "id": "analyze-post-director",
+      "title": "复盘当前正文",
       "type": "call",
-      "target": "world-narrative-coordinator/post-director-update",
+      "target": "world-narrative-coordinator/post-director-analysis",
       "arguments": {
         "phase": "turn"
       },
       "documents": {
         "context": "trigger/turn-context"
       },
+      "outputPaths": {
+        "result": "post-director-result.json"
+      },
+      "outputs": {
+        "result": {
+          "path": "post-director-result.json",
+          "format": "json",
+          "kind": "file",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "result"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "triggerInputs": [
+          "turn-context"
+        ]
+      }
+    },
+    {
+      "id": "review",
+      "type": "call",
+      "target": "world-narrative-coordinator/commit-post-director-update",
+      "arguments": {},
+      "documents": {},
       "outputPaths": {
         "delegations": "delegations"
       },
@@ -71,9 +106,17 @@
       "metadata": {
         "triggerInputs": [
           "turn-context"
-        ]
-      }
+        ],
+        "textFile": "handoff/analyze-post-director/post-director-result.json"
+      },
+      "dependsOn": [
+        "analyze-post-director"
+      ]
     }
   ],
-  "ownerModuleId": "world-narrative-coordinator"
+  "ownerModuleId": "world-narrative-coordinator",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

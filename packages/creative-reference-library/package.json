@@ -1,0 +1,10 @@
+{
+  "name": "creative-reference-library",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.14.0" },
+  "exports": "./client.mjs",
+  "bin": { "creative-reference-library": "./cli.mjs" },
+  "scripts": { "test": "node --test core.test.mjs semantic.test.mjs" }
+}

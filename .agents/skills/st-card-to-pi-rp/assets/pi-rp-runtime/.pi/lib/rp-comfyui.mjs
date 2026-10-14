@@ -212,7 +212,11 @@ export function createComfyUiService({ rootDirectory, cardDirectory, featureModu
       const guide = await readFile(guidePath, "utf8");
       const profile = normalizeProfile(value, directory, workflow, guide, overrides.profiles?.[entry.name]);
       const configuredConnection = configuredConnections.get(profile.connectionId);
-      if (!configuredConnection) throw new Error(`Profile ${profile.id} references unknown ComfyUI connection ${profile.connectionId}.`);
+      if (!configuredConnection) {
+        if (ids) throw httpError(400, `配置 ${profile.title} 的连接 ${profile.connectionId} 已移除，请先重新保存该连接。`);
+        result.push({ ...profile, connectionMissing: true, executionSnapshot: null });
+        continue;
+      }
       const hydrated = { ...profile, connectionBaseUrl: configuredConnection.baseUrl };
       const executionSnapshot = freezeComfyProfile(hydrated, configuredConnection.baseUrl);
       result.push({ ...hydrated, effectiveDigest: executionSnapshot.effectiveDigest, executionSnapshot });
@@ -232,18 +236,35 @@ export function createComfyUiService({ rootDirectory, cardDirectory, featureModu
       const hash = createHash("sha256").update(String(chatId || "chat")).digest("hex").slice(0, 6);
       return `${stamp}_${card}_${hash}`;
     },
-    async listConnections() { const { settings, secrets } = await documents(); return settings.connections.map(cleanConnection).map(item => ({ ...item, hasToken: Boolean(secrets.connections?.[item.id]?.token) })); },
+    async listConnections() { const { settings, secrets } = await documents(); return settings.connections.map(cleanConnection).map(item => ({ ...item, selected: item.id === settings.selectedConnectionId, hasToken: Boolean(secrets.connections?.[item.id]?.token) })); },
     async saveConnection(value) {
       const clean = cleanConnection(value);
       const { settings, secrets } = await documents();
       const index = settings.connections.findIndex(item => item.id === clean.id);
       if (index < 0) settings.connections.push(clean); else settings.connections[index] = clean;
+      settings.selectedConnectionId = clean.id;
       if (typeof value.token === "string" && value.token.trim()) secrets.connections[clean.id] = { token: value.token.trim() };
       await atomicJson(settingsPath, settings); await atomicJson(secretsPath, secrets, true);
       return { ...clean, hasToken: Boolean(secrets.connections[clean.id]?.token) };
     },
-    async testConnection(id) {
-      const value = await connection(id, true); const headers = value.token ? { authorization: `Bearer ${value.token}` } : {};
+    async removeConnection(id) {
+      if (!SAFE_ID.test(id)) throw httpError(400, "Invalid connection ID.");
+      const { settings, secrets } = await documents();
+      if (!settings.connections.some(item => item.id === id)) throw httpError(404, "Connection was not found.");
+      settings.connections = settings.connections.filter(item => item.id !== id);
+      delete secrets.connections[id];
+      if (settings.selectedConnectionId === id) settings.selectedConnectionId = settings.connections[0]?.id || null;
+      await atomicJson(settingsPath, settings); await atomicJson(secretsPath, secrets, true);
+      return { removed: id };
+    },
+    async testConnection(id, draft = null) {
+      let value;
+      if(draft){
+        const clean=cleanConnection(draft),{secrets}=await documents();
+        const token=typeof draft.token==="string"&&draft.token.trim()?draft.token.trim():secrets.connections?.[id]?.token||"";
+        value={...clean,token};
+      }else value=await connection(id,true);
+      const headers = value.token ? { authorization: `Bearer ${value.token}` } : {};
       const startedAt = Date.now(); const response = await fetch(`${value.baseUrl}/system_stats`, { headers, signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw httpError(400, `ComfyUI health check failed: HTTP ${response.status}`);
       return { ok: true, elapsedMs: Date.now() - startedAt, system: await response.json() };

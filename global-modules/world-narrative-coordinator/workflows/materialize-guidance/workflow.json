@@ -32,7 +32,6 @@
   "revision": "1",
   "defaults": {
     "agentId": null,
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -93,5 +92,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

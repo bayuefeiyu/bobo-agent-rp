@@ -4,9 +4,9 @@
 
 1. 正文 Agent 先完成本轮情景分析，并调用 `narrative-memory/narrative-memory-retrieve`。
 2. 在同一正文 Agent 节点中调用 `world-narrative-coordinator/pre-director-update`。已接入的公共运行时会从该节点实际获准的资料自动生成冻结的 `document-workspace-snapshot`，并作为 `context` 文档输入；正文 Agent 不手工复制、重组或传递整个节点工作区。
-3. 前置导演从快照根 `DOCUMENTS.md` 开始按需阅读。工作流作者通过节点文档声明控制快照内容；需要新增资料时修改声明及其生成代码，不在提示词中要求 Agent 打包。
-4. 前置调用返回后，再调用 `world-narrative-coordinator/materialize-guidance`，参数至少包含 `publicationId=publication-narrative` 与 `channel=narrative`，将返回文档作为当前轮创作依据。
-5. 正文完成后，由模块工作流 `world-narrative-coordinator/director-post-turn` 接手后置复盘；正文 Agent 不替后置导演做常规复盘。
+3. 前置导演从快照根 `DOCUMENTS.md` 开始按需阅读，读取私有上下文中的 `CURRENT.md` 与完整 `turn-brief-current`，继承后置规划，再按玩家新输入核查相关资料并定稿本轮正文指导。工作流作者通过节点文档声明控制快照内容；需要新增资料时修改声明及其生成代码，不在提示词中要求 Agent 打包。
+4. 前置调用返回后，再调用 `world-narrative-coordinator/materialize-guidance`，参数至少包含 `publicationId=publication-narrative` 与 `channel=narrative`，将前置定稿的返回文档作为当前轮创作依据。组装器只导出正文发布清单，不能把私有规划或完整交接直接送入正文。
+5. 正文完成后，由模块工作流 `world-narrative-coordinator/director-post-turn` 接手主要复盘、持续规划与下一轮条件化交接，检查前置调整的实际落地结果；正文 Agent 不替后置导演做常规复盘。启用非正文创作时采用已配置的 `director-post-with-narratives`，其具体任务指导由后置负责；下一轮正文指导仍由前置定稿。
 
 若启用近场或广域叙事，正文前还应运行 `narrative-controls/standard-rp` 或 `narrative-controls/advanced-memory-rp` 中的 `prepare-recent-narrative-stories` 节点。该节点由正文模块 `narrative-controls` 自带的 `runtime/prepare-recent-narrative-stories.mjs` 提供，工作流以模块相对 `metadata.entryFile: "runtime/prepare-recent-narrative-stories.mjs"` 引用；不再复制到卡片根 `runtime/`。它读取正文工作流的 `turnContext.recentCompleteTurns`（默认5），为两个模块导出摘要式目录及按需全文；不是只提供上一轮。正文写作节点发布时必须生成 `document-workspace-snapshot`，供后置导演和候选创作共享本轮实际获准资料与最终正文。下一轮前置导演必须明确检查刚发布的模块故事与新玩家输入是否相交。
 

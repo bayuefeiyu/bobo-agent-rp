@@ -7,7 +7,6 @@
   "revision": "3",
   "defaults": {
     "agentId": "narrative-memory/narrative-memory-archive-editor",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -236,7 +235,6 @@
       "description": "在节点工作区梳理、分析和核对指定范围，完成语义修复或补充。",
       "type": "agent",
       "agentId": "narrative-memory/narrative-memory-archive-editor",
-      "modelId": "pi:current",
       "dependsOn": [
         "prepare-reference-snapshot",
         "materialize-range-task"
@@ -509,5 +507,9 @@
       }
     },
     "exports": {}
+  },
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
   }
 }

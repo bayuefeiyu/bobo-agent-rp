@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 4,
+  "id": "commit-post-director-update",
+  "ownerModuleId": "world-narrative-coordinator",
+  "title": "提交后置导演结果",
+  "description": "短时持锁，按原版本原子提交已完成的后置结果，再导出委托。",
+  "kind": "module-internal",
+  "agentCallable": false,
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "text",
+        "required": true,
+        "description": "已交付的完整后置分析 JSON。"
+      }
+    },
+    "exports": {
+      "delegations": {
+        "format": "director-delegation-plan",
+        "kind": "directory",
+        "description": "后置导演本轮决定启动的非正文创作委托。"
+      }
+    }
+  },
+  "revision": "1",
+  "defaults": {
+    "agentId": "world-narrative-coordinator/world-narrative-daily-director",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "writeLocks": [
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "private-state"
+    },
+    {
+      "moduleId": "world-narrative-coordinator",
+      "collectionId": "archive-outbox"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "review",
+      "type": "code",
+      "outputs": {},
+      "moduleAccess": [],
+      "metadata": {
+        "entryFile": "runtime/workflow/read-post-director-result.mjs"
+      },
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    },
+    {
+      "id": "commit",
+      "type": "code",
+      "dependsOn": [
+        "review"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "review"
+        ]
+      },
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 2000000
+          }
+        },
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "archive-outbox",
+          "capabilities": [
+            "director.archive.write"
+          ],
+          "views": [
+            "director-status",
+            "archive-source"
+          ],
+          "queryBudget": {
+            "maxRecords": 10000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/commit-agent-batch.mjs",
+        "sourceNode": "review",
+        "sourceField": "changes",
+        "allowedCollections": [
+          "archive-outbox",
+          "private-state"
+        ],
+        "bindingMode": "assistant",
+        "archiveFirst": true
+      }
+    },
+    {
+      "id": "export-delegations",
+      "type": "code",
+      "dependsOn": [
+        "commit"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "review"
+        ]
+      },
+      "outputs": {
+        "delegations": {
+          "path": "delegations",
+          "format": "director-delegation-plan",
+          "kind": "directory",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "delegations"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "workflowCalls": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/export-delegation-plan.mjs",
+        "sourceNode": "review"
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "export-delegations"
+      ],
+      "exports": {
+        "delegations": {
+          "fromNode": "export-delegations",
+          "output": "delegations"
+        }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
+}

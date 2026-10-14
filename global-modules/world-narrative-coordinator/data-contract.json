@@ -1974,13 +1974,23 @@
             "status": {
               "path": "/data/status",
               "type": "enum",
-              "values": ["running", "completed", "failed", "cancelled", "skipped"],
-              "operators": ["eq"]
+              "values": [
+                "running",
+                "completed",
+                "failed",
+                "cancelled",
+                "skipped"
+              ],
+              "operators": [
+                "eq"
+              ]
             },
             "rootRunId": {
               "path": "/data/rootRunId",
               "type": "string",
-              "operators": ["eq"]
+              "operators": [
+                "eq"
+              ]
             }
           },
           "searchableFields": [],
@@ -1988,55 +1998,114 @@
             "rp": {
               "format": "object",
               "fields": [
-                { "path": "/data/status", "label": "status" }
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                }
               ]
             },
             "deep-director": {
               "format": "object",
               "fields": [
-                { "path": "/data/operationId", "label": "operationId" },
-                { "path": "/data/rootRunId", "label": "rootRunId" },
-                { "path": "/data/status", "label": "status" },
-                { "path": "/data/openedTurn", "label": "openedTurn" },
-                { "path": "/data/closedTurn", "label": "closedTurn" },
-                { "path": "/data/terminalError", "label": "terminalError" }
+                {
+                  "path": "/data/operationId",
+                  "label": "operationId"
+                },
+                {
+                  "path": "/data/rootRunId",
+                  "label": "rootRunId"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/openedTurn",
+                  "label": "openedTurn"
+                },
+                {
+                  "path": "/data/closedTurn",
+                  "label": "closedTurn"
+                },
+                {
+                  "path": "/data/terminalError",
+                  "label": "terminalError"
+                }
               ]
             },
             "deep-status": {
               "format": "object",
               "fields": [
-                { "path": "/data/operationId", "label": "operationId" },
-                { "path": "/data/status", "label": "status" },
-                { "path": "/data/openedTurn", "label": "openedTurn" },
-                { "path": "/data/closedTurn", "label": "closedTurn" }
+                {
+                  "path": "/data/operationId",
+                  "label": "operationId"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/openedTurn",
+                  "label": "openedTurn"
+                },
+                {
+                  "path": "/data/closedTurn",
+                  "label": "closedTurn"
+                }
               ]
             },
             "daily-director": {
               "format": "object",
               "fields": [
-                { "path": "/data/operationId", "label": "operationId" },
-                { "path": "/data/status", "label": "status" },
-                { "path": "/data/openedTurn", "label": "openedTurn" },
-                { "path": "/data/closedTurn", "label": "closedTurn" }
+                {
+                  "path": "/data/operationId",
+                  "label": "operationId"
+                },
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/openedTurn",
+                  "label": "openedTurn"
+                },
+                {
+                  "path": "/data/closedTurn",
+                  "label": "closedTurn"
+                }
               ]
             },
             "frontend": {
               "format": "object",
               "fields": [
-                { "path": "/data/status", "label": "status" },
-                { "path": "/data/openedTurn", "label": "openedTurn" },
-                { "path": "/data/closedTurn", "label": "closedTurn" }
+                {
+                  "path": "/data/status",
+                  "label": "status"
+                },
+                {
+                  "path": "/data/openedTurn",
+                  "label": "openedTurn"
+                },
+                {
+                  "path": "/data/closedTurn",
+                  "label": "closedTurn"
+                }
               ]
             }
           },
-          "actions": ["create", "update"]
+          "actions": [
+            "create",
+            "update"
+          ]
         }
       }
     },
     "reference-library": {
       "storage": {
         "kind": "record-log",
-        "partition": { "mode": "single" },
+        "partition": {
+          "mode": "single"
+        },
         "initialRecordsFile": "collections/reference-library/initial/records.json"
       },
       "recordTypes": {
@@ -2044,46 +2113,103 @@
           "dataSchemaVersion": 1,
           "schemaFile": "schemas/reference-document.schema.json",
           "indexes": {
-            "title": { "path": "/data/title", "type": "string", "operators": ["eq"] }
+            "title": {
+              "path": "/data/title",
+              "type": "string",
+              "operators": [
+                "eq"
+              ]
+            }
           },
-          "searchableFields": ["/data/title", "/data/summary", "/data/content"],
+          "searchableFields": [
+            "/data/title",
+            "/data/summary",
+            "/data/content"
+          ],
           "views": {
             "reference-index": {
               "format": "object",
               "fields": [
-                { "path": "/data/title", "label": "title" },
-                { "path": "/data/summary", "label": "summary" }
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                }
               ]
             },
             "director-reference": {
               "format": "object",
               "fields": [
-                { "path": "/data/title", "label": "title" },
-                { "path": "/data/summary", "label": "summary" },
-                { "path": "/data/content", "label": "content" },
-                { "path": "/data/sources", "label": "sources" }
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sources",
+                  "label": "sources"
+                }
               ]
             },
             "maintenance": {
               "format": "object",
               "fields": [
-                { "path": "/data/title", "label": "title" },
-                { "path": "/data/summary", "label": "summary" },
-                { "path": "/data/content", "label": "content" },
-                { "path": "/data/sources", "label": "sources" }
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sources",
+                  "label": "sources"
+                }
               ]
             },
             "frontend": {
               "format": "object",
               "fields": [
-                { "path": "/data/title", "label": "title" },
-                { "path": "/data/summary", "label": "summary" },
-                { "path": "/data/content", "label": "content" },
-                { "path": "/data/sources", "label": "sources" }
+                {
+                  "path": "/data/title",
+                  "label": "title"
+                },
+                {
+                  "path": "/data/summary",
+                  "label": "summary"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/sources",
+                  "label": "sources"
+                }
               ]
             }
           },
-          "actions": ["create", "update", "archive", "restore"]
+          "actions": [
+            "create",
+            "update",
+            "archive",
+            "restore"
+          ]
         }
       }
     },
@@ -2271,7 +2397,9 @@
     "health-dashboard": {
       "storage": {
         "kind": "snapshot",
-        "partition": { "mode": "single" },
+        "partition": {
+          "mode": "single"
+        },
         "initialSnapshotFile": "collections/health-dashboard/initial/snapshot.json"
       },
       "recordTypes": {
@@ -2284,25 +2412,57 @@
             "health": {
               "format": "object",
               "fields": [
-                { "path": "/data/generatedAt", "label": "generatedAt" },
-                { "path": "/data/reference", "label": "reference" },
-                { "path": "/data/totals", "label": "totals" },
-                { "path": "/data/exceedsReference", "label": "exceedsReference" },
-                { "path": "/data/collections", "label": "collections" }
+                {
+                  "path": "/data/generatedAt",
+                  "label": "generatedAt"
+                },
+                {
+                  "path": "/data/reference",
+                  "label": "reference"
+                },
+                {
+                  "path": "/data/totals",
+                  "label": "totals"
+                },
+                {
+                  "path": "/data/exceedsReference",
+                  "label": "exceedsReference"
+                },
+                {
+                  "path": "/data/collections",
+                  "label": "collections"
+                }
               ]
             },
             "frontend": {
               "format": "object",
               "fields": [
-                { "path": "/data/generatedAt", "label": "generatedAt" },
-                { "path": "/data/reference", "label": "reference" },
-                { "path": "/data/totals", "label": "totals" },
-                { "path": "/data/exceedsReference", "label": "exceedsReference" },
-                { "path": "/data/collections", "label": "collections" }
+                {
+                  "path": "/data/generatedAt",
+                  "label": "generatedAt"
+                },
+                {
+                  "path": "/data/reference",
+                  "label": "reference"
+                },
+                {
+                  "path": "/data/totals",
+                  "label": "totals"
+                },
+                {
+                  "path": "/data/exceedsReference",
+                  "label": "exceedsReference"
+                },
+                {
+                  "path": "/data/collections",
+                  "label": "collections"
+                }
               ]
             }
           },
-          "actions": ["update"]
+          "actions": [
+            "update"
+          ]
         }
       }
     },
@@ -2407,7 +2567,8 @@
             "update"
           ]
         }
-      }
+      },
+      "executionScope": "session"
     },
     "prompt-preferences": {
       "storage": {
@@ -2438,7 +2599,8 @@
             "update"
           ]
         }
-      }
+      },
+      "executionScope": "session"
     }
   },
   "capabilities": {
@@ -2521,19 +2683,48 @@
       ]
     },
     "director.reference.read": {
-      "collections": ["reference-library"],
-      "actions": ["query"],
-      "views": ["reference-index", "director-reference"]
+      "collections": [
+        "reference-library"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "reference-index",
+        "director-reference"
+      ]
     },
     "director.reference.write": {
-      "collections": ["reference-library"],
-      "actions": ["query", "create", "update"],
-      "views": ["reference-index", "director-reference", "maintenance"]
+      "collections": [
+        "reference-library"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update"
+      ],
+      "views": [
+        "reference-index",
+        "director-reference",
+        "maintenance"
+      ]
     },
     "director.reference.maintain": {
-      "collections": ["reference-library"],
-      "actions": ["query", "create", "update", "archive", "restore"],
-      "views": ["reference-index", "director-reference", "maintenance"]
+      "collections": [
+        "reference-library"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "archive",
+        "restore"
+      ],
+      "views": [
+        "reference-index",
+        "director-reference",
+        "maintenance"
+      ]
     },
     "director.archive.write": {
       "collections": [
@@ -2603,9 +2794,16 @@
       ]
     },
     "director.health.write": {
-      "collections": ["health-dashboard"],
-      "actions": ["query", "update"],
-      "views": ["health"]
+      "collections": [
+        "health-dashboard"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "health"
+      ]
     },
     "director.frontend.read": {
       "collections": [

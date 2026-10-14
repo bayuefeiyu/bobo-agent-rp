@@ -19,7 +19,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-maintainer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -212,5 +211,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "write-narrative",
+  "promptFile": "prompts/workflows/standard-rp/write-narrative-team.md",
+  "team": {
+    "schemaVersion": 2,
+    "protocol": "collaboration",
+    "initialMemberId": "writer",
+    "stageOwnerId": "writer",
+    "completionMemberId": "writer",
+    "members": [
+      {
+        "id": "writer",
+        "label": "主笔",
+        "agentId": "narrative-controls/narrative-team-writer",
+        "tools": ["read", "write", "edit", "rp_files"]
+      },
+      {
+        "id": "co-creator",
+        "label": "共创者",
+        "agentId": "narrative-controls/narrative-co-creator",
+        "tools": ["read", "write", "edit", "rp_files", "rp_call"]
+      }
+    ],
+    "outputOwners": {
+      "narrative": "writer"
+    },
+    "limits": {
+      "maxActivations": 32,
+      "maxToolCalls": 128,
+      "maxProtocolReminders": 2
+    }
+  }
+}

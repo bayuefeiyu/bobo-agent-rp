@@ -33,15 +33,15 @@ Do not create legacy data catalogs, `storage.json`, per-module retrieval-policy 
 
 ## Declarative frontend views
 
-`frontend-view.json` schemaVersion 1 remains available for legacy read-only `text`, `markdown`, `json`, `key-value`, `list`, `table`, and built-in service regions. Use schemaVersion 2 when the module needs interactive regions. A v2 file still contains only `{schemaVersion, regions}` and cannot reference or execute JavaScript.
+`frontend-view.json` accepts only schemaVersion 3: `{schemaVersion, bindings, regions}`. Versions 1 and 2 are rejected. Bindings declare data/service authority independently from rendering; regions declare only `id`, `bindingId`, `type`, `title`, optional `description`, `spoiler` and `optional`. HTTP operations identify a binding, never a renderer region. See the repository [creator guide](../../../../FRONTEND-CREATOR-GUIDE.md).
 
-Every interactive region has a stable `id`, `type`, non-empty `title`, optional `description`, and optional `spoiler`. Supported interactive types are:
+Every binding has a stable `id` and `kind`: `records`, `stories`, `settings`, `prompts`, `workflows`, `integrity`, or `images`. The following default renderer names explain the corresponding binding semantics; authorization fields belong to the binding, while titles and spoiler flags belong to renderer regions. Unknown required renderer types are rejected; an unknown renderer with `optional: true` keeps its validated binding and displays a local fallback. Supported default renderers are:
 
 - `record-browser`: declares one collection, explicit record types, a dedicated frontend view, one query capability, page size (1–100), character budget, inactive-record policy, and optional filters bound to author-declared indexes/operators. The runtime uses stable sequence/ID keyset pagination; the browser cannot choose another collection, view, filter field, sort key, or budget. Every returned record can expose paginated rendered revision history through the same capability/view.
 - `settings-form`: declares one stable record ID/type, frontend read view/capability, update capability, and editable pointers below that record's `data`. Field types are `text`, `textarea`, `integer`, `number`, `boolean`, `select`, and `json`, with optional required/minimum/maximum/options/help. The backend reads the current authority, applies only declared fields, validates the complete record schema, and submits an `update` with `expectedRevision`.
 - `prompt-controls`: uses the same settings-record target and read/update capabilities, plus a safe module-relative `controlsFile`. It renders exclusive prompt groups with a final custom-text option by default; `allowNone: false` omits the no-addition option, `allowCustom: false` omits the custom option for a preset-only group, and one `last: true` group stays last. Both flags must be boolean when provided. The resource catalog owns all preset prose; no source option is placed in the module Skill or Agent workspace. Editable pointers derive only from declared groups. The settings API validates selections and updates atomically with expectedRevision; choices survive transcript suffix deletion. Narration uses a pre-creative workflow to export selected prose into the ordinary static document set at the same status. Director controls may instead declare `delivery: {mode: "agent-prompt", agents: [...], instruction: "..."}`: the host freezes selected text with the run, filters standalone `director-only` document comments by Agent ID in original order, and appends plain text to that Agent's existing prompt message. Source blocks never become shared workspace documents, new message roles, or per-node distribution grants. The frontend view must expose `/data` as `settings` for the trusted prompt snapshot reader.
 - `workflow-controls`: declares an exact list of background `module-id/workflow-id` references and typed parameters. Parameters use the same field types and may add a default. The server rejects undeclared workflows and payload keys; foreground workflows cannot be started from a module control. The common workflow engine remains responsible for instance policy, blocking, status, cancellation, retry, and receipts.
-- `integrity-alerts`: presents read-only source-revision warnings and optional turn-coverage gaps. A coverage declaration names exact support record types, IDs, frontend view/capability, and data pointers; its action may only prefill integer turn parameters on a workflow already whitelisted by a declared `workflow-controls` region. Detection never invalidates data or starts repair automatically.
+- `integrity-alerts`: presents read-only source-revision warnings and optional turn-coverage gaps. A coverage declaration names exact support record types, IDs, frontend view/capability, and data pointers; its action may only prefill integer turn parameters on a workflow already whitelisted by a declared `workflows` binding (`workflowBindingId`). Detection never invalidates data or starts repair automatically.
 
 Capabilities named in a frontend declaration must already exist in `data-contract.json` and grant the exact collection/action/view. Frontend permission is independent from Agent `moduleAccess`. Mark comprehensive debug/maintenance browsers `spoiler: true`; this is a local-user presentation warning, not a substitute for capability checks.
 
@@ -49,21 +49,17 @@ Example:
 
 ```json
 {
-  "schemaVersion": 2,
-  "regions": [
-    {
-      "id": "entries",
-      "type": "record-browser",
-      "title": "All entries",
-      "collectionId": "entries",
-      "recordTypes": ["example.entry"],
-      "view": "frontend",
-      "readCapability": "example.frontend.read",
-      "pageSize": 20,
-      "filters": [{ "id": "state", "label": "State", "index": "state", "operator": "eq", "control": "select", "options": ["open", "closed"] }]
-    }
-  ]
+  "schemaVersion": 3,
+  "bindings": [{
+    "id": "entries", "kind": "records", "collectionId": "entries",
+    "recordTypes": ["example.entry"], "view": "frontend",
+    "readCapability": "example.frontend.read", "pageSize": 20,
+    "filters": [{ "id": "state", "label": "State", "index": "state", "operator": "eq", "control": "select", "options": ["open", "closed"] }]
+  }],
+  "regions": [{ "id": "entry-list", "bindingId": "entries", "type": "record-browser", "title": "All entries" }]
 }
 ```
+
+Settings writes require both `expectedRevision` and a stable `operationId`. An unknown submission outcome must be looked up through the binding operation endpoint before retry; never replace the ID and blindly submit again.
 
 For a card-local module, install the complete package at `features/<module-id>/`, use module-relative component paths, and register `module.json` in `manifest.feature_modules`. Card packages have no root `agents/`, `workflows/`, `prompts/agents/`, `prompts/workflows/`, or `prompts/modules/` component trees; root `prompts/` keeps only public system/common/model sources. For a project-global module, keep the package self-contained and include import guidance without linking it as a live runtime dependency. Imported copies become card-owned and do not synchronize with the source package.

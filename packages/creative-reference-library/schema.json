@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "creative-reference-library/v1",
+  "title": "Portable creative reference library",
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$" },
+    "terms": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+    "relation": { "type": "object", "additionalProperties": false, "required": ["id", "kind"], "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "enum": ["context", "related"] } } },
+    "unit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "revision", "title", "summary", "keywords", "aliases", "contentFile"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "revision": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 }, "summary": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "keywords": { "$ref": "#/$defs/terms" }, "aliases": { "$ref": "#/$defs/terms" },
+        "contentFile": { "type": "string", "minLength": 1 },
+        "relations": { "type": "array", "maxItems": 40, "items": { "$ref": "#/$defs/relation" } }
+      }
+    },
+    "package": { "type": "object", "additionalProperties": false, "required": ["format", "id", "units"], "properties": { "format": { "const": "creative-reference-library/v1" }, "id": { "$ref": "#/$defs/id" }, "units": { "type": "array", "uniqueItems": true, "items": { "type": "string" } } } },
+    "review": { "type": "object", "required": ["format", "packageId", "approved", "selectedIds"], "properties": { "format": { "const": "creative-reference-library/v1" }, "packageId": { "$ref": "#/$defs/id" }, "approved": { "const": true }, "selectedIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } } } }
+  },
+  "$ref": "#/$defs/unit"
+}

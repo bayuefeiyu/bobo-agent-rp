@@ -19,8 +19,11 @@ const directory = fileURLToPath(new URL("../../", import.meta.url));
 const json = path => readFile(resolve(directory, path), "utf8").then(JSON.parse);
 const controls = await loadPromptControls(directory, await json("catalog.json"));
 const contract = normalizeDataContract(await json("data-contract.json"));
-const region = (await json("frontend-view.json")).regions[0];
-const module = { id: contract.moduleId, moduleDirectory: directory, resourceCatalog: await json("catalog.json"), view: { regions: [region] } };
+const frontendView = await json("frontend-view.json");
+const binding = frontendView.bindings[0];
+const region = frontendView.regions[0];
+const module = { id: contract.moduleId, moduleDirectory: directory, resourceCatalog: await json("catalog.json"), view: frontendView };
+assert.equal(region.bindingId, binding.id);
 const daily = "world-narrative-coordinator/world-narrative-daily-director";
 const deep = "world-narrative-coordinator/world-narrative-deep-director";
 const leader = "world-narrative-coordinator/world-narrative-team-leader";
@@ -35,6 +38,56 @@ async function fixture(t) {
 }
 
 const interleaved = `COMMON-ONE\n<!-- director-only: ${daily} -->\nDAILY-ONLY\n<!-- /director-only -->\nCOMMON-TWO\n<!-- director-only: ${deep}, ${leader} -->\nDEEP-ONLY\n<!-- /director-only -->\nCOMMON-THREE\n`;
+
+test("input review has four modes and only selected presets reach the daily director", async t => {
+  const frontend = await frontendPromptControls(directory, controls);
+  const group = frontend.groups.find(item => item.id === "input-review");
+  assert.deepEqual(group.options.map(item => item.label), ["无", "合理性", "严格合理性", "自定义"]);
+  assert.equal(group.options[0].content.trim(), "");
+  assert.equal(group.options.at(-1).content, "");
+  assert.equal(frontend.groups.at(-1).id, "other-requirements");
+  const { store } = await fixture(t);
+  const request = { moduleId: module.id, collectionId: binding.collectionId, id: binding.recordId, view: binding.view };
+  const access = { capabilities: [binding.readCapability], views: [binding.view] };
+  const getRecord = () => getDataRecord(store, request, access);
+  const initial = await getRecord();
+  assert.deepEqual(initial.value.settings.selections["input-review"], { optionId: "off", customText: "" });
+  assert.equal(agentPromptRequirements(await snapshotAgentPromptControls([module], getRecord), daily), "");
+  let revision = initial.revision;
+  for (const optionId of ["reasonable", "strict", "custom", "off"]) {
+    const data = structuredClone(initial.value.settings);
+    data.selections["input-review"] = { optionId, customText: "PLAYER-INPUT-REVIEW" };
+    validatePromptSelections(controls, data);
+    const receipt = await executeDataBatch(store, { protocolVersion: 1, batchId: `review-${optionId}`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: "save", moduleId: module.id, collectionId: binding.collectionId, recordType: binding.recordType, targetId: binding.recordId, action: "update", expectedRevision: revision, data }] }, { access: [{ moduleId: module.id, collectionId: binding.collectionId, capabilities: [binding.updateCapability], views: [binding.view] }], context: { initiatorKind: "user", binding: { turn: 0, messageId: null } } });
+    assert.equal(receipt.status, "committed", JSON.stringify(receipt));
+    revision = (await getRecord()).revision;
+    const snapshot = await snapshotAgentPromptControls([module], getRecord);
+    const text = agentPromptRequirements(snapshot, daily);
+    if (optionId === "off") assert.equal(text, "");
+    else if (optionId === "custom") {
+      assert.match(text, /PLAYER-INPUT-REVIEW/);
+      assert.doesNotMatch(text, /strength=|publication-narrative/);
+    } else {
+      assert.match(text, /本轮玩家输入后的前置任务/);
+      assert.match(text, /publication-narrative/);
+      assert.doesNotMatch(text, /PLAYER-INPUT-REVIEW|director-only/);
+      for (const recipient of controls.delivery.agents.filter(id => id !== daily)) assert.equal(agentPromptRequirements(snapshot, recipient), "");
+      if (optionId === "reasonable") {
+        assert.match(text, /strength=priority/);
+        assert.match(text, /实际能做到什么程度/);
+        assert.doesNotMatch(text, /a：|b：|c：/);
+      } else {
+        assert.match(text, /a：[\s\S]*b：[\s\S]*c：/);
+        assert.match(text, /strength=guardrail/);
+        assert.match(text, /仅 a 部分是必须执行的玩家行动意图/);
+        assert.match(text, /b、c 即使经分析认为合理，也仅作为参考/);
+        assert.doesNotMatch(text, /strength=priority/);
+      }
+    }
+    for (const recipient of ["narrative-controls/narrative-writer", "narrative-memory/narrative-memory-retriever"]) assert.equal(agentPromptRequirements(snapshot, recipient), "");
+  }
+  assert.equal((await getRecord()).value.settings.selections["input-review"].customText, "PLAYER-INPUT-REVIEW");
+});
 
 test("director audience filtering preserves interleaved order and rejects malformed or unknown annotations", () => {
   assert.equal(filterDirectorPrompt(interleaved, daily, controls.delivery.agents), "COMMON-ONE\nDAILY-ONLY\nCOMMON-TWO\nCOMMON-THREE\n");
@@ -84,13 +137,13 @@ test("authored other requirements are selected independently from the retained p
 
 test("chat preferences persist with revision guards while frozen selected requirements reach only recipient Agents", async t => {
   const { store, sessionDirectory } = await fixture(t);
-  const request = { moduleId: module.id, collectionId: region.collectionId, id: region.recordId, view: region.view };
-  const access = { capabilities: [region.readCapability], views: [region.view] };
+  const request = { moduleId: module.id, collectionId: binding.collectionId, id: binding.recordId, view: binding.view };
+  const access = { capabilities: [binding.readCapability], views: [binding.view] };
   const record = await getDataRecord(store, request, access);
   const settings = structuredClone(record.value.settings);
   settings.selections["protagonist-treatment"] = { optionId: "custom", customText: interleaved + "玩家{{user}}\n" };
   settings.selections["other-requirements"] = { optionId: "custom", customText: "OTHER-CHOSEN" };
-  const save = (id, revision, data) => executeDataBatch(store, { protocolVersion: 1, batchId: id, status: "pending", commitPolicy: "atomic", operations: [{ operationId: "save", moduleId: module.id, collectionId: region.collectionId, recordType: region.recordType, targetId: region.recordId, action: "update", expectedRevision: revision, data }] }, { access: [{ moduleId: module.id, collectionId: region.collectionId, capabilities: [region.updateCapability], views: [region.view] }], context: { initiatorKind: "user", binding: { turn: 0, messageId: null } } });
+  const save = (id, revision, data) => executeDataBatch(store, { protocolVersion: 1, batchId: id, status: "pending", commitPolicy: "atomic", operations: [{ operationId: "save", moduleId: module.id, collectionId: binding.collectionId, recordType: binding.recordType, targetId: binding.recordId, action: "update", expectedRevision: revision, data }] }, { access: [{ moduleId: module.id, collectionId: binding.collectionId, capabilities: [binding.updateCapability], views: [binding.view] }], context: { initiatorKind: "user", binding: { turn: 0, messageId: null } } });
   assert.equal((await save("save", 1, settings)).status, "committed");
   assert.equal((await save("stale", 1, settings)).status, "failed");
   const view = await createDataReadView({ sessionDirectory, store, sourceId: "director-run" });
@@ -138,7 +191,7 @@ test("team members share the frozen run but receive their own filtered Agent sec
   const snapshot = [{ moduleId: module.id, title: "导演要求", agents: controls.delivery.agents, instruction: "", revision: 2, sections: [{ title: "主角待遇", content: interleaved }] }];
   const received = [];
   const engine = new RpWorkflowEngine({
-    resolveAgent: async id => ({ id, tools: [] }),
+    resolveAgent: async id => ({ id, defaultModelId: "pi:current", tools: [] }),
     onRunStart: async () => ({ agentPromptControls: snapshot }),
     executor: async task => {
       if (task.node.type === "team") {

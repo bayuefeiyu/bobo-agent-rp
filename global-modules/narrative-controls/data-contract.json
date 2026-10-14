@@ -2,6 +2,67 @@
   "schemaVersion": 1,
   "moduleId": "narrative-controls",
   "collections": {
+    "conversation": {
+      "storage": {
+        "kind": "record-log",
+        "partition": {
+          "mode": "turn-range",
+          "size": 50
+        },
+        "initialRecordsFile": "collections/conversation/initial/records.json"
+      },
+      "recordTypes": {
+        "narrative.message": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/message.schema.json",
+          "indexes": {
+            "role": {
+              "path": "/data/role",
+              "type": "enum",
+              "values": [
+                "user",
+                "assistant"
+              ],
+              "operators": [
+                "eq",
+                "in"
+              ]
+            }
+          },
+          "searchableFields": [
+            "/data/content"
+          ],
+          "views": {
+            "rp": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data/role",
+                  "label": "role"
+                },
+                {
+                  "path": "/data/kind",
+                  "label": "kind"
+                },
+                {
+                  "path": "/data/content",
+                  "label": "content"
+                },
+                {
+                  "path": "/data/narrativeSource",
+                  "label": "narrativeSource"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "create",
+            "update",
+            "delete"
+          ]
+        }
+      }
+    },
     "settings": {
       "storage": {
         "kind": "snapshot",
@@ -39,11 +100,66 @@
           "actions": [
             "update"
           ]
+        },
+        "narrative.history-settings": {
+          "dataSchemaVersion": 1,
+          "schemaFile": "schemas/history-settings.schema.json",
+          "indexes": {},
+          "searchableFields": [],
+          "views": {
+            "frontend": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data",
+                  "label": "settings"
+                }
+              ]
+            },
+            "processor": {
+              "format": "object",
+              "fields": [
+                {
+                  "path": "/data",
+                  "label": "settings"
+                }
+              ]
+            }
+          },
+          "actions": [
+            "update"
+          ]
         }
-      }
+      },
+      "executionScope": "session"
     }
   },
   "capabilities": {
+    "narrative.conversation.read": {
+      "collections": [
+        "conversation"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "rp"
+      ]
+    },
+    "narrative.conversation.runtime": {
+      "collections": [
+        "conversation"
+      ],
+      "actions": [
+        "query",
+        "create",
+        "update",
+        "delete"
+      ],
+      "views": [
+        "rp"
+      ]
+    },
     "narrative.preferences.read": {
       "collections": [
         "settings"
@@ -56,6 +172,29 @@
       ]
     },
     "narrative.preferences.frontend": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query",
+        "update"
+      ],
+      "views": [
+        "frontend"
+      ]
+    },
+    "narrative.history.read": {
+      "collections": [
+        "settings"
+      ],
+      "actions": [
+        "query"
+      ],
+      "views": [
+        "processor"
+      ]
+    },
+    "narrative.history.frontend": {
       "collections": [
         "settings"
       ],

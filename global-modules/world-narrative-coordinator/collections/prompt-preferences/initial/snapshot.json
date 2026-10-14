@@ -24,6 +24,10 @@
         "other-requirements": {
           "optionId": "default",
           "customText": ""
+        },
+        "input-review": {
+          "optionId": "off",
+          "customText": ""
         }
       }
     },

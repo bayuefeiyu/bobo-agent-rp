@@ -9,6 +9,41 @@ const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const developmentRuntime = JSON.parse(await readFile(resolve(skillRoot, "../../../scripts/development-runtime.json"), "utf8"));
 const safeId = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+function safeRelativePath(value, base) {
+  if (typeof value !== "string" || !value || value.includes("\\") || /^[a-z]:/i.test(value) || isAbsolute(value) || value === "." || value.split("/").includes("..")) return false;
+  const target = resolve(base, value);
+  const relation = relative(resolve(base), target);
+  return Boolean(relation) && relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation);
+}
+
+async function discoverTranscriptProvider(source, manifest) {
+  const featureModules = manifest?.feature_modules;
+  if (!Array.isArray(featureModules)) return null;
+  const candidates = [];
+  for (const modulePath of featureModules) {
+    if (!safeRelativePath(modulePath, source)) continue;
+    const moduleFile = resolve(source, modulePath);
+    const module = JSON.parse(await readFile(moduleFile, "utf8"));
+    if (!module || typeof module !== "object" || !safeId.test(module.id) || typeof module.dataContractFile !== "string") continue;
+    const moduleDirectory = dirname(moduleFile);
+    if (!safeRelativePath(module.dataContractFile, moduleDirectory)) continue;
+    let contract;
+    try {
+      contract = JSON.parse(await readFile(resolve(moduleDirectory, module.dataContractFile), "utf8"));
+    } catch {
+      continue;
+    }
+    const collection = contract?.collections?.conversation;
+    const recordTypes = collection?.recordTypes;
+    if (!recordTypes || typeof recordTypes !== "object" || !recordTypes["narrative.message"] || typeof recordTypes["narrative.message"] !== "object") continue;
+    candidates.push({ schemaVersion: 1, moduleId: module.id, collectionId: "conversation", recordType: "narrative.message", view: "rp" });
+  }
+  if (candidates.length > 1) {
+    throw new Error(`Multiple transcript provider candidates found: ${candidates.map(candidate => candidate.moduleId).join(", ")}. Declare manifest.transcript_provider explicitly.`);
+  }
+  return candidates[0] || null;
+}
+
 function git(args, cwd) {
   return new Promise(resolveResult => execFile("git", args, { cwd }, (error, stdout) => resolveResult(error ? null : stdout.trim())));
 }
@@ -61,6 +96,14 @@ async function compileAgentPreferenceIncludes(cardRoot, templateRoot) {
     let position = 0;
     for (const match of source.matchAll(includePattern)) {
       const reference = match[1].trim();
+      if (reference.startsWith("prompts/shared/") && !reference.includes("\\")) {
+        const parts = path.split("/");
+        const moduleRoot = resolve(promptRoot, ...parts.slice(0, parts.lastIndexOf("prompts")));
+        const { readPromptFile } = await import("../assets/pi-rp-runtime/.pi/lib/rp-node-context.mjs");
+        expanded += source.slice(position, match.index) + (await readPromptFile(moduleRoot, reference)).trimEnd();
+        position = match.index + match[0].length;
+        continue;
+      }
       if (!reference.startsWith("agent-preferences/") || reference.includes("\\")) {
         throw new Error(`Invalid Agent preference include in ${path}: ${reference}`);
       }
@@ -89,7 +132,7 @@ async function compileAgentPreferenceIncludes(cardRoot, templateRoot) {
   }
 }
 
-export async function packageCardRuntime({ sourceCard, targetCard, templateRoot = skillRoot, sourceRevision = null }) {
+export async function packageCardRuntime({ sourceCard, targetCard, templateRoot = skillRoot, packagesRoot = resolve(skillRoot, "../../../packages"), sourceRevision = null }) {
   const source = resolve(sourceCard);
   const target = resolve(targetCard);
   if (source === target) throw new Error("Publish to a new card directory; in-place changes require the explicit upgrade process.");
@@ -103,18 +146,35 @@ export async function packageCardRuntime({ sourceCard, targetCard, templateRoot 
   const web = join(templateRoot, "assets", "pi-rp-web");
   try {
     await copyTree(source, tmp);
+    if (!Object.hasOwn(manifest, "transcript_provider")) {
+      const discovered = await discoverTranscriptProvider(source, manifest);
+      if (discovered) {
+        await writeFile(join(tmp, "manifest.json"), `${JSON.stringify({ ...manifest, transcript_provider: discovered }, null, 2)}\n`);
+      }
+    }
     const engine = join(tmp, "runtime", "engine");
     await copyTree(join(runtime, ".pi", "extensions"), join(engine, "extensions"));
     await copyTree(join(runtime, ".pi", "lib"), join(engine, "lib"), { filter: (path, entry) => entry.isDirectory() || !entry.name.endsWith(".test.mjs") });
     await copyTree(join(runtime, ".pi", "skills"), join(engine, "skills"));
     await copyTree(join(runtime, "prompts"), join(tmp, "prompts"), { preserve: true });
     await compileAgentPreferenceIncludes(tmp, templateRoot);
-    await loadCardComponents(tmp);
+    const components = await loadCardComponents(tmp);
+    // Service configuration is available even without the external reference module.
+    await copyTree(resolve(packagesRoot, "semantic-services"), join(engine, "lib", "semantic-services"), { filter: (_path, entry) => entry.isDirectory() || !entry.name.endsWith(".test.mjs") });
+    await copyTree(resolve(packagesRoot, "narrative-history"), join(engine, "lib", "narrative-history"), { filter: (_path, entry) => entry.isDirectory() || !entry.name.endsWith(".test.mjs") && entry.name !== "README.md" });
+    if (components.some(module => module.externalResource === "creative-reference-library/v1")) {
+      const [major, minor] = process.versions.node.split(".").map(Number);
+      if (major < 24 || major === 24 && minor < 14) throw new Error("Reference library requires Node.js 24.14.0 or newer.");
+      await copyTree(resolve(packagesRoot, "creative-reference-library"), join(engine, "lib", "creative-reference-library"), { filter: (_path, entry) => entry.isDirectory() || ["client.mjs", "contract.mjs", "core.mjs", "worker.mjs", "package.json", "semantic-contract.mjs", "passages.mjs", "semantic-index.mjs", "semantic-build.mjs", "semantic-manager.mjs", "service-adapters.mjs"].includes(entry.name) });
+    }
     await copyTree(join(runtime, "settings"), join(tmp, "defaults"), { preserve: true });
-    if (!await exists(join(tmp, "web", "server.mjs"))) await copyTree(web, join(tmp, "web"), { filter: (path, entry) => entry.name !== "test" && !entry.name.endsWith(".test.mjs") });
+    if (await exists(join(source, "web", "server.mjs"))) throw new Error("Old custom Web servers are unsupported; author a frontend package for the new runtime.");
+    await copyTree(join(web, "public"), join(tmp, "web", "public"));
+    await copyTree(join(web, "frontend.json"), join(tmp, "web", "frontend.json"), { preserve: true });
+    for (const name of ["rp-web-contract", "rp-web-client", "rp-web-server"]) await copyTree(resolve(packagesRoot, name), join(tmp, "runtime", "packages", name), { filter: (_path, entry) => entry.isDirectory() || !entry.name.endsWith(".test.mjs") && entry.name !== "API.md" });
     const engineInfo = { ...developmentRuntime.engine, testedNodeMajor: Number(process.versions.node.split(".")[0]) };
-    await writeFile(join(tmp, "runtime", "launch.json"), `${JSON.stringify({ schemaVersion: 1, cardId: manifest.id, entry: "runtime/engine/extensions/pi-rp-web.ts", skills: ["runtime/engine/skills/play-pi-rp/SKILL.md", "runtime/engine/skills/play-pi-rp-web/SKILL.md"], engine: engineInfo }, null, 2)}\n`);
-    for (const required of ["prompts/system/base.md", "prompts/system/tools.json", "defaults/common.json", "defaults/model-profiles.json", "defaults/workflow-runtime.json", "web/server.mjs", "runtime/engine/extensions/pi-rp-web.ts"]) {
+    await writeFile(join(tmp, "runtime", "launch.json"), `${JSON.stringify({ schemaVersion: 2, cardId: manifest.id, webApiVersion: 1, entry: "runtime/engine/extensions/pi-rp-web.ts", skills: ["runtime/engine/skills/play-pi-rp/SKILL.md", "runtime/engine/skills/play-pi-rp-web/SKILL.md"], engine: engineInfo }, null, 2)}\n`);
+    for (const required of ["prompts/system/base.md", "prompts/system/tools.json", "defaults/common.json", "defaults/model-profiles.json", "defaults/workflow-runtime.json", "web/frontend.json", "runtime/packages/rp-web-server/index.mjs", "runtime/engine/extensions/pi-rp-web.ts"]) {
       if (!await exists(join(tmp, required))) throw new Error(`Card package is missing ${required}`);
     }
     const hashes = {};
@@ -125,7 +185,7 @@ export async function packageCardRuntime({ sourceCard, targetCard, templateRoot 
     }
     const revision = sourceRevision || await git(["rev-parse", "HEAD"], templateRoot);
     const workingTreeDirty = Boolean(await git(["status", "--porcelain"], templateRoot));
-    await writeFile(join(tmp, "runtime-lock.json"), `${JSON.stringify({ schemaVersion: 1, cardId: manifest.id, packageFormat: 2, runtimeVersion: "1.0.0", launchProtocolVersion: 1, testedNodeVersion: process.versions.node, externalDependencies: [{ name: engineInfo.name, testedVersion: engineInfo.testedVersion }], sourceRevision: revision, workingTreeDirty, files: hashes }, null, 2)}\n`);
+    await writeFile(join(tmp, "runtime-lock.json"), `${JSON.stringify({ schemaVersion: 2, cardId: manifest.id, packageFormat: 3, runtimeVersion: "2.0.0", launchProtocolVersion: 2, webApiVersion: 1, testedNodeVersion: process.versions.node, externalDependencies: [{ name: engineInfo.name, testedVersion: engineInfo.testedVersion }], sourceRevision: revision, workingTreeDirty, files: hashes }, null, 2)}\n`);
     await rename(tmp, target);
     return { cardId: manifest.id, target, fileCount: Object.keys(hashes).length };
   } catch (error) {

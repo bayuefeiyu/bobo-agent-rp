@@ -15,5 +15,9 @@
   "rp_data_resolve": "Resolve a name or alias in authorized RP data collections.",
   "rp_data_submit": "Submit a declared data-change output.",
   "rp_team_read": "Read authorized team material.",
-  "rp_team_control": "Control the current team discussion phase."
+  "rp_team_control": "Control the current team discussion phase.",
+  "rp_team_handoff": "Explicitly hand the floor to another equal collaboration member. Call alone after finishing your speech and tools.",
+  "rp_files": "List authorized node documents or count text in a file.",
+  "rp_deliver": "Deliver your owned working document by output ID and relative path; validation preserves its original contents.",
+  "rp_node_complete": "After all task stages, required calls and valid deliveries, call alone to finish the node."
 }

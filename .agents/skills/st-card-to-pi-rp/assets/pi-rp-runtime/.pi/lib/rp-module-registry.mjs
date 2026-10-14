@@ -3,6 +3,8 @@ import { resolve, relative, isAbsolute, sep } from "node:path";
 import { normalizeFeatureModuleManifest } from "./rp-feature-modules.mjs";
 import { normalizeAgentProfile } from "./rp-model-config.mjs";
 import { normalizeWorkflowDefinition } from "./rp-workflows.mjs";
+import { normalizeDataContract } from "./rp-data-contracts.mjs";
+import { normalizeModuleFrontendView } from "./rp-module-frontend.mjs";
 
 export function componentReference(owner, id) {
   const parts = typeof id === "string" ? id.split("/") : [];
@@ -57,8 +59,9 @@ export async function loadModuleComponents(moduleDirectory) {
   };
   const [agents, workflows] = await Promise.all([load(record.agentFiles, normalizeAgentProfile, "agent"), load(record.workflowFiles, normalizeWorkflowDefinition, "workflow")]);
   if (record.frontendViewFile) {
-    const view = JSON.parse(await readFile(await moduleFile(directory, record.frontendViewFile), "utf8"));
-    for (const region of view.regions || []) if (region.type === "workflow-controls") for (const item of region.workflows || []) {
+    const contract = normalizeDataContract(JSON.parse(await readFile(await moduleFile(directory, record.dataContractFile), "utf8")));
+    const view = normalizeModuleFrontendView(JSON.parse(await readFile(await moduleFile(directory, record.frontendViewFile), "utf8")), contract);
+    for (const region of view.bindings || []) if (region.kind === "workflows") for (const item of region.workflows || []) {
       const ref = componentReference(record.id, item.id);
       const target = workflows.find(workflow => workflow.id === ref);
       if (!target || !["turn-background", "global-background"].includes(target.kind)) throw new Error(`Frontend control ${ref} must reference an owned background entry workflow.`);

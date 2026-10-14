@@ -1,3 +1,4 @@
+import { frontendBinding } from "./rp-module-frontend.mjs";
 // 配置目录装配的**唯一实现**（实施方案 S4）。
 //
 // 开发模式（无卡预览）与单卡游玩模式都必须调用这里的构造函数，只在"模块来源、文件读取、
@@ -9,6 +10,8 @@
 //
 // 本模块因此按 frontend-view 的 `settings-form` 区域声明（collectionId / recordType /
 // recordId）与 data-contract 的 storage 读取，不假定集合名，也不默认取数组第一条。
+
+import { normalizeCollaborationTeam, validateCollaborationOutputs } from "./rp-team-collaboration-config.mjs";
 
 /** 工作流可编辑字段的声明。两种宿主共用同一份，不得各自实现。 */
 export function workflowConfigFields(workflow) {
@@ -120,7 +123,7 @@ function readDefaults(record) {
 export async function moduleCatalogEntry({ module, readDocument }) {
   const view = module.view ?? null;
   const contract = module.contract ?? null;
-  const regions = (view?.regions || []).filter((region) => region?.type === "settings-form");
+  const regions = (view?.bindings || []).filter(binding => binding.kind === "settings").map(binding => ({ ...frontendBinding(module, binding.id), ...(view.regions.find(region => region.bindingId === binding.id) || {}), id: binding.id }));
 
   const fields = [];
   const defaults = {};
@@ -130,17 +133,28 @@ export async function moduleCatalogEntry({ module, readDocument }) {
   for (const region of regions) {
     const resolved = await resolveSettingsRegionDefaults({ region, contract, readDocument, label: `module ${module.id} region ${region.id}` });
     if (resolved.reason) problems.push(resolved.reason);
+    const storage = contract?.collections?.[region.collectionId]?.storage;
+    const seed = storage?.initialSnapshotFile ? await readDocument(storage.initialSnapshotFile) : null;
+    const first = Array.isArray(seed) ? seed[0] : seed;
+    const scoped = region.collectionId === "settings" && typeof region.recordId === "string" && first?.id && first.id !== region.recordId;
+    const escape = value => value.replaceAll("~", "~0").replaceAll("/", "~1");
+    const prefix = scoped ? `/$records/${escape(region.collectionId)}/${escape(region.recordId)}` : "";
     // 同一字段路径在多个区域重复出现时记录来源，避免"平铺字段互相覆盖"被静默接受。
     for (const field of region.fields || []) {
-      const previous = seenFieldPaths.get(field.path);
+      const fieldPath = prefix + field.path;
+      const previous = seenFieldPaths.get(fieldPath);
       if (previous && previous !== region.id) {
         problems.push(`字段 ${field.path} 同时出现在区域 ${previous} 与 ${region.id}；两者的集合/记录身份必须明确区分`);
         throw new Error(`模块 ${module.id} 的字段 ${field.path} 在区域 ${previous} 与 ${region.id} 中冲突，无法生成无歧义配置`);
       }
-      seenFieldPaths.set(field.path, region.id);
-      fields.push({ ...field, help: field.help || region.description || module.description, applyMode: "new-session", regionId: region.id });
+      seenFieldPaths.set(fieldPath, region.id);
+      fields.push({ ...field, path: fieldPath, help: field.help || region.description || module.description, applyMode: "new-session", regionId: region.id });
     }
-    Object.assign(defaults, resolved.base);
+    if (scoped) {
+      defaults.$records ??= {};
+      defaults.$records[region.collectionId] ??= {};
+      defaults.$records[region.collectionId][region.recordId] = resolved.base;
+    } else Object.assign(defaults, resolved.base);
   }
 
   return {
@@ -177,7 +191,20 @@ export async function buildConfigCatalog({ modules, readModuleDocument, listAgen
   }
   if (typeof listWorkflows === "function") {
     for (const item of await listWorkflows()) {
-      workflows.push(componentEntry({ kind: "workflow", moduleId: item.ownerModuleId ?? item.moduleId, moduleTitle: item.moduleTitle, value: item.base ?? item }));
+      const entry = componentEntry({ kind: "workflow", moduleId: item.ownerModuleId ?? item.moduleId, moduleTitle: item.moduleTitle, value: item.base ?? item });
+      const owner = modules.find(module => module.id === entry.moduleId);
+      const collaborationPresets = {};
+      for (const node of entry.base.nodes || []) {
+        const path = node.metadata?.collaborationPreset;
+        if (!path) continue;
+        if (!owner || typeof path !== "string" || !path.startsWith("workflow-presets/") || path.includes("..") || path.includes("\\")) throw new Error(`Invalid collaboration preset for ${node.id}.`);
+        const preset = await readModuleDocument(path, owner);
+        if (!preset || preset.schemaVersion !== 1 || preset.nodeId !== node.id || preset.team?.protocol !== "collaboration" || typeof preset.promptFile !== "string" || !preset.promptFile.startsWith("prompts/") || preset.promptFile.includes("..") || preset.promptFile.includes("\\")) throw new Error(`Missing or invalid collaboration preset ${path}.`);
+        const team = normalizeCollaborationTeam(preset.team);
+        validateCollaborationOutputs(team, node);
+        collaborationPresets[node.id] = preset;
+      }
+      workflows.push({ ...entry, ...(Object.keys(collaborationPresets).length ? { collaborationPresets } : {}) });
     }
   }
 

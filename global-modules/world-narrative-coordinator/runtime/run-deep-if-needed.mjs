@@ -38,7 +38,9 @@ export async function execute({ run, node, conversation, data, calls, workspace 
   const settingsValue = settings?.value?.data || settings?.value || {};
   if (settingsValue.enabled !== true) return { started: false, reason: "director-disabled" };
   const brief = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "private-state", id: "turn-brief-current", view: "director" });
-  const recommendation = brief?.value?.deepRecommendation || brief?.value?.data?.deepRecommendation;
+  const recommendation = node.metadata?.openingTrigger === true
+    ? { shouldStart: settingsValue.opening?.deepMode === "background", reasonCodes: ["opening-requested"] }
+    : brief?.value?.deepRecommendation || brief?.value?.data?.deepRecommendation;
   if (!recommendation?.shouldStart) return { started: false, reason: "not-recommended" };
   const source = storyContextSource(node);
   // The operation identity is derived from the trigger turn, never from this wrapper's own run id:

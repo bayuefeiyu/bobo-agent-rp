@@ -24,6 +24,9 @@ from .shared import ALLOWED_STATUSES, ALLOWED_TRANSFORMS, DESIGN_WARNING_PREFIX
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
+SAFE_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+TRANSCRIPT_PROVIDER_FIELDS = {"schemaVersion", "moduleId", "collectionId", "recordType", "view"}
+TRANSCRIPT_PROVIDER_ACTIONS = {"create", "update", "delete"}
 
 
 def supported_image_type(path: Path) -> str | None:
@@ -109,6 +112,100 @@ def declared_module_ids(root: Path, manifest: Any) -> set[str]:
         if isinstance(module, dict) and isinstance(module.get("id"), str):
             result.add(module["id"])
     return result
+
+
+def validate_transcript_provider(root: Path, manifest: dict[str, Any], errors: list[str]) -> None:
+    """Validate the optional transcript provider against an installed data module.
+
+    The provider is deliberately an exact, small manifest surface.  Cards that omit it
+    retain the historical transcript discovery behavior, while a declared provider must
+    identify an installed module-owned record-log contract that can support the complete
+    message lifecycle and return object-shaped records.
+    """
+    if "transcript_provider" not in manifest:
+        return
+
+    label = "manifest transcript_provider"
+    provider = manifest.get("transcript_provider")
+    if not isinstance(provider, dict):
+        errors.append(f"{label} must be an object")
+        return
+    if set(provider) != TRANSCRIPT_PROVIDER_FIELDS:
+        errors.append(f"{label} must contain exactly {sorted(TRANSCRIPT_PROVIDER_FIELDS)}")
+
+    for field in ("moduleId", "collectionId", "recordType", "view"):
+        value = provider.get(field)
+        if not isinstance(value, str) or not re.fullmatch(SAFE_ID_PATTERN, value):
+            errors.append(f"{label}.{field} is invalid")
+    if isinstance(provider.get("schemaVersion"), bool) or provider.get("schemaVersion") != 1:
+        errors.append(f"{label}.schemaVersion must be 1")
+
+    module_id = provider.get("moduleId")
+    collection_id = provider.get("collectionId")
+    record_type = provider.get("recordType")
+    view_id = provider.get("view")
+    if not all(isinstance(value, str) and re.fullmatch(SAFE_ID_PATTERN, value)
+               for value in (module_id, collection_id, record_type, view_id)):
+        return
+
+    feature_modules = manifest.get("feature_modules")
+    if not isinstance(feature_modules, list):
+        return
+    selected_module = None
+    selected_contract = None
+    for module_path in feature_modules:
+        if not isinstance(module_path, str) or not safe_relative_path(module_path):
+            continue
+        module = load_json(root / module_path, [])
+        if not isinstance(module, dict) or module.get("id") != module_id:
+            continue
+        selected_module = module
+        contract_path = module.get("dataContractFile")
+        if isinstance(contract_path, str) and safe_relative_path(contract_path):
+            selected_contract = load_json((root / module_path).parent / contract_path, [])
+        break
+
+    if selected_module is None:
+        errors.append(f"{label}.moduleId references an unknown installed module: {module_id}")
+        return
+    contract_path = selected_module.get("dataContractFile")
+    if not isinstance(contract_path, str) or not safe_relative_path(contract_path):
+        errors.append(f"{label}.moduleId must reference a module with a safe dataContractFile")
+        return
+    if not isinstance(selected_contract, dict):
+        errors.append(f"{label} module dataContractFile must contain a JSON object")
+        return
+
+    collections = selected_contract.get("collections")
+    collection = collections.get(collection_id) if isinstance(collections, dict) else None
+    if not isinstance(collection, dict):
+        errors.append(f"{label}.collectionId references an unknown collection: {collection_id}")
+        return
+    storage = collection.get("storage")
+    if not isinstance(storage, dict) or storage.get("kind") != "record-log":
+        errors.append(f"{label}.collectionId must reference a record-log collection: {collection_id}")
+        return
+
+    record_types = collection.get("recordTypes")
+    definition = record_types.get(record_type) if isinstance(record_types, dict) else None
+    if not isinstance(definition, dict):
+        errors.append(f"{label}.recordType references an unknown record type: {record_type}")
+        return
+    actions = definition.get("actions")
+    if not isinstance(actions, list) or not TRANSCRIPT_PROVIDER_ACTIONS.issubset(actions):
+        errors.append(f"{label}.recordType must allow create, update, and delete")
+    views = definition.get("views")
+    view = views.get(view_id) if isinstance(views, dict) else None
+    if not isinstance(view, dict):
+        errors.append(f"{label}.view references an unknown view: {view_id}")
+    elif view.get("format", "object") != "object":
+        errors.append(f"{label}.view must use an object-format view: {view_id}")
+    else:
+        fields = view.get("fields")
+        keys = {field.get("label") or str(field.get("path", "")).split("/")[-1]
+                for field in (fields if isinstance(fields, list) else []) if isinstance(field, dict)}
+        if not {"role", "kind", "content", "narrativeSource"}.issubset(keys):
+            errors.append(f"{label}.view must expose role, kind, content, and narrativeSource")
 
 
 def validate_context_processors(root: Path, values: Any, module_ids: set[str], errors: list[str]) -> None:
@@ -296,6 +393,7 @@ def validate_manifest(root: Path, manifest: Any, errors: list[str], warnings: li
 
     validate_feature_modules(root, manifest.get("feature_modules"), errors, warnings)
     module_ids = declared_module_ids(root, manifest)
+    validate_transcript_provider(root, manifest, errors)
     if "card-context-library" not in module_ids:
         errors.append("manifest feature_modules must include the card-context-library resource module")
     if "world-narrative-coordinator" in module_ids:

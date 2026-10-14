@@ -22,6 +22,7 @@ import { createImageExecutionGuard } from "./rp-image-execution-guard.ts";
 import { recordToWebMessage } from "./rp-turn-state.ts";
 
 import { narrativeSourceLabel } from "./rp-narrative-source.mjs";
+import { selectTranscriptRange } from "./rp-transcript-projection.mjs";
 
 import type { RecordEnvelope, ActiveBridge, FeatureModule, ModuleDisplaySettings } from "./rp-host-types.ts";
 export const imageExecutionGuard = createImageExecutionGuard();
@@ -120,7 +121,7 @@ export function authoritativeTranscript(active: ActiveBridge, messages: RecordEn
 }
 
 export function recentCompletedTurnContext(active: ActiveBridge, beforeTurn: number, limit = 5) {
-  const eligible = active.messages.filter(message => message.binding.turn < beforeTurn);
+  const eligible = selectTranscriptRange(active.messages, { toTurn: beforeTurn - 1 }) as RecordEnvelope[];
   const completedTurns = [...new Set(eligible.filter(message => message.data.role === "assistant").map(message => message.binding.turn))].slice(-limit);
   return authoritativeTranscript(active, eligible.filter(message => completedTurns.includes(message.binding.turn)));
 }

@@ -280,14 +280,17 @@ test("saves a module workflow override under its owner-scoped profile key and le
   await store.ensure();
   const editable = await store.copyWorkflowToCard("post-director-update", "world-narrative-coordinator");
   editable.nodes.find(node => node.id === "review").modelId = "chosen-model";
+  editable.nodes.find(node => node.id === "review").prompt = "chosen task prompt";
   await store.saveCardWorkflow(editable);
   const profile = await profileStore.get("custom");
   assert.deepEqual(Object.keys(profile.workflowOverrides), ["module/world-narrative-coordinator/workflow/post-director-update"]);
   assert.equal(JSON.parse(await readFile(source, "utf8")).nodes.find(node => node.id === "review").modelId, "authored-model");
   const reloaded = await store.getModuleWorkflow("world-narrative-coordinator", "post-director-update");
-  assert.equal(reloaded.nodes.find(node => node.id === "review").modelId, "chosen-model");
+  assert.equal(reloaded.nodes.find(node => node.id === "review").modelId, undefined);
+  assert.equal(reloaded.nodes.find(node => node.id === "review").prompt, "chosen task prompt");
   const untouched = await store.getModuleWorkflow("narrative-memory", "post-director-update");
-  assert.equal(untouched.nodes.find(node => node.id === "review").modelId, "other-owner-model");
+  assert.equal(untouched.nodes.find(node => node.id === "review").modelId, undefined);
+  assert.notEqual(untouched.nodes.find(node => node.id === "review").prompt, "chosen task prompt");
   await assert.rejects(() => store.getWorkflow("post-director-update"), /module-id\/component-id/);
   await assert.rejects(readFile(resolve(setup.card, "workflows", "post-director-update", "workflow.json"), "utf8"), /ENOENT/);
 });
@@ -329,6 +332,7 @@ test("applies an active named profile without rewriting authored module Agent fi
 test("stores workflow runtime policy inside the active configuration profile", async () => {
   const root = await mkdtemp(resolve(os.tmpdir(), "rp-config-"));
   const profileStore = await activeProfileStore(root, {
+    models: [{ schemaVersion: 1, id: "fallback", provider: "offline", model: "fallback-model" }],
     workflowOverrides: { runtimePolicy: { schemaVersion: 1, maxConcurrency: 4, modelFailure: { silentFallback: false, defaultFallbackModelId: null } } },
   });
   const store = testStore(root, { profileStore });

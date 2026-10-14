@@ -10,6 +10,9 @@
 
 | 内容 | 唯一维护源 | 自动生成或复制的位置 |
 | --- | --- | --- |
+| Web 协议与 SDK | `packages/rp-web-contract/`、`packages/rp-web-client/` | generate-web-contract 生成类型/API；sync-web-assets 生成官方 public/vendor 和启动器 packages；打包复制到 runtime/packages |
+| 共享 HTTP 与静态托管 | `packages/rp-web-server/` | 卡 runtime/packages；启动器仅复制所需 static-host |
+| 官方管理及默认游玩 | `assets/pi-rp-web/public/` | 打包为 web/public；generate-management-pages 生成独立 config.html/monitor.html；创作者产物放独立 web/frontends/ |
 | 公共运行库、默认配置和公共提示词 | `.agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/` | 新卡打包时复制到卡片公共层；只提供 engine、tools、system、model heads/tails 和其他 common prompts |
 | Agent 默认引用、可选提示词与静态资料模板 | `.agents/skills/st-card-to-pi-rp/assets/prompt-templates/` | Agent 提示词显式引用的 `agent-preferences/` 片段在新卡打包时展开；其他片段仅在转卡方案明确选中后拼入卡内；`prompt-templates/` 不会整目录打包 |
 | 正文 Agent、正文入口和最近故事准备 | `global-modules/narrative-controls/` | 作为完整模块复制到 `features/narrative-controls/`，包含 `narrative-writer`、`standard-rp`、`advanced-memory-rp` 和 `prepare-recent-narrative-stories`；不是只有可选控件 |

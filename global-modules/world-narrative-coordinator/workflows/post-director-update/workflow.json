@@ -3,7 +3,7 @@
   "id": "post-director-update",
   "ownerModuleId": "world-narrative-coordinator",
   "title": "后置导演复盘",
-  "description": "在正文落地后完成主要复盘、私有状态、频道指导、可选归档交接及深度启动建议。",
+  "description": "在正文落地后主导主要复盘、持续规划、下一轮条件化交接及正文后任务指导，并提供可选归档交接与深度启动建议。",
   "kind": "module-internal",
   "agentCallable": false,
   "interface": {
@@ -35,7 +35,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-daily-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -206,8 +205,8 @@
             "director.archive.write"
           ],
           "views": [
-        "director-status",
-        "archive-source"
+            "director-status",
+            "archive-source"
           ],
           "queryBudget": {
             "maxRecords": 10000,
@@ -226,7 +225,12 @@
         ],
         "argumentInputs": [
           "phase"
-        ]
+        ],
+        "softBudget": {
+          "modelRequests": 12,
+          "outputTokens": 8000,
+          "elapsedSeconds": 90
+        }
       }
     },
     {
@@ -344,5 +348,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

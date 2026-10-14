@@ -7,6 +7,8 @@ import test from "node:test";
 import { execute as materializeReport } from "../workflow/materialize-deep-report.mjs";
 import { execute as commitReport } from "../workflow/commit-deep-report.mjs";
 import { parseDeepReport, validateDeepReport } from "../lib/deep-report.mjs";
+import { importRuntimeTestModule } from "./runtime-test-runtime.mjs";
+const { createAgentDelivery } = await importRuntimeTestModule("rp-agent-delivery.mjs");
 
 /**
  * RC-09: the plan node declared `deep-report.json` and a required workspace handoff, but nothing
@@ -30,12 +32,27 @@ function report(overrides = {}) {
     invalidatingSignals: ["城门封锁"],
     summary: "一句话摘要。",
     content: "完整推演正文。",
-    worldNarrativeTopics: [{ id: "topic-haven", status: "active", premise: "避难所网络" }, { id: "topic-ruins", status: "backup", premise: "遗迹回声" }],
+    worldNarrativeTopics: [{ topicId: "topic-haven", title: "避难所", status: "active", premise: "避难所网络", conditions: [], boundaries: [], suggestedAngles: [], invalidatingSignals: [] }, { topicId: "topic-ruins", title: "遗迹", status: "backup", premise: "遗迹回声", conditions: [], boundaries: [], suggestedAngles: [], invalidatingSignals: [] }],
     nextReviewTriggers: ["玩家离开城镇"],
     referenceUpdates: [],
     ...overrides,
   };
 }
+
+test("the planning delivery catches malformed topic fields while the Agent can still repair its file", async t => {
+  const workspace = await mkdtemp(resolve(tmpdir(), "rp-topic-delivery-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const workflow = JSON.parse(await readFile(new URL("../../workflows/deep-director-planning/workflow.json", import.meta.url)));
+  const node = workflow.nodes.find(node => node.id === "plan");
+  const delivery = await createAgentDelivery({ workspace, node, agent: { outputMode: "json" } });
+  const malformed = report(); malformed.worldNarrativeTopics[0].boundaries = "string instead of array";
+  await writeFile(resolve(workspace, "draft.json"), JSON.stringify(malformed));
+  await assert.rejects(delivery.deliver({ output: "result", path: "draft.json" }), /boundaries/);
+  await writeFile(resolve(workspace, "draft.json"), JSON.stringify(report()));
+  await delivery.deliver({ output: "result", path: "draft.json" });
+  await delivery.complete();
+  assert.equal((await delivery.result()).summary, "一句话摘要。");
+});
 
 async function workspaceWith(contents) {
   const workspace = await mkdtemp(resolve(tmpdir(), "rp-deep-report-"));
@@ -84,6 +101,8 @@ test("the report contract rejects bad JSON, missing fields, and an off-turn basi
   assert.throws(() => validateDeepReport(report({ basisTurn: 9 }), { basisTurn }), /is not this run's turn/);
   assert.throws(() => validateDeepReport(report({ referenceUpdates: "none" }), { basisTurn }), /referenceUpdates must be an array/);
   assert.deepEqual(validateDeepReport(report({ referenceUpdates: undefined }), { basisTurn }).referenceUpdates, []);
+  const malformed = report(); malformed.worldNarrativeTopics[0].boundaries = "text";
+  assert.throws(() => validateDeepReport(malformed, { basisTurn }), /boundaries must be an array/);
 });
 
 test("the agent's documented field set is accepted, with or without the version marker", () => {
@@ -98,7 +117,7 @@ test("the agent's documented field set is accepted, with or without the version 
     invalidatingSignals: [],
     summary: "摘要。",
     content: "正文。",
-    worldNarrativeTopics: [{ topicId: "a", status: "active" }, { topicId: "b", status: "backup" }],
+    worldNarrativeTopics: report().worldNarrativeTopics,
     nextReviewTriggers: [],
   };
   const normalized = validateDeepReport(agentReply, { basisTurn });

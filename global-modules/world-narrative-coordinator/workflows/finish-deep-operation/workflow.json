@@ -75,5 +75,9 @@
       ],
       "exports": {}
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": false,
+    "allowHistoricalWrites": true
+  }
 }

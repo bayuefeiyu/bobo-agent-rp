@@ -62,7 +62,9 @@ function safePerspectiveFile(id) {
 }
 
 export async function execute({ run, data, workspace }) {
-  const retrieval = run.nodes["memory-retrieval"]?.output;
+  const retrieval = run.nodes["check-retrieval-source"]?.route === "empty"
+    ? { queries: [{ query: run.textInput || "本次记忆查询", kind: "broad", matches: [] }], restrictedPerspectives: [] }
+    : run.nodes["memory-retrieval"]?.output;
   if (!retrieval) throw new Error("compose-memory requires retrieval output.");
   const budget = run.nodes["prepare-retrieval"]?.output?.effectiveBudget;
   if (!budget) throw new Error("compose-memory requires the prepared effective retrieval budget.");

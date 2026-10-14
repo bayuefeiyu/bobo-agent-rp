@@ -1,7 +1,7 @@
 import { capabilityAllows, isSafeDataId, recordTypeDefinition } from "./rp-data-contracts.mjs";
 
-const LEGACY_TYPES = new Set(["text", "markdown", "json", "key-value", "list", "table", "image-generation"]);
-const INTERACTIVE_TYPES = new Set(["record-browser", "story-browser", "settings-form", "prompt-controls", "workflow-controls", "integrity-alerts"]);
+export const BINDING_RENDERERS = Object.freeze({ records: "record-browser", stories: "story-browser", settings: "settings-form", prompts: "prompt-controls", workflows: "workflow-controls", integrity: "integrity-alerts", images: "image-generation" });
+const RENDERER_TYPES = new Set(Object.values(BINDING_RENDERERS));
 const FIELD_TYPES = new Set(["text", "textarea", "integer", "number", "boolean", "select", "json"]);
 
 function object(value, label) {
@@ -106,15 +106,20 @@ function normalizeParameter(raw, label) {
 
 export function normalizeModuleFrontendView(value, contract) {
   const input = object(value, "frontend view");
-  exact(input, ["schemaVersion", "regions"], ["schemaVersion", "regions"], "frontend view");
-  if (![1, 2].includes(input.schemaVersion) || !Array.isArray(input.regions)) throw new Error("Frontend view must use schemaVersion 1 or 2 and contain regions.");
-  if (input.schemaVersion === 1) return structuredClone(input);
+  exact(input, ["schemaVersion", "bindings", "regions"], ["schemaVersion", "bindings", "regions"], "frontend view");
+  if (input.schemaVersion !== 3 || !Array.isArray(input.bindings) || !Array.isArray(input.regions)) throw new Error("Frontend view must use schemaVersion 3 with bindings and regions.");
   const seen = new Set();
-  const regions = input.regions.map((raw, index) => {
-    const region = object(raw, `frontend region ${index}`);
-    if (!INTERACTIVE_TYPES.has(region.type)) {
-      if (!LEGACY_TYPES.has(region.type)) throw new Error(`Frontend region ${index} has unsupported type ${region.type}.`);
-      return structuredClone(region);
+  const normalized = input.bindings.map((raw, index) => {
+    object(raw, `frontend binding ${index}`);
+    const type = typeof raw.kind === "string" && Object.hasOwn(BINDING_RENDERERS, raw.kind) ? BINDING_RENDERERS[raw.kind] : null;
+    if (!type) throw new Error(`Frontend binding ${index} has unsupported kind ${raw.kind}.`);
+    const { kind, ...fields } = raw;
+    const region = { ...fields, type, title: raw.id };
+    if (type === "image-generation") {
+      exact(raw, ["id", "kind"], ["id", "kind"], `frontend binding ${index}`);
+      if (seen.has(raw.id)) throw new Error(`Duplicate frontend binding ID ${raw.id}.`);
+      seen.add(raw.id);
+      return { id: id(raw.id, "image binding ID"), type };
     }
     if (seen.has(region.id)) throw new Error(`Duplicate frontend region ID ${region.id}.`);
     seen.add(region.id);
@@ -155,7 +160,7 @@ export function normalizeModuleFrontendView(value, contract) {
     if (region.type === "integrity-alerts") {
       exact(region, ["id", "type", "title", "description", "spoiler", "coverage", "action", "empty"], ["id", "type", "title", "action"], `frontend region ${index}`);
       const action = object(region.action, `frontend region ${index}.action`);
-      exact(action, ["workflowRegionId", "workflowId", "startTurnParameter", "endTurnParameter", "operationParameter", "operationValue"], ["workflowRegionId", "workflowId", "startTurnParameter", "endTurnParameter"], `frontend region ${index}.action`);
+      exact(action, ["workflowBindingId", "workflowId", "startTurnParameter", "endTurnParameter", "operationParameter", "operationValue"], ["workflowBindingId", "workflowId", "startTurnParameter", "endTurnParameter"], `frontend region ${index}.action`);
       let coverage = null;
       if (region.coverage !== undefined && region.coverage !== null) {
         const rawCoverage = object(region.coverage, `frontend region ${index}.coverage`);
@@ -183,7 +188,7 @@ export function normalizeModuleFrontendView(value, contract) {
         ...base,
         coverage,
         action: {
-          workflowRegionId: id(action.workflowRegionId, `frontend region ${index}.action.workflowRegionId`),
+          workflowBindingId: id(action.workflowBindingId, `frontend region ${index}.action.workflowBindingId`),
           workflowId: id(action.workflowId, `frontend region ${index}.action.workflowId`),
           startTurnParameter: id(action.startTurnParameter, `frontend region ${index}.action.startTurnParameter`),
           endTurnParameter: id(action.endTurnParameter, `frontend region ${index}.action.endTurnParameter`),
@@ -203,8 +208,8 @@ export function normalizeModuleFrontendView(value, contract) {
     if (new Set(workflows.map(item => item.id)).size !== workflows.length) throw new Error(`frontend region ${index} contains duplicate workflow IDs.`);
     return { ...base, workflows };
   });
-  for (const region of regions.filter(item => item.type === "integrity-alerts")) {
-    const workflowRegion = regions.find(item => item.id === region.action.workflowRegionId && item.type === "workflow-controls");
+  for (const region of normalized.filter(item => item.type === "integrity-alerts")) {
+    const workflowRegion = normalized.find(item => item.id === region.action.workflowBindingId && item.type === "workflow-controls");
     const workflow = workflowRegion?.workflows?.find(item => item.id === region.action.workflowId);
     if (!workflow) throw new Error(`Integrity region ${region.id} references an undeclared workflow control.`);
     const parameters = new Map(workflow.parameters.map(item => [item.name, item]));
@@ -214,13 +219,39 @@ export function normalizeModuleFrontendView(value, contract) {
       if (!parameter || (parameter.type === "select" && !parameter.options.includes(region.action.operationValue))) throw new Error(`Integrity region ${region.id} operation parameter is invalid.`);
     }
   }
-  return { schemaVersion: 2, regions };
+  const bindings = normalized.map(item => {
+    const { type, title, description, spoiler, ...value } = item;
+    return { ...value, kind: Object.keys(BINDING_RENDERERS).find(key => BINDING_RENDERERS[key] === type) };
+  });
+  const regionIds = new Set();
+  const regions = input.regions.map((raw, index) => {
+    object(raw, "frontend region");
+    exact(raw, ["id", "bindingId", "type", "title", "description", "spoiler", "optional"], ["id", "bindingId", "type", "title"], "frontend region");
+    id(raw.bindingId, "region.bindingId");
+    const binding = bindings.find(item => item.id === raw.bindingId);
+    if (!binding) throw new Error("Frontend region references an undeclared binding.");
+    id(raw.type, "renderer type");
+    if (raw.optional !== undefined && typeof raw.optional !== "boolean") throw new Error("Renderer optional must be boolean.");
+    if (!RENDERER_TYPES.has(raw.type) && raw.optional !== true) throw new Error("Unsupported required renderer.");
+    if (RENDERER_TYPES.has(raw.type) && BINDING_RENDERERS[binding.kind] !== raw.type) throw new Error("Default renderer cannot consume this binding kind.");
+    if (regionIds.has(raw.id)) throw new Error("Duplicate frontend region ID.");
+    regionIds.add(raw.id);
+    return { ...common(raw, "frontend region " + index), bindingId: raw.bindingId, optional: raw.optional === true };
+  });
+  return { schemaVersion: 3, bindings, regions };
 }
 
-export function frontendRegion(module, regionId, expectedType = /** @type {string | null} */ (null)) {
+export function frontendBinding(module, bindingId, expectedType = /** @type {string | null} */ (null)) {
+  const binding = module?.view?.bindings?.find(item => item?.id === bindingId);
+  const type = binding && BINDING_RENDERERS[binding.kind];
+  if (!binding || (expectedType && type !== expectedType)) throw new Error(`Frontend binding ${bindingId} is not declared for module ${module?.id || "unknown"}.`);
+  return { ...binding, type };
+}
+
+export function frontendRegion(module, regionId) {
   const region = module?.view?.regions?.find(item => item?.id === regionId);
-  if (!region || (expectedType && region.type !== expectedType)) throw new Error(`Frontend region ${regionId} is not declared for module ${module?.id || "unknown"}.`);
-  return region;
+  if (!region) throw new Error("Frontend renderer region is not declared.");
+  return { ...frontendBinding(module, region.bindingId), ...region };
 }
 
 function decodePointer(pointerValue) {

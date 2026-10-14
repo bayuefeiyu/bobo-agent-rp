@@ -10,6 +10,45 @@ import { createComfyUiService } from "./rp-comfyui.mjs";
 import { RpDataStore } from "./rp-data-store.mjs";
 import { executeDataBatch } from "./rp-data-changes.mjs";
 
+test("isolated connections and saved selection survive service restart; removal deletes credentials and stays removed",async t=>{
+  const root=await mkdtemp(resolve(tmpdir(),"rp-comfy-persist-"));
+  const options={rootDirectory:root,cardDirectory:resolve(root,"card"),featureModules:[],secretCacheDirectory:resolve(root,"secrets"),isolatedRuntime:true};
+  let service=createComfyUiService(options);
+  await service.saveConnection({id:"custom",title:"Saved connection",baseUrl:"http://127.0.0.1:8288",token:"synthetic-token",outputDirectoryPath:"C:/Comfy/output"});
+  service=createComfyUiService(options);
+  const connections=await service.listConnections();
+  assert.equal(connections.find(c=>c.selected).id,"custom");
+  assert.equal(connections.find(c=>c.id==="custom").baseUrl,"http://127.0.0.1:8288");
+  assert.equal(connections.find(c=>c.id==="custom").hasToken,true);
+  await service.saveConnection({id:"custom",title:"Updated",baseUrl:"http://127.0.0.1:8388",token:""});
+  assert.equal((await createComfyUiService(options).listConnections()).find(c=>c.id==="custom").hasToken,true);
+  await service.removeConnection("custom");await service.removeConnection("local");
+  service=createComfyUiService(options);
+  assert.deepEqual(await service.listConnections(),[]);
+  const stored=await readFile(resolve(root,"card/settings/comfyui-connections.json"),"utf8");
+  assert.ok(!stored.includes("synthetic-token"));
+  await service.saveConnection({id:"custom",title:"Fresh",baseUrl:"http://127.0.0.1:8188"});
+  assert.equal((await service.listConnections())[0].hasToken,false);
+});
+
+test("connection tests use unsaved fields and cached or newly typed tokens without saving",async t=>{
+  const root=await mkdtemp(resolve(tmpdir(),"rp-comfy-draft-"));
+  const service=createComfyUiService({rootDirectory:root,cardDirectory:resolve(root,"card"),featureModules:[],secretCacheDirectory:resolve(root,"secrets")});
+  await service.saveConnection({id:"local",title:"Saved",baseUrl:"http://127.0.0.1:9",token:"synthetic-cached-token"});
+  const savedPath=resolve(root,"settings","comfyui-connections.json"),before=await readFile(savedPath,"utf8");
+  const requests=[],previous=globalThis.fetch;t.after(()=>{globalThis.fetch=previous;});
+  globalThis.fetch=async(url,options)=>{requests.push({url,headers:options.headers});return {ok:true,json:async()=>({system:{}})};};
+  const draft={id:"unsaved-id",title:"Draft",baseUrl:"http://127.0.0.1:12345",token:""};
+  await service.testConnection("local",draft);
+  assert.equal(requests[0].url,draft.baseUrl+"/system_stats");assert.equal(requests[0].headers.authorization,"Bearer synthetic-cached-token");
+  await service.testConnection("local",{...draft,token:"synthetic-new-token"});
+  assert.equal(requests[1].headers.authorization,"Bearer synthetic-new-token");
+  await service.testConnection("brand-new",draft);assert.equal(requests[2].headers.authorization,undefined);
+  await assert.rejects(service.testConnection("local",{...draft,baseUrl:"http://remote.invalid"}),/allowInsecureRemote/);
+  assert.equal(requests.length,3);assert.equal(await readFile(savedPath,"utf8"),before);
+  const connections=await service.listConnections();assert.equal(connections.length,1);assert.equal(connections[0].baseUrl,"http://127.0.0.1:9");
+});
+
 test("assembles fixed prompt around scene content and creates one flat chat folder", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "rp-comfy-"));
   const moduleDirectory = resolve(root, "card", "features", "comfy-image-generation");
@@ -20,12 +59,15 @@ test("assembles fixed prompt around scene content and creates one flat chat fold
   await writeFile(resolve(profileDirectory, "workflow.api.json"), JSON.stringify(workflow));
   await writeFile(resolve(profileDirectory, "profile.json"), JSON.stringify({ schemaVersion: 1, id: "demo", title: "Demo", revision: "1", guideId: "demo", connectionId: "local", workflowFile: "workflow.api.json", bindings: { positive: [{ nodeId: "1", input: "text" }], negative: [], seed: [], filenamePrefix: [{ nodeId: "2", input: "filename_prefix" }] }, prompt: { separator: ", ", positivePrefix: "quality", positiveSuffix: "style", negative: "bad" }, output: { nodeIds: ["2"] }, seedRange: { min: 0, max: 1125899906842624, source: "test" } }));
   await writeFile(resolve(moduleDirectory, "skill", "guides", "demo", "SKILL.md"), "---\nname: demo\ndescription: demo\n---\n");
-  const service = createComfyUiService({ rootDirectory: root, cardDirectory: resolve(root, "card"), featureModules: [{ id: "comfy-image-generation", moduleDirectory }] });
+  const service = createComfyUiService({ rootDirectory: root, cardDirectory: resolve(root, "card"), featureModules: [{ id: "comfy-image-generation", moduleDirectory }], secretCacheDirectory:resolve(root,"secrets") });
   const profile = (await service.profiles())[0];
   assert.deepEqual(service.assemblePrompt(profile, "a person"), { positive: "quality, a person, style", negative: "bad" });
   const folder = service.chatFolder({ cardId: "card/name", chatId: "chat-1", now: new Date("2026-09-03T14:35:22Z") });
   assert.match(folder, /^20260903-143522_card-name_[a-f0-9]{6}$/);
   assert.equal(folder.includes("/"), false);
+  await service.removeConnection("local");
+  assert.equal((await service.profiles())[0].connectionMissing,true);
+  await assert.rejects(service.profiles(["demo"]),error=>error.status===400);
 });
 
 test("queues an adapted workflow and returns only ComfyUI history image references", async () => {

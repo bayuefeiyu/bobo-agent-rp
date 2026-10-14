@@ -45,5 +45,39 @@
     },
     "note": null,
     "provenance": {}
+  },
+  {
+    "protocolVersion": 2,
+    "id": "narrative-history-settings",
+    "moduleId": "narrative-controls",
+    "collectionId": "settings",
+    "recordType": "narrative.history-settings",
+    "dataSchemaVersion": 1,
+    "sequence": 1,
+    "revision": 1,
+    "status": "active",
+    "createdAt": "2026-10-08T00:00:00.000Z",
+    "updatedAt": "2026-10-08T00:00:00.000Z",
+    "binding": {
+      "messageId": null,
+      "turn": 0
+    },
+    "data": {
+      "enabled": false,
+      "indexEveryTurns": 3,
+      "protectionMode": "context",
+      "protectRecentTurns": 5,
+      "targetCharacters": 800,
+      "maxCharacters": 1200,
+      "overlapCharacters": 120,
+      "shortTailCharacters": 200,
+      "candidatesPerQuery": 30,
+      "maxResults": 6,
+      "maxOutputCharacters": 6000,
+      "maxPerTurn": 2,
+      "deadlineMs": 15000
+    },
+    "note": null,
+    "provenance": {}
   }
 ]

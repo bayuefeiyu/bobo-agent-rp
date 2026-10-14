@@ -1,5 +1,7 @@
 # Pi RP unified data protocol
 
+The [workflow execution and narrative attempt protocol](workflow-executions.md) defines execution isolation, current-turn boundaries, historical maintenance permissions, session preference collections and candidate presentation. It applies to all module-owned persistent results.
+
 This document is the authoritative data contract for Pi RP cards and feature modules. The project is pre-release: the protocol replaces the former feature-module storage, retrieval-policy, catalog, post-narrative-output, variable-draft, and long-term-publication record formats without compatibility requirements.
 
 ## Ownership and layout
@@ -29,6 +31,10 @@ sessions/<card-id>/<chat-id>/
 Project-global modules are authored as complete trees under `global-modules/<module-id>/`; card imports copy the same owned Agents, prompts, workflows, and runtime files into `features/<module-id>/`. Card packages do not use legacy root `agents/`, `workflows/`, `prompts/`, or `modules/` component trees.
 
 `data-contract.json` is the only machine-readable module data declaration. A module owns one or more collections; a collection owns one or more record types. JSON/JSONL collection files are authoritative. Indexes, catalogs, and generated documents are derived and rebuildable.
+
+The正文 module also owns the conversation transcript: player inputs, opening at turn 0, and published narratives are self-bound documents in its record-log collection. `narrative-controls` uses `conversation/narrative.message`, partitioned by 50 turns. Edits append revisions under the stable message ID. The canonical object view exposes `role`, `kind`, `content`, and `narrativeSource`; recent context and archive input are ranges of this same current-revision view. Workflow read views retain their frozen revisions. `messages.jsonl` is a rebuildable v1 message-envelope projection, never session authority. The pinned `transcript.json` provider and projection fingerprint are committed with collection files and indexes through the normal data transaction. Missing or corrupt authority fails visibly rather than importing the cache. Suffix deletion physically prunes every revision bound to deleted message IDs, including the transcript documents themselves.
+
+Cards may declare an exact v1 `manifest.transcript_provider` descriptor (`schemaVersion`, `moduleId`, `collectionId`, `recordType`, `view`) for a replacement module using the same document structure and view protocol. This is a minimal data-provider extension; it does not register a renderer. Provider identity is fixed per saved chat. Legacy JSONL-only chats require explicit scoped migration, preserving existing message IDs/revisions/times and reporting unavailable preexisting revision history; startup does not migrate them.
 
 ## Module v7
 
@@ -228,7 +234,15 @@ Node outputs are registered by logical name with file/directory kind and `node`,
 
 Module results cross the boundary only as declared file or directory exports placed at caller-selected safe paths. A caller must redeclare and explicitly include a returned path before another node receives it; nested results never bubble automatically. Normal workflow context assembly, explicit workspace handoff, and workspace-document indexes are the primary information-routing mechanisms. Top-level trigger events do not implicitly transfer workspaces, and durable cross-turn authority remains module data. Query access control remains a fallback boundary against autonomous over-querying or configuration mistakes.
 
-## Documents and maintenance
+## External user resources (Module v8)
+
+Module v7 remains supported. Module v8 adds exactly `externalResource` to the v7 field set. A non-null value is currently supported only for `creative-reference-library`, `moduleKind: resource`, `surface: background`, `externalResource: creative-reference-library/v1`, with null `dataContractFile`, `resourceCatalogFile`, and `frontendViewFile`. A v8 null binding follows the existing kind/file rules. Do not invent a session collection or empty catalog for this external resource.
+
+Its code/Agent nodes explicitly declare `runtimeServices: ["referenceLibrary"]`; host checks ownership and installation before providing bounded query/read/compose operations. Other modules access only authorized module-external workflows. `random` remains code-only. User root binding is outside card/session authority and configuration exports. Runtime references cannot supply paths. Binding uses the configuration token, not an autonomous model action; import/rebuild stays in user CLI/development conversion tools.
+
+The independent format and tools are in `packages/creative-reference-library/`. Card packaging copies only their declared core files, records hashes in the normal lock inventory, and requires Node.js 24.14+. Every retrieval pins an immutable generation; nested calls/retries share a durable host request budget. Maintenance/source records are never indexed or exposed as reference content. Semantic retrieval is reserved for the later manual enable/build phase.
+
+## Document ownership
 
 - Dynamic authoritative data uses JSON/JSONL.
 - Static authored knowledge uses Markdown with optional frontmatter.

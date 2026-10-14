@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "official",
+  "version": "1.0.0",
+  "kind": "builtin",
+  "root": "public/gameplay/official",
+  "entry": "index.mjs",
+  "apiVersion": { "major": 1, "minor": 0 },
+  "hostVersion": { "major": 1, "minor": 0 },
+  "requiredCapabilities": ["get.state"],
+  "optionalCapabilities": [],
+  "assets": ["index.mjs"],
+  "immersive": false
+}

@@ -7,7 +7,6 @@
   "revision": "2",
   "defaults": {
     "agentId": "narrative-memory/narrative-memory-compressor",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -131,7 +130,6 @@
       "description": "只根据有效目录提出可合并分组。",
       "type": "agent",
       "agentId": "narrative-memory/narrative-memory-compressor",
-      "modelId": "pi:current",
       "dependsOn": [
         "materialize-compression-snapshot"
       ],
@@ -336,5 +334,9 @@
       }
     },
     "exports": {}
+  },
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
   }
 }

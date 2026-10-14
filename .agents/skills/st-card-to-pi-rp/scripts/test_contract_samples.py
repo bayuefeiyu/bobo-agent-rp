@@ -270,7 +270,7 @@ def fixture_for_sample(root: Path, sample_id: str, value: dict[str, Any],
     if safe_relative(definition.get("skillFile")):
         write_skill(module, str(definition.get("id")))
     if safe_relative(definition.get("frontendViewFile")):
-        write_json(module / definition["frontendViewFile"], {"schemaVersion": 1, "regions": []})
+        write_json(module / definition["frontendViewFile"], {"schemaVersion": 3, "bindings": [], "regions": []})
 
     # 样例清单原样落盘：多出的字段必须留在文件里，否则"多字段即拒绝"的样例会被夹具修好。
     write_json(module / "module.json", definition)

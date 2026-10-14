@@ -7,7 +7,6 @@
   "revision": "3",
   "defaults": {
     "agentId": "narrative-memory/narrative-memory-archive-editor",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -256,7 +255,6 @@
       "description": "在节点工作区梳理、分析和核对归档范围，输出原子统一变更批次。",
       "type": "agent",
       "agentId": "narrative-memory/narrative-memory-archive-editor",
-      "modelId": "pi:current",
       "dependsOn": [
         "prepare-reference-snapshot",
         "materialize-archive-task"
@@ -572,5 +570,9 @@
       }
     },
     "exports": {}
+  },
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
   }
 }

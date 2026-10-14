@@ -1,3 +1,4 @@
+import { normalizeCollaborationTeam } from "./rp-team-collaboration-config.mjs";
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const INPUT_ADAPTERS = new Set(["natural-language-v1", "memory-request-v1"]);
 
@@ -39,12 +40,10 @@ function member(value, role, index = null) {
   const input = object(value, label);
   const memberId = id(input.id || role, `${label}.id`);
   const agentId = componentRef(input.agentId, `${label}.agentId`);
-  const modelId = typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : null;
   return {
     id: memberId,
     role,
     agentId,
-    modelId,
     focus: typeof input.focus === "string" ? input.focus.trim() : "",
     prompt: typeof input.prompt === "string" ? input.prompt.trim() : "",
   };
@@ -88,7 +87,6 @@ function ability(value, label, { required = false } = {}) {
     result.target = input.target;
   } else if (kind === "agent") {
     result.agentId = componentRef(input.agentId, `${label}.agentId`);
-    result.modelId = typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : null;
     result.prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   } else {
     result.adapter = id(input.adapter, `${label}.adapter`);
@@ -120,6 +118,8 @@ function budgets(value, memberCount) {
 
 export function normalizeTeamDefinition(value) {
   const input = object(value, "team");
+  if (input.schemaVersion === 2 || input.protocol === "collaboration") return normalizeCollaborationTeam(input);
+  if (input.protocol !== undefined && input.protocol !== "meeting") throw new Error("Unknown team protocol.");
   if (input.schemaVersion !== undefined && input.schemaVersion !== 1) throw new Error("team.schemaVersion must be 1.");
   const leader = member(input.leader, "leader");
   const secretary = member(input.secretary, "secretary");
@@ -162,6 +162,7 @@ export function normalizeTeamDefinition(value) {
   }
   return {
     schemaVersion: 1,
+    protocol: "meeting",
     leader,
     secretary,
     experts,

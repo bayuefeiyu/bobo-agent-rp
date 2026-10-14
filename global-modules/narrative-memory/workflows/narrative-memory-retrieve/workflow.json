@@ -38,7 +38,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "narrative-memory/narrative-memory-retriever",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -172,13 +171,99 @@
       }
     },
     {
+      "id": "check-retrieval-source",
+      "title": "检查记忆源是否为空",
+      "type": "code",
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "entities",
+          "capabilities": [
+            "memory.records.inspect"
+          ],
+          "views": [
+            "retrieval"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "relationships",
+          "capabilities": [
+            "memory.records.inspect"
+          ],
+          "views": [
+            "retrieval"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "events",
+          "capabilities": [
+            "memory.records.inspect"
+          ],
+          "views": [
+            "retrieval"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "cognitions",
+          "capabilities": [
+            "memory.records.inspect"
+          ],
+          "views": [
+            "retrieval"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 500000
+          }
+        },
+        {
+          "moduleId": "narrative-memory",
+          "collectionId": "knower-groups",
+          "capabilities": [
+            "memory.records.inspect"
+          ],
+          "views": [
+            "retrieval"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 500000
+          }
+        }
+      ],
+      "metadata": {
+        "entryFile": "runtime/workflow/check-retrieval-source.mjs"
+      },
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "routeFromOutput": "route"
+    },
+    {
       "id": "memory-retrieval",
       "title": "解析请求并匹配记录",
       "type": "agent",
       "agentId": "narrative-memory/narrative-memory-retriever",
       "dependsOn": [
         "prepare-reference-snapshot",
-        "materialize-retrieval-task"
+        "materialize-retrieval-task",
+        "check-retrieval-source"
       ],
       "context": {
         "mode": "previous-output",
@@ -312,8 +397,21 @@
         ],
         "initialContext": {
           "currentInput": true
+        },
+        "softBudget": {
+          "modelRequests": 10,
+          "outputTokens": 5000,
+          "elapsedSeconds": 60
         }
-      }
+      },
+      "conditions": [
+        {
+          "nodeId": "check-retrieval-source",
+          "routes": [
+            "available"
+          ]
+        }
+      ]
     },
     {
       "id": "compose-memory",
@@ -321,7 +419,8 @@
       "type": "code",
       "dependsOn": [
         "memory-retrieval",
-        "prepare-retrieval"
+        "prepare-retrieval",
+        "check-retrieval-source"
       ],
       "context": {
         "mode": "previous-output",
@@ -437,5 +536,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "narrative-team-writer",
+  "name": "正文团队主笔 Agent",
+  "description": "与共创者平等参与分析和构思，负责正文草稿、修订、交付及阶段收束。",
+  "promptFile": "prompts/agents/narrative-team-writer.md",
+  "tools": [
+    "read",
+    "write",
+    "edit",
+    "rp_files"
+  ],
+  "contextPermissions": [
+    "card:fixed",
+    "chat:selected",
+    "modules:selected",
+    "workspace:public"
+  ],
+  "outputMode": "text",
+  "defaultModelId": "pi:current",
+  "ownerModuleId": "narrative-controls"
+}

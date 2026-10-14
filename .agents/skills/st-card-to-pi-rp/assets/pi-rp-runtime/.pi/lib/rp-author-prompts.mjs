@@ -1,5 +1,5 @@
 import { moduleFile } from "./rp-module-registry.mjs";
-import { parseRolePrompt, readPromptFile, selectPrompts } from "./rp-node-context.mjs";
+import { parseRolePrompt, readPromptFile, selectPrompts, selectPromptGroups } from "./rp-node-context.mjs";
 import { renderCardText } from "./rp-card-text.mjs";
 import { resolve } from "node:path";
 import { parseTaskStages } from "./rp-task-stages.mjs";
@@ -68,7 +68,9 @@ export async function playPromptSources(active, profile, agent, node, workspace,
   return {
     baseSystem,
     prefix: selectPrompts(totalPrefix, modelPrefix, options.prefixExclusive === true),
+    prefixGroups: selectPromptGroups(totalPrefix,modelPrefix,options.prefixExclusive===true),
     tail: selectPrompts(totalTail, modelTail, options.tailExclusive === true),
+    tailGroups: selectPromptGroups(totalTail,modelTail,options.tailExclusive===true),
     agent: agentPrompts,
     nodeText: taskStages.initialText,
     fullNodeText,

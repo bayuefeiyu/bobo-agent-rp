@@ -63,6 +63,23 @@ test("rejects wrong scopes and imported credentials", async () => {
   await assert.rejects(() => target.importProfile(profile("main", "global")), /scope must be card/);
 });
 
+test("model copies read cached credentials server-side and remain independent of the source", async () => {
+  const target = await store("card", "demo");
+  const seed=profile("main","card");seed.models.push({...seed.models[0],id:"fast-copy"});
+  await target.create({id:"main",name:"Main",seed});
+  await target.saveModelSecret("main","fast","fixture-cached-key");
+  const result=await target.copyModelSecret("main","fast","fast-copy");
+  assert.deepEqual(result,{modelId:"fast-copy",hasSecret:true});
+  assert.equal(await target.getModelSecret("main","fast-copy"),"fixture-cached-key");
+  assert.doesNotMatch(JSON.stringify(await target.get("main")),/fixture-cached-key|apiKey/);
+  assert.doesNotMatch(JSON.stringify(await target.exportProfile("main")),/fixture-cached-key|apiKey/);
+  await target.saveModelSecret("main","fast","");
+  assert.equal(await target.getModelSecret("main","fast-copy"),"fixture-cached-key");
+  await target.copyModelSecret("main","fast","fast-copy");
+  assert.equal(await target.getModelSecret("main","fast-copy"),"");
+  await assert.rejects(target.copyModelSecret("main","missing","fast-copy"),/Both source and target/);
+});
+
 test("copying a profile does not copy its credentials", async () => {
   const target = await store();
   await target.create({ id: "main", name: "Main", seed: profile() });

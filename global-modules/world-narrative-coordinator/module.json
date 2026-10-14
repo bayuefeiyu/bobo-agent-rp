@@ -34,7 +34,9 @@
     "workflows/pre-director-update/workflow.json",
     "workflows/prepare-private-context/workflow.json",
     "workflows/review-story-candidates/workflow.json",
-    "workflows/director-integrity-repair-entry/workflow.json"
+    "workflows/director-integrity-repair-entry/workflow.json",
+    "workflows/post-director-analysis/workflow.json",
+    "workflows/commit-post-director-update/workflow.json"
   ],
   "agentFiles": [
     "agents/world-narrative-daily-director/agent.json",

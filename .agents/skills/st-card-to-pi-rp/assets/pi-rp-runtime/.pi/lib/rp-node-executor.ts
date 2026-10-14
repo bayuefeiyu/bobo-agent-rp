@@ -1,6 +1,7 @@
 
 
 import * as promptControlsService from "./rp-prompt-controls.mjs";
+import { createReferenceService, installReferenceModelBudget, privateLibraryToolAllowed, referenceStatus } from "./rp-reference-library.mjs";
 
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -27,9 +28,11 @@ import { resolveWorkflowIdentity, workflowDataReadAccess } from "./rp-node-data-
 
 
 import { tokenUsageFromMessages } from "./rp-token-usage.mjs";
+import { agentSoftBudgetExtension, auxiliaryTaskScopePrompt } from "./rp-agent-soft-budget.mjs";
 import { ensureWorkflowWorkspace, workflowWorkspacePaths } from "./rp-workspace.mjs";
 import { capabilityAllows } from "./rp-data-contracts.mjs";
 import { createSessionDataStore } from "./rp-session-data-store.ts";
+import { projectTranscript } from "./rp-transcript-projection.mjs";
 import { getDataRecord, queryData } from "./rp-data-query.mjs";
 
 import { executeDataBatch } from "./rp-data-changes.mjs";
@@ -52,11 +55,13 @@ import type { WebMessage, RecordEnvelope, ActiveBridge, RpRun } from "./rp-host-
 import type { HostSessionScope } from "./rp-host-session-scope.ts";
 
 import { createControlNodeExecutor } from "./rp-node-control-executor.ts";
+import { executeCollaborationMember, executeCollaborationNode } from "./rp-team-collaboration-executor.ts";
+import { installCallRecorder } from "./rp-call-records.mjs";
 
 type Dependencies = {
   scope: HostSessionScope<ActiveBridge>;
   turn: { current: RpRun | null };
-  appendMessage: (message: WebMessage) => Promise<RecordEnvelope | undefined>;
+  appendMessage: (message: WebMessage, run?: any, nodeId?: string) => Promise<RecordEnvelope | undefined>;
   updateMetadata: () => Promise<void>;
   buildDynamicProcessorContext: (target: ActiveBridge, run: RpRun) => Promise<string>;
   rememberDataReceipt: (run: any, nodeId: string, receipt: any) => any;
@@ -68,6 +73,10 @@ const executeControlNode = createControlNodeExecutor({ scope, turn, appendMessag
 return async function executeWorkflowNode(task: any) {
     if (!scope.requireCurrent()?.recordId || !scope.requireChat().sessionDirectory) throw new Error("The workflow has no active RP chat.");
     const { workflow, run, node, agent, binding } = task;
+    if (task.teamMember?.collaboration) return executeCollaborationMember(task, scope.requireCurrent(), resolveConfiguredModel);
+    const dataStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules, executionId: run.executionId });
+    const provider = scope.requireCurrent().transcriptProvider;
+    const workflowMessages: RecordEnvelope[] = run.executionId ? projectTranscript((await dataStore.readCollection(provider.moduleId, provider.collectionId)).records, dataStore.module(provider.moduleId).contract, provider) : scope.requireCurrent().messages;
     const dataReadBatchIds = task.dataReadBatchIds || run.nodes?.[node.id]?.dataReadBatchIds || run.inheritedDataReadBatchIds || [];
     assertDocumentWorkspaceAgentTools(node, agent);
     const usesWorkspace = !task.teamMember && ["agent", "team", "code", "call"].includes(node.type);
@@ -75,10 +84,21 @@ return async function executeWorkflowNode(task: any) {
     const triggeredDocuments = usesWorkspace ? await stageTriggeredDocuments({ sessionDirectory: scope.requireChat().sessionDirectory, workflow, run, node }) : [];
     const upstreamHandoffs = usesWorkspace ? [...triggeredDocuments, ...await stageWorkspaceHandoffs({ sessionDirectory: scope.requireChat().sessionDirectory, workflow, run, node })] : [];
     if (upstreamHandoffs.length) await scope.requireCurrent().workflowEngine.addSourceReferences(run.id, upstreamHandoffs.map(artifactSourceReference));
-    if (node.type !== "agent") return executeControlNode(task, { callInputs, upstreamHandoffs, dataReadBatchIds });
+    const collaborationNode = node.type === "team" && node.team?.protocol === "collaboration";
+    if (node.type !== "agent" && !collaborationNode) return executeControlNode(task, { callInputs, upstreamHandoffs, dataReadBatchIds });
 
-    const { profile, model } = await resolveConfiguredModel(scope.requireCurrent(), binding.modelId, task.teamMember ? task.model : null);
-    if (!model) throw new Error("No model is available for this workflow node.");
+    if (workflow.ownerModuleId === "creative-reference-library" && node.metadata?.referenceScore === true && run.nodes.prepare?.output?.candidates?.length === 0) {
+      createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory);
+      const workspace = workflowNodeWorkspace(scope.requireChat().sessionDirectory, workflow.id, run.id, node.id);
+      const outputFile = resolve(workspace, node.outputs[node.delivery.primaryOutput].path);
+      await mkdir(dirname(outputFile), { recursive: true }); await writeFile(outputFile, JSON.stringify({ scores: [] }));
+      return { output: { scores: [] }, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }, assistantMessageId: null };
+    }
+
+    const { profile, model } = collaborationNode ? { profile: null, model: null } : await resolveConfiguredModel(scope.requireCurrent(), binding.modelId, task.teamMember ? task.model : null).catch((error: any) => {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "model_configuration_invalid" });
+    });
+    if (!model && !collaborationNode) throw Object.assign(new Error("No model is available for this Agent. Set its model on the model assignment page."), { code: "model_configuration_invalid" });
     const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(scope.requireChat().sessionDirectory, workflow.id, run.id, workflow.kind));
     const nodeWorkspace = node.metadata?.teamMemberWorkspace
       ? resolve(node.metadata.teamMemberWorkspace)
@@ -181,7 +201,7 @@ return async function executeWorkflowNode(task: any) {
         openingId: scope.requireCurrent().openingId,
         turn: run.turn,
         payload: structuredClone(run.payload),
-        messages: structuredClone(scope.requireCurrent().messages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? scope.requireCurrent()!.turn))),
+        messages: structuredClone(workflowMessages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? scope.requireCurrent()!.turn))),
         upstream: structuredClone(upstream),
       }));
       if (typeof result !== "string") throw new Error(`Workflow context processor ${node.context.processor} must return a string.`);
@@ -200,8 +220,23 @@ return async function executeWorkflowNode(task: any) {
     const legacyUpstreamArtifacts = node.metadata?.documentWorkspace === true
       ? ""
       : upstream.length || upstreamArtifactContent.length ? `Upstream node outputs and declared artifacts:\n${JSON.stringify({ outputs: upstream, artifacts: upstreamArtifactContent }, null, 2)}` : "";
+    if (collaborationNode) {
+      const selection = node.metadata?.initialContext || {};
+      const active = scope.requireCurrent();
+      const context = [
+        selection.cardFoundation ? renderCardText(active.stableCardContext, active.playerName, "fixed_context") : "",
+        selection.playerProfile ? playerProfileMessage(active.playerName, active.playerDescription) : "",
+        selection.recentNarrative ? recentNarrativeMessages(workflowMessages, run.turn, workflow.turnContext?.recentCompleteTurns || 5).map((message: any) => `[${message.role}]\n${message.content}`).join("\n\n") : "",
+        selection.currentInput ? `【玩家本轮输入】\n${run.payload?.currentInput || run.textInput || ""}` : "",
+        conciseWorkspaceIndex(workspaceDocuments, node.metadata?.documentWorkspace === true),
+        run.callContext ? "模块调用输入见 CALL-INPUTS.md。" : "",
+        legacyDynamicContext, legacyUpstreamArtifacts, customContext,
+      ].filter(Boolean).join("\n\n");
+      const sharedDocuments = [...workspaceDocuments];
+      for (const document of [...callInputs, ...upstreamHandoffs]) if (!sharedDocuments.some(entry => entry.path === document.path)) sharedDocuments.push(document);
+      return executeCollaborationNode(task, active, { nodeWorkspace, workspaceDocuments: sharedDocuments, context, assistantMessageId: turn.current?.assistantMessageId || null });
+    }
     const sdk: any = await import("@earendil-works/pi-coding-agent");
-    const dataStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
     let teamControl: any = null;
     // One recorder per node attempt: `requiredCalls` is checked against the calls this turn really
     // made, so a retrieval the workflow declared mandatory cannot silently degrade into a narrative
@@ -212,10 +247,26 @@ return async function executeWorkflowNode(task: any) {
     let workerSession: any = null;
     let delivery: any = null;
     let stageController: any = null;
+    const referenceAvailability = scope.requireCurrent().featureModules.some(module => module.externalResource) ? await referenceStatus() : { ready: false, semanticReady: false, status: "library_unbound" };
+    const referenceReady = referenceAvailability.ready;
+    const referenceCallReady = (target: string) => target === "creative-reference-library/search-passages" ? referenceAvailability.semanticReady === true : referenceReady;
+    if (requiredCalls.some(target => target.startsWith("creative-reference-library/") && !referenceCallReady(target))) throw Object.assign(new Error("Required reference retrieval capability is unavailable."), { code: "capability_unavailable" });
     const nodeToolFactory = {
       name: "rp-node-tools",
       hidden: true,
       factory(workerPi: any) {
+        if (node.runtimeServices?.includes("referenceLibrary")) {
+          const reference = createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory);
+          if (agent?.tools?.includes("rp_reference") && node.metadata?.referenceScore !== true) workerPi.registerTool({
+            name: "rp_reference", label: "Search creative references",
+            description: "Search a bounded candidate list with broad text/keywords, or read a discovered candidate by ID. Materials provide creative reference only. No source paths or full catalog are exposed.",
+            parameters: Type.Object({ operation: Type.Union([Type.Literal("search"), Type.Literal("read"), Type.Literal("selected")]), text: Type.Optional(Type.String()), keywords: Type.Optional(Type.Array(Type.String())), fields: Type.Optional(Type.Array(Type.Union([Type.Literal("title"), Type.Literal("terms"), Type.Literal("summary"), Type.Literal("body")]))), id: Type.Optional(Type.String()), kind: Type.Optional(Type.Union([Type.Literal("unit"), Type.Literal("passage")])) }, { additionalProperties: false }),
+            async execute(_id: string, value: any) {
+              const result = value.operation === "selected" ? await reference.selectedReferences() : value.operation === "read" ? await reference.readReference({ kind: value.kind || "unit", id: value.id }) : await reference.search({ text: value.text || "", keywords: value.keywords || [], ...(value.fields ? { fields: value.fields } : {}) });
+              return { content: [{ type: "text", text: JSON.stringify(result) }] };
+            },
+          });
+        }
         if (delivery) {
           registerAgentDeliveryTools(workerPi, delivery, { currentMessages: () => workerSession?.messages || [] }, Type);
           registerTaskStageTool(workerPi, stageController, {
@@ -288,6 +339,7 @@ return async function executeWorkflowNode(task: any) {
           const [moduleId] = callBinding.target.split("/");
           const target = scope.requireCurrent().featureModules.find(module => module.id === moduleId)?.workflows.find(candidate => canonicalWorkflowRef(candidate) === callBinding.target);
           if (!target) return null;
+          if (moduleId === "creative-reference-library" && !referenceCallReady(callBinding.target)) return null;
           return {
             workflow: callBinding.target,
             inputs: target?.interface?.inputs || {},
@@ -336,10 +388,11 @@ return async function executeWorkflowNode(task: any) {
               // result the model sees still carries the failure, but the node must not be treated as
               // having retrieved the material.
               calledTargets.add(request.workflow);
+              const referenceOutput = scope.requireCurrent().featureModules.find(module => module.id === request.workflow.split("/")[0])?.externalResource === "creative-reference-library/v1";
               for (const [id, path] of Object.entries(result.outputs || {})) {
                 if (typeof path !== "string") continue;
                 if (delivery) await delivery.protect(path);
-                dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: `Declared output ${id} from ${request.workflow}.` });
+                dynamicCallOutputs.push({ id: `call.${request.workflow}.${id}`, path, readPolicy: "conditional", authority: referenceOutput ? "advisory" : "canonical", appliesAt: "planning-and-writing", perspective: "general", priority: 0, description: referenceOutput ? "Creative reference material; use and adaptation are optional, not established story facts." : `Declared output ${id} from ${request.workflow}.` });
               }
               return { content: [{ type: "text", text: JSON.stringify(result.outputs, null, 2) }], details: result };
             } catch (error) {
@@ -413,12 +466,13 @@ return async function executeWorkflowNode(task: any) {
     };
     const permittedBuiltins = new Set(["read", "write", "edit", "bash"]);
     const permittedDataTools = new Set(["rp_data_query", "rp_data_get", "rp_data_resolve", "rp_data_submit"]);
-    const permittedRuntimeTools = new Set(["rp_roll"]);
+    const permittedRuntimeTools = new Set(["rp_roll", ...(node.runtimeServices?.includes("referenceLibrary") && node.metadata?.referenceScore !== true ? ["rp_reference"] : [])]);
     const tools = node.metadata?.teamMember === true
       ? ["rp_team_read", ...(task.teamMember?.member?.role === "leader" && task.teamMember?.phase === "discussion" ? ["rp_team_control"] : [])]
       : [...new Set(["read", "write", "edit", "rp_files", "rp_deliver", "rp_task_next", "rp_node_complete", ...(agent?.tools || []).filter((name: string) => permittedBuiltins.has(name) || permittedRuntimeTools.has(name) || (node.moduleAccess?.length && permittedDataTools.has(name)))])];
     const hasResolvedWorkflowCall = node.workflowCalls?.some((binding: any) => {
       const [moduleId] = binding.target.split("/");
+      if (moduleId === "creative-reference-library" && !referenceCallReady(binding.target)) return false;
       return scope.requireCurrent().featureModules.find(module => module.id === moduleId)?.workflows.some(candidate => canonicalWorkflowRef(candidate) === binding.target);
     });
     if (hasResolvedWorkflowCall) tools.push("rp_call");
@@ -448,6 +502,14 @@ return async function executeWorkflowNode(task: any) {
       workspace: nodeWorkspace, node, agent,
       inputPaths: [...workspaceDocuments.map(document => document.path), ...upstreamHandoffs.map((artifact: any) => artifact.stagedPath)],
       beforeComplete: async () => {
+        if (node.metadata?.referenceScore === true) {
+          const reference = createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory);
+          await reference.orderScores(JSON.parse(await readFile(resolve(nodeWorkspace, node.outputs[node.delivery.primaryOutput].path), "utf8")), run.nodes.prepare.output.candidates);
+        } else if (node.runtimeServices?.includes("referenceLibrary")) {
+          const reference = createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory);
+          const selection = JSON.parse(await readFile(resolve(nodeWorkspace, node.outputs[node.delivery.primaryOutput].path), "utf8"));
+          if (selection.items) await reference.validateReferences(selection.items); else await reference.validateSelection(selection.ids);
+        }
         stageController.assertExhausted();
         const missing = requiredCalls.filter(target => !calledTargets.has(target));
         if (missing.length) throw Object.assign(new Error(`Required workflow calls have not succeeded: ${missing.join(", ")}.`), { code: "required_call_missing" });
@@ -461,7 +523,7 @@ return async function executeWorkflowNode(task: any) {
       ? [{ role: contextSelection.playerProfileRole || promptSources.roles.playerProfileRole || "user", content: playerProfileMessage(scope.requireCurrent().playerName, scope.requireCurrent().playerDescription) }]
       : [];
     const historyMessages = contextSelection.recentNarrative === true && Number.isSafeInteger(run.turn)
-      ? recentNarrativeMessages(scope.requireCurrent().messages, run.turn, workflow.turnContext?.recentCompleteTurns || 5, "【前情截断】更早的对话未直接提供；需要时按当前任务允许的方式查询。")
+      ? recentNarrativeMessages(workflowMessages, run.turn, workflow.turnContext?.recentCompleteTurns || 5, "【前情截断】更早的对话未直接提供；需要时按当前任务允许的方式查询。")
       : [];
     const input = contextSelection.currentInput === true
       ? (typeof run.payload?.currentInput === "string" ? run.payload.currentInput : typeof run.textInput === "string" ? run.textInput : "")
@@ -476,12 +538,14 @@ return async function executeWorkflowNode(task: any) {
     const assembled = assembleInitialContext({
       baseSystem: promptSources.baseSystem,
       prefix: promptSources.prefix,
+      prefixGroups: promptSources.prefixGroups,
       agent: promptSources.agent,
       card: cardMessages,
       player: playerMessages,
       history: historyMessages,
       current,
       tail: tailAtStart,
+      tailGroups: promptSources.tailMode==="on-start"?promptSources.tailGroups:[],
     });
     if (assembled.messages.at(-1)?.role !== "user") throw new Error(`Node ${node.id} ends in an assistant message; assistant prefill is not verified for this Pi/model path.`);
     const finalUserMessage = assembled.messages.at(-1).content;
@@ -496,12 +560,13 @@ return async function executeWorkflowNode(task: any) {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
-      systemPrompt: [assembled.systemPrompt, delivery ? deliveryPrompt(delivery.contract) : ""].filter(Boolean).join("\n\n"),
-      extensionFactories: [nodeToolFactory, {
+      systemPrompt: [assembled.systemPrompt, workflow.kind !== "foreground" ? auxiliaryTaskScopePrompt : "", delivery ? deliveryPrompt(delivery.contract) : ""].filter(Boolean).join("\n\n"),
+      extensionFactories: [...agentSoftBudgetExtension(node, workflow, task.isForegroundWaiting), nodeToolFactory, {
         name: "rp-workspace-file-boundary",
         hidden: true,
         factory(workerPi: any) {
           workerPi.on("tool_call", async (event: any) => {
+            if (!await privateLibraryToolAllowed(nodeWorkspace, event.toolName, event.input, [resolve(scope.requireChat().sessionDirectory, "reference-library-requests")])) return { block: true, reason: "Private reference libraries are available only through authorized retrieval tools." };
             if (!["read", "write", "edit"].includes(event.toolName)) return;
             if (await promptSourcePathAllowed(nodeWorkspace, event.input?.path, [resolve(scope.requireCurrent().context.cwd, "prompts"), resolve(scope.requireCurrent().cardDirectory, "prompts"), ...scope.requireCurrent().featureModules.map(module => module.moduleDirectory), resolve(nodeWorkspace, ".rp-delivery")])) return;
             return { block: true, reason: "Prompt source files are not available to this Agent node." };
@@ -544,7 +609,10 @@ return async function executeWorkflowNode(task: any) {
       settingsManager,
     });
     workerSession = session;
+    const reference = node.runtimeServices?.includes("referenceLibrary") ? createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory) : null;
+    const referenceBudget = reference ? installReferenceModelBudget(session.agent, () => reference.chargeModel(run.nodes.prepare.output, node.metadata?.referenceScore === true)) : null;
     const usageMessageStart = session.messages.length;
+    const callRecorder = installCallRecorder(session, { sessionDirectory: scope.requireChat().sessionDirectory, run, node, binding, agentId: agent?.id || binding.agentId, memberId: task.teamMember?.memberId || task.teamMember?.member?.id || task.teamMember?.role || null });
     const teamSessionCheckpoint = teamSessionDirectory ? checkpointTeamSessionAttempt(sessionManager) : null;
     try {
       const userPrompt = finalUserMessage;
@@ -608,7 +676,8 @@ return async function executeWorkflowNode(task: any) {
         },
       };
     } catch (error) {
-      const wrapped = error instanceof Error ? error : new Error(String(error));
+      const wrapped = referenceBudget?.error || (error instanceof Error ? error : new Error(String(error)));
+      await callRecorder.finish(wrapped);
       if (delivery?.completed) (wrapped as any).code = "agent_delivery_finalize_failed";
       (wrapped as any).usage = tokenUsageFromMessages(session.messages.slice(usageMessageStart));
       if (teamSessionCheckpoint) {
@@ -629,6 +698,7 @@ return async function executeWorkflowNode(task: any) {
       }
       throw wrapped;
     } finally {
+      await callRecorder.finish();
       session.dispose();
     }
   };

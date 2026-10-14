@@ -9,6 +9,7 @@
       "type": "object",
       "required": [
         "protagonist-treatment",
+        "input-review",
         "other-requirements"
       ],
       "additionalProperties": false,
@@ -47,6 +48,28 @@
             "optionId": {
               "enum": [
                 "default",
+                "custom"
+              ]
+            },
+            "customText": {
+              "type": "string",
+              "maxLength": 50000
+            }
+          }
+        },
+        "input-review": {
+          "type": "object",
+          "required": [
+            "optionId",
+            "customText"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "optionId": {
+              "enum": [
+                "off",
+                "reasonable",
+                "strict",
                 "custom"
               ]
             },

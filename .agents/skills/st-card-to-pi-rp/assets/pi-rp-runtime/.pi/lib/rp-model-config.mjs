@@ -64,13 +64,15 @@ export function normalizeAgentProfile(value) {
     tools,
     contextPermissions: permissions,
     outputMode: input.outputMode === "json" ? "json" : "text",
-    defaultModelId: typeof input.defaultModelId === "string" && input.defaultModelId.trim() ? input.defaultModelId.trim() : "pi:current",
+    defaultModelId: typeof input.defaultModelId === "string" && input.defaultModelId.trim() ? input.defaultModelId.trim() : null,
   };
 }
 
-export function resolveNodeProfiles({ node, workflow, agent }) {
+export function resolveNodeProfiles({ node, workflow, agent, modelOverride = null }) {
   const agentId = node.agentId || workflow.defaults?.agentId || agent?.id || null;
-  const modelId = node.modelId || workflow.defaults?.modelId || agent?.defaultModelId || "pi:current";
+  // Persistent model assignments belong to Agents. Only a run-local retry or frozen
+  // member binding may override them; legacy workflow/node/member fields are ignored.
+  const modelId = modelOverride || agent?.defaultModelId || null;
   return { agentId, modelId };
 }
 

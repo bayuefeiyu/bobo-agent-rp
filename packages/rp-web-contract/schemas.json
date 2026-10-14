@@ -1,0 +1,351 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "NullableId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "JsonObject": {
+      "type": "object"
+    },
+    "Version": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ReadContext": {
+      "type": "object",
+      "required": [
+        "serverInstanceId",
+        "cardId",
+        "chatId",
+        "executionId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "serverInstanceId": {
+          "$ref": "#/$defs/Id"
+        },
+        "cardId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "chatId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "executionId": {
+          "$ref": "#/$defs/NullableId"
+        }
+      }
+    },
+    "Connection": {
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "hostVersion",
+        "serverInstanceId",
+        "mode",
+        "readContext",
+        "capabilities",
+        "resources",
+        "authentication"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "$ref": "#/$defs/Version"
+        },
+        "hostVersion": {
+          "$ref": "#/$defs/Version"
+        },
+        "serverInstanceId": {
+          "$ref": "#/$defs/Id"
+        },
+        "mode": {
+          "enum": [
+            "play",
+            "development",
+            "launcher"
+          ]
+        },
+        "readContext": {
+          "$ref": "#/$defs/ReadContext"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resources": {
+          "$ref": "#/$defs/JsonObject"
+        },
+        "authentication": {
+          "$ref": "#/$defs/JsonObject"
+        }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "details"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {}
+      }
+    },
+    "Message": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "role",
+        "content"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "turn": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/Id"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "narrativeSource": {
+          "$ref": "#/$defs/JsonObject"
+        }
+      }
+    },
+    "State": {
+      "type": "object",
+      "required": [
+        "messages",
+        "busy"
+      ],
+      "properties": {
+        "cardId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "openingId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "playerName": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "displayExecutionId": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "currentTurn": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "narrativeAttempts": {
+          "$ref": "#/$defs/JsonObject"
+        },
+        "blockingWorkflows": {
+          "type": "array"
+        },
+        "lastTurnFailure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "InputRequest": {
+      "type": "object",
+      "required": [
+        "content",
+        "operationId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "RevisionRequest": {
+      "type": "object",
+      "required": [
+        "content",
+        "operationId",
+        "expectedRevision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "SettingsRequest": {
+      "type": "object",
+      "required": [
+        "values",
+        "expectedRevision",
+        "operationId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "values": {
+          "$ref": "#/$defs/JsonObject"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "operationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "expectedSessionId": {
+          "$ref": "#/$defs/NullableId"
+        }
+      }
+    },
+    "AdoptRequest": {
+      "type": "object",
+      "required": [
+        "expectedRevision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array"
+        },
+        "cursor": {
+          "$ref": "#/$defs/NullableId"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "LaunchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cardId"
+      ],
+      "properties": {
+        "cardId": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    }
+  }
+}

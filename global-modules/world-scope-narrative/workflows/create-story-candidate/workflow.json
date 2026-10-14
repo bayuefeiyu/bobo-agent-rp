@@ -44,7 +44,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-scope-narrative/world-narrative-writer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }

@@ -1,3 +1,4 @@
+import { resourceUrl } from "./app-context.js";
 // 生图交互面板（实施方案 §11 第 6 条：按职责提取的原生模块之一）。
 //
 // 负责：生图偏好、运行参数表单、生图执行、图片查看器、内容提示词查看，以及 ComfyUI 连接表单
@@ -8,7 +9,7 @@ import { appendModuleEmpty, elements, request, showError, state } from "./app-co
 export async function saveImagePreferences(next) {
   const current = state.imageGeneration?.preferences?.data || { selectedProfileIds: [], quickMode: false, inputPolicy: { kind: "recent-turns", turnCount: 3, target: "latest" } };
   const payload = { ...current, ...next };
-  await request("/api/image-generation/preferences", { method: "PUT", body: JSON.stringify(payload) });
+  await request("/api/v1/image-generation/preferences", { method: "PUT", body: JSON.stringify(payload) });
   state.imageGeneration.preferences = { ...(state.imageGeneration.preferences || {}), data: payload };
 }
 
@@ -42,7 +43,7 @@ export async function startImageRun(custom = false) {
   const payload = imageRunPayload(custom);
   if (!payload.profileIds.length) throw new Error("请至少选择一个已适配工作流。");
   if (custom && payload.inputPolicy?.kind === "recent-turns") await saveImagePreferences({ inputPolicy: payload.inputPolicy });
-  await request("/api/image-generation/run", { method: "POST", body: JSON.stringify(payload) });
+  await request("/api/v1/image-generation/run", { method: "POST", body: JSON.stringify(payload) });
   elements.imageUserDirection.value = "";
   if (custom) elements.imageRunDialog.close();
 }
@@ -74,29 +75,37 @@ export function openImagePrompt(render) {
 }
 
 export function loadComfyConnectionForm() {
-  const connection = state.imageGeneration?.connections?.find(item => item.id === elements.comfyConnectionSelect.value);
-  if (!connection) return;
+  const connection = state.comfyConnections?.find(item => item.id === elements.comfyConnectionSelect.value);
+  state.comfyConnectionDirty = false;
+  if (!connection) {
+    elements.comfyConnectionId.value = ""; elements.comfyConnectionTitle.value = "";
+    elements.comfyConnectionUrl.value = "http://127.0.0.1:8188"; elements.comfyConnectionToken.value = "";
+    elements.comfyOutputPath.value = ""; elements.comfyInsecureRemote.checked = false;
+    return;
+  }
   elements.comfyConnectionId.value = connection.id;
   elements.comfyConnectionTitle.value = connection.title;
   elements.comfyConnectionUrl.value = connection.baseUrl;
   elements.comfyConnectionToken.value = "";
+  elements.comfyConnectionToken.placeholder = connection.hasToken ? "已保存凭据；留空继续使用" : "访问令牌（可选）";
   elements.comfyOutputPath.value = connection.outputDirectoryPath || "";
   elements.comfyInsecureRemote.checked = connection.allowInsecureRemote === true;
 }
 
 export function renderComfySettings() {
   const payload = state.imageGeneration;
-  const connections = payload?.connections || [];
-  const selected = elements.comfyConnectionSelect.value || connections[0]?.id || "local";
+  const connections = state.comfyConnections || [];
+  const selected = elements.comfyConnectionSelect.value || connections.find(item => item.selected)?.id || connections[0]?.id || "";
   elements.comfyConnectionSelect.replaceChildren(...connections.map(item => new Option(`${item.title}${item.hasToken ? " · 已保存凭据" : ""}`, item.id)));
   if (connections.some(item => item.id === selected)) elements.comfyConnectionSelect.value = selected;
-  loadComfyConnectionForm();
+  if (!state.comfyConnectionDirty) loadComfyConnectionForm();
+  elements.comfyRemoveConnection.disabled = !connections.some(item => item.id === elements.comfyConnectionSelect.value) || state.snapshot?.previewMode === true;
   const fragment = document.createDocumentFragment();
   for (const profile of payload?.profiles || []) {
     const row = document.createElement("div"); row.className = "comfy-profile-document"; const name = document.createElement("strong"); name.textContent = `${profile.title}${profile.overrideStale ? " · 覆盖已过期" : ""}`; row.append(name);
     for (const [target, label] of [["profile", "固定提示词"], ["workflow", "API 工作流"], ["guide", "模型指导"]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = "module-file-button"; button.textContent = label;
-      button.addEventListener("click", () => request(`/api/image-generation/profiles/${encodeURIComponent(profile.id)}/open`, { method: "POST", body: JSON.stringify({ target }) }).catch(showError)); row.append(button);
+      button.addEventListener("click", () => request(`/api/v1/image-generation/profiles/${encodeURIComponent(profile.id)}/open`, { method: "POST", body: JSON.stringify({ target }) }).catch(showError)); row.append(button);
     }
     fragment.append(row);
   }
@@ -104,10 +113,32 @@ export function renderComfySettings() {
   elements.comfyProfileDocuments.replaceChildren(fragment);
 }
 
-export async function renderImageGenerationRegion(section) {
+export async function refreshComfyConnections(expectedConnection = null) {
+  const retry = document.querySelector("#comfy-reload-connections");
+  try {
+    const payload = await request("/api/v1/image-generation/connections");
+    if (expectedConnection?.id) {
+      const persisted = payload.connections.find(item => item.id === expectedConnection.id);
+      if (!persisted || ["id", "title", "baseUrl", "outputDirectoryPath", "allowInsecureRemote", "hasToken"].some(key => persisted[key] !== expectedConnection[key])) throw new Error("重新读取的连接与保存结果不一致，请重试确认。");
+    }
+    state.comfyConnections = payload.connections;
+    renderComfySettings();
+    retry.hidden = true;
+    if (state.comfyConnectionsReadError) elements.comfyConnectionStatus.textContent = "连接配置已读取。";
+    state.comfyConnectionsReadError = false;
+    return true;
+  } catch (error) {
+    state.comfyConnectionsReadError = true;
+    elements.comfyConnectionStatus.textContent = `连接配置读取失败：${error.message}`;
+    retry.hidden = false;
+    return false;
+  }
+}
+
+export async function renderImageGenerationRegion(section, mode = null) {
   state.imageGenerationRegion = section;
   let payload;
-  try { payload = await request("/api/image-generation"); }
+  try { payload = await request("/api/v1/image-generation"); }
   catch (error) { appendModuleEmpty(section, error.message); return; }
   if (state.imageGenerationRegion !== section) return;
   state.imageGeneration = payload;
@@ -122,7 +153,8 @@ export async function renderImageGenerationRegion(section) {
       const selected = new Set(preferences.selectedProfileIds); if (checkbox.checked) selected.add(profile.id); else selected.delete(profile.id);
       preferences.selectedProfileIds = [...selected]; try { await saveImagePreferences({ selectedProfileIds: preferences.selectedProfileIds }); } catch (error) { showError(error); }
     });
-    label.append(checkbox, document.createTextNode(profile.title)); profiles.append(label);
+    checkbox.disabled = profile.connectionMissing === true;
+    label.append(checkbox, document.createTextNode(profile.title + (profile.connectionMissing ? " · 连接已移除" : ""))); profiles.append(label);
   }
   if (!(payload.profiles || []).length) appendModuleEmpty(profiles, "没有已适配工作流。请在项目根目录运行 adapt-comfyui-workflow。");
   const quickLabel = document.createElement("label"); quickLabel.className = "image-quick-toggle"; const quick = document.createElement("input"); quick.type = "checkbox"; quick.checked = preferences.quickMode === true;
@@ -135,7 +167,7 @@ export async function renderImageGenerationRegion(section) {
   actions.append(generate, customize); controls.append(profiles, quickLabel, actions);
   const gallery = document.createElement("div"); gallery.className = "image-gallery";
   const displayRenders = [...(payload.renders || [])].reverse();
-  const viewerItems = displayRenders.filter(render => render.data.outputs?.[0]).map(render => `/api/image-generation/renders/${encodeURIComponent(render.id)}/images/0`);
+  const viewerItems = displayRenders.filter(render => render.data.outputs?.[0]).map(render => resourceUrl(`/api/v1/image-generation/renders/${encodeURIComponent(render.id)}/images/0`));
   const summarizedRequests = new Set();
   for (const render of displayRenders) {
     if (!summarizedRequests.has(render.data.requestId)) {
@@ -159,7 +191,7 @@ export async function renderImageGenerationRegion(section) {
     const output = render.data.outputs?.[0];
     if (output) {
       const figure = document.createElement("button"); figure.type = "button"; figure.className = "image-thumbnail-button";
-      const image = document.createElement("img"); image.loading = "lazy"; image.alt = `${render.data.profileId} 生成图`; const original = `/api/image-generation/renders/${encodeURIComponent(render.id)}/images/0`; image.src = `${original}?preview=webp;80`;
+      const image = document.createElement("img"); image.loading = "lazy"; image.alt = `${render.data.profileId} 生成图`; const original = `/api/v1/image-generation/renders/${encodeURIComponent(render.id)}/images/0`; image.src = resourceUrl(`${original}?preview=webp;80`);
       image.addEventListener("error", () => { figure.replaceChildren(Object.assign(document.createElement("span"), { textContent: "源文件找不到；提示词仍可重新生成" })); });
       figure.append(image); figure.addEventListener("click", () => openImageViewer(viewerItems, viewerItems.indexOf(original))); card.append(figure);
     } else { const status = document.createElement("p"); status.className = "image-card-status"; status.textContent = render.data.error || (render.data.state === "pending" ? "等待生成" : "暂时没有图片输出"); card.append(status); }
@@ -169,7 +201,7 @@ export async function renderImageGenerationRegion(section) {
       recover.addEventListener("click", async () => {
         try {
           recover.disabled = true;
-          await request(`/api/image-generation/requests/${encodeURIComponent(render.data.requestId)}/recover`, { method: "POST" });
+          await request(`/api/v1/image-generation/requests/${encodeURIComponent(render.data.requestId)}/recover`, { method: "POST" });
           await renderImageGenerationRegion(section);
         } catch (error) { recover.disabled = false; showError(error); }
       });
@@ -178,5 +210,6 @@ export async function renderImageGenerationRegion(section) {
     gallery.append(card);
   }
   if (!gallery.children.length) appendModuleEmpty(gallery, "当前聊天还没有生图记录。");
-  section.replaceChildren(controls, gallery);
+  section.replaceChildren(...(mode === "controls" ? [controls] : mode === "gallery" ? [gallery] : [controls, gallery]));
+  section.refreshRegion = () => renderImageGenerationRegion(section, mode);
 }

@@ -9,6 +9,8 @@ When writing author-facing text for a module, use the card conversion name rules
 
 Run this development Skill from the repository root. Package the requested function as module v7 (`data`, `resource`, or `hybrid`) with explicitly registered Agent profiles and owned Workflow v4 definitions. Use data-contract v1 only for data/hybrid ownership; never invent a collection for static authored resources.
 
+The approved `creative-reference-library` external user resource uses module v8: the exact v7 fields plus `externalResource: "creative-reference-library/v1"`, no resource catalog or data contract, background surface, and the narrowly owned `referenceLibrary` runtime service. Keep existing module v7 behavior. See [external user resource protocol](../design-pi-rp-data/references/protocol.md#external-user-resources-module-v8).
+
 Always follow the repository development-scope boundary and read [references/module-schema.md](references/module-schema.md). For data/hybrid modules, also read [../design-pi-rp-data/SKILL.md](../design-pi-rp-data/SKILL.md) completely. Read [references/module-workflows.md](references/module-workflows.md) whenever the module owns workflows. For embedded deterministic prompt logic, also read [references/context-processors.md](references/context-processors.md).
 
 ## Target boundary
@@ -35,6 +37,8 @@ Offer to discuss only meaningful choices. Do not edit until the user confirms th
 
 ## Design and packaging rules
 
+Design new execution and archive behavior using [the shared execution protocol](../design-pi-rp-data/references/workflow-executions.md): use complete workflows, inherited authorized input versions, common persistent data, and explicit historical-write exceptions. Independent user preferences may opt into collection `executionScope: "session"`; story results stay attempt-scoped. Recommend previous-turn-end scheduling for events/state that affect the next narrative. New-execution capability does not imply a frontend button.
+
 When discussing a numbered proposal item with several paths, label them `A`, `B`, `C` and so on; put the recommended path at `A` when practical, explain why, and say whether paths can be combined. Accept concise replies such as `2A+C`, retain earlier decisions, and relabel a changed choice set before asking again. Do not force a recommendation or add a decision merely for formatting.
 
 - Use the data-design Skill's protocol and modeling rules rather than recreating them here. Stable authored lore, rules, guidance, style, format, and references may use a resource catalog; mutable session authority uses collections.
@@ -45,7 +49,7 @@ When discussing a numbered proposal item with several paths, label them `A`, `B`
 - Durable queryable results go to module collections. Intermediate files use declared workflow outputs and scopes; process records remain user-only.
 - Every Agent, workflow, node, code entry file, and prompt is owned by a module. Register every Agent and complete Workflow in `module.json.agentFiles` and `module.json.workflowFiles`. Workflow v4 entry kinds (`foreground`, `turn-background`, and `global-background`) are module-owned entry points: they may declare triggers and need not end in `workflow-return`. `module-external` and `module-internal` workflows are callable module workflows: they have no trigger and end in exactly one `workflow-return`. Runtime references use normalized `module-id/local-id` forms; top-level integration uses synchronous `call` nodes instead of graph splicing.
 - A module that affects creative work exposes the required material as declared workflow file or directory exports. Classify its integration as pre-creative, post-creative, memory-backed, or a combination; specify ordering, triggers, durable ownership, and the explicit workflow that materializes cross-turn content. Do not rely on a top-level trigger or retained workspace to inject files into a later turn automatically.
-- For every Agent node, list only the exact module workflows it may call. Set a target's `agentCallable` deliberately. If an Agent can call a `module-internal` workflow, explicitly warn the creator during design that successful authority changes or external effects survive a later parent/正文 failure; keep that warning out of the RP Agent's runtime prompt.
+- For every Agent node, list only the exact module workflows it may call. Set a target's `agentCallable` deliberately. Explain to the creator that authority changes remain in the parent execution branch until selection, while external effects cannot be rolled back after parent/正文 failure.
 
 ## Build and verify
 

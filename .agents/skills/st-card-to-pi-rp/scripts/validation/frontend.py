@@ -15,23 +15,64 @@ from typing import Any
 from .authoring import component_ref, validate_director_prompt
 from .filesystem import require_file, safe_relative_path
 
-def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, errors: list[str]) -> None:
-    if not isinstance(view, dict) or set(view) != {"schemaVersion", "regions"} or view.get("schemaVersion") not in {1, 2} or not isinstance(view.get("regions"), list):
-        errors.append(f"{label} must contain schemaVersion 1 or 2 and a regions array")
+BINDING_RENDERERS = {
+    "records": "record-browser", "stories": "story-browser", "settings": "settings-form",
+    "prompts": "prompt-controls", "workflows": "workflow-controls", "integrity": "integrity-alerts",
+    "images": "image-generation",
+}
+
+def frontend_binding_declarations(view: Any) -> list[dict[str, Any]]:
+    if not isinstance(view, dict) or view.get("schemaVersion") != 3 or not isinstance(view.get("bindings"), list):
+        return []
+    return [dict(binding, type=BINDING_RENDERERS.get(binding.get("kind")), title=binding.get("id")) for binding in view["bindings"] if isinstance(binding, dict) and isinstance(binding.get("kind"), str)]
+
+def validate_frontend_view_v3(view: Any, contract: dict[str, Any], label: str, errors: list[str]) -> None:
+    if not isinstance(view, dict) or set(view) != {"schemaVersion", "bindings", "regions"} or view.get("schemaVersion") != 3 or not isinstance(view.get("regions"), list) or not isinstance(view.get("bindings"), list):
+        errors.append(f"{label} must contain schemaVersion 3 with bindings and regions arrays")
         return
-    if view["schemaVersion"] == 1:
-        return
-    interactive = {"record-browser", "story-browser", "settings-form", "prompt-controls", "workflow-controls", "integrity-alerts"}
-    legacy = {"text", "markdown", "json", "key-value", "list", "table", "image-generation"}
+    allowed = {
+        "records": {"collectionId", "recordTypes", "view", "readCapability", "pageSize", "maxCharacters", "filters", "includeInactive", "empty"},
+        "stories": {"collectionId", "recordTypes", "indexView", "fullView", "readCapability", "pageSize", "indexMaxCharacters", "fullMaxCharacters", "allowSeriesGrouping", "allowOpenAuthoritySource", "empty"},
+        "settings": {"collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "fields", "submitLabel"},
+        "prompts": {"collectionId", "recordType", "recordId", "view", "readCapability", "updateCapability", "controlsFile"},
+        "workflows": {"workflows"}, "integrity": {"coverage", "action", "empty"}, "images": set(),
+    }
+    binding_ids = set()
+    for binding in view["bindings"]:
+        if not isinstance(binding, dict) or not isinstance(binding.get("kind"), str) or binding.get("kind") not in allowed or not {"id", "kind"}.issubset(binding) or set(binding) - allowed.get(binding.get("kind"), set()) - {"id", "kind"}:
+            errors.append(f"{label} contains an invalid binding field set")
+            continue
+        if not isinstance(binding.get("id"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", binding["id"]) or binding["id"] in binding_ids:
+            errors.append(f"{label} has an invalid or duplicate binding ID")
+        else:
+            binding_ids.add(binding["id"])
+    region_ids = set()
+    for region in view["regions"]:
+        if not isinstance(region, dict) or not {"id", "bindingId", "type", "title"}.issubset(region) or set(region) - {"id", "bindingId", "type", "title", "description", "spoiler", "optional"}:
+            errors.append(f"{label} contains an invalid renderer region")
+            continue
+        if not isinstance(region["id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", region["id"]) or region["id"] in region_ids:
+            errors.append(f"{label} has an invalid or duplicate region ID")
+        else:
+            region_ids.add(region["id"])
+        binding = next((item for item in view["bindings"] if isinstance(item, dict) and item.get("id") == region["bindingId"]), None)
+        known_renderer = region["type"] in BINDING_RENDERERS.values()
+        if binding is None or not isinstance(binding.get("kind"), str) or (known_renderer and BINDING_RENDERERS.get(binding.get("kind")) != region["type"]) or (not known_renderer and region.get("optional") is not True):
+            errors.append(f"{label} renderer references an undeclared or incompatible binding")
+        if not isinstance(region["type"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", region["type"]) or ("optional" in region and not isinstance(region["optional"], bool)):
+            errors.append(f"{label} renderer type or optional flag is invalid")
+        if not isinstance(region["title"], str) or not region["title"].strip():
+            errors.append(f"{label} renderer title is required")
+    declarations = frontend_binding_declarations(view)
     seen: set[str] = set()
     collections = contract.get("collections", {})
     capabilities = contract.get("capabilities", {})
-    for index, region in enumerate(view["regions"]):
+    for index, region in enumerate(declarations):
         region_label = f"{label}.regions[{index}]"
-        if not isinstance(region, dict) or region.get("type") not in interactive | legacy:
+        if not isinstance(region, dict) or region.get("type") not in set(BINDING_RENDERERS.values()):
             errors.append(f"{region_label} has an unsupported type")
             continue
-        if region.get("type") not in interactive:
+        if region.get("type") == "image-generation":
             continue
         region_id = region.get("id")
         if not isinstance(region_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", region_id) or region_id in seen:
@@ -49,7 +90,7 @@ def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, e
             continue
         if region.get("type") == "integrity-alerts":
             action = region.get("action")
-            if not isinstance(action, dict) or not all(isinstance(action.get(key), str) for key in ("workflowRegionId", "workflowId", "startTurnParameter", "endTurnParameter")):
+            if not isinstance(action, dict) or not all(isinstance(action.get(key), str) for key in ("workflowBindingId", "workflowId", "startTurnParameter", "endTurnParameter")):
                 errors.append(f"{region_label}.action is invalid")
             coverage = region.get("coverage")
             if coverage is not None:
@@ -125,12 +166,12 @@ def validate_frontend_view_v2(view: Any, contract: dict[str, Any], label: str, e
                     errors.append(f"{region_label} requires recordId and a safe controlsFile")
             elif not isinstance(region.get("recordId"), str) or not isinstance(region.get("fields"), list) or not region["fields"]:
                 errors.append(f"{region_label} requires recordId and editable fields")
-    workflow_regions = {region.get("id"): region for region in view["regions"] if isinstance(region, dict) and region.get("type") == "workflow-controls"}
-    for index, region in enumerate(view["regions"]):
+    workflow_regions = {region.get("id"): region for region in declarations if isinstance(region, dict) and region.get("type") == "workflow-controls"}
+    for index, region in enumerate(declarations):
         if not isinstance(region, dict) or region.get("type") != "integrity-alerts" or not isinstance(region.get("action"), dict):
             continue
         action = region["action"]
-        workflow_region = workflow_regions.get(action.get("workflowRegionId"))
+        workflow_region = workflow_regions.get(action.get("workflowBindingId"))
         workflow = next((item for item in workflow_region.get("workflows", []) if isinstance(item, dict) and item.get("id") == action.get("workflowId")), None) if workflow_region else None
         if workflow is None:
             errors.append(f"{label}.regions[{index}].action references an undeclared workflow control")

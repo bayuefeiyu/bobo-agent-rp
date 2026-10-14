@@ -41,7 +41,7 @@
       }
     }
   },
-  "revision": "1",
+  "revision": "2",
   "terminalFinalizer": {
     "target": "world-narrative-coordinator/finish-deep-operation",
     "statuses": [
@@ -176,6 +176,22 @@
         },
         "assistants": [
           {
+            "id": "creative-reference",
+            "kind": "workflow",
+            "target": "creative-reference-library/search-units",
+            "budgetPool": "supplemental-assistance",
+            "inputAdapter": "natural-language-v1",
+            "fixedArguments": { "includeSemanticCandidates": false },
+            "exports": ["references"],
+            "timeoutMs": 600000,
+            "publicDescription": {
+              "title": "创作参考资料检索",
+              "purpose": "基础记忆返回后、讨论早期搜集可启发长期分支与题材构思的通用资料",
+              "limitations": "全体成员合计一次，使用简短文本或宽泛关键词；结果仅供参考，不是世界事实；没有开放此能力时跳过",
+              "requestExample": "资源短缺、商会竞争、地方秩序、利益联盟；希望搜集几种可启发长期变化的材料。"
+            }
+          },
+          {
             "id": "memory-followup",
             "kind": "workflow",
             "target": "narrative-memory/narrative-memory-retrieve",
@@ -230,6 +246,11 @@
         }
       },
       "workflowCalls": [
+        {
+          "target": "creative-reference-library/search-units",
+          "fixedArguments": { "includeSemanticCandidates": false },
+          "maxCalls": 1
+        },
         {
           "target": "narrative-memory/narrative-memory-retrieve",
           "maxCalls": 5
@@ -296,5 +317,9 @@
         }
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

@@ -87,6 +87,7 @@ function conflict(operation, record) {
 
 function provenance(context, batch, operation) {
   return {
+    executionId: context.executionId || null,
     initiatorKind: context.initiatorKind || "runtime",
     initiatorId: context.initiatorId || null,
     workflowId: context.workflowId || null,
@@ -226,6 +227,8 @@ async function applyGroup(store, baseStates, batch, operations, access, context,
 
 async function executeDataBatchUnlocked(store, value, { access = {}, context = {}, handlers = {}, allowBestEffort = false } = {}) {
   const batch = normalizeDataBatch(value);
+  if (store.executionId) batch.batchId = `exec-${createHash("sha256").update(`${store.executionId}:${batch.batchId}`).digest("hex")}`;
+  context = { ...context, executionId: store.executionId || null };
   const sourceReferences = mergeSourceReferences(context.sourceReferences || []);
   context = { ...context, sourceReferences };
   const targets = [...new Map(batch.operations.map(operation => [`${operation.moduleId}/${operation.collectionId}/${operation.recordType}/${operation.targetId || "new"}`, {

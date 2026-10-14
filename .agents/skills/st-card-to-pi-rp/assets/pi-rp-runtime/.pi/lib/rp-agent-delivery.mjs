@@ -98,11 +98,11 @@ export function deliveryPrompt(contract) {
   ].join("\n");
 }
 
-export async function createAgentDelivery({ workspace, node, agent, inputPaths = /** @type {string[]} */ ([]), beforeComplete = async () => {} }) {
+export async function createAgentDelivery({ workspace, node, agent, inputPaths = /** @type {string[]} */ ([]), beforeComplete = async () => {}, restoredReceipts = [], onReceipt = async (_receipt) => {} }) {
   const contract = agentDeliveryContract(node, agent);
   const protectedPaths = [...DEFAULT_INPUTS, ...inputPaths].filter(Boolean).map(canonical);
   const generatedPaths = Object.entries(node.outputs || {}).filter(([id]) => !(id in contract.outputs)).map(([, value]) => canonical(value.path));
-  const receipts = new Map();
+  const receipts = new Map(restoredReceipts.map(receipt => [receipt.output, receipt]));
   let completed = false;
   const attempt = randomUUID();
   const privateRoot = (await workspacePath(workspace, `${INTERNAL}/${attempt}`, { internal: true })).path;
@@ -182,6 +182,7 @@ export async function createAgentDelivery({ workspace, node, agent, inputPaths =
     }
     const receipt = { output: id, path: definition.path, kind: definition.kind || "file", version, digest: digest(files), files: manifest(files), checks: ["exists", "kind", "format"], acceptedAt: new Date().toISOString() };
     receipts.set(id, receipt);
+    await onReceipt(receipt);
     // Receipt stays authoritative in memory; best-effort cleanup cannot undo a successful commit.
     await rm(backup, { recursive: true, force: true }).catch(() => {});
     await writeFile(resolve(privateRoot, "receipts.json"), JSON.stringify([...receipts.values()], null, 2)).catch(() => {});

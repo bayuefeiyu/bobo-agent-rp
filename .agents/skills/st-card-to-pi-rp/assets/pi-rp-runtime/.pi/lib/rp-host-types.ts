@@ -2,6 +2,10 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RpWorkflowEngine } from "./rp-workflow-engine.mjs";
 export type { RpDataStore } from "./rp-data-store.mjs";
 export type WebMessage = {
+  id?: string;
+  revision?: number;
+  operationId?: string;
+  attemptId?: string;
   sequence: number;
   turn: number;
   role: "user" | "assistant";
@@ -46,6 +50,7 @@ export type ActiveBridge = {
   playerDescription: string;
   stableCardContext: string;
   featureModules: FeatureModule[];
+  transcriptProvider: { schemaVersion: number; moduleId: string; collectionId: string; recordType: string; view: string };
   commonSettings: CommonSettings;
   cardSettings: CardSettings;
   messages: RecordEnvelope[];
@@ -111,8 +116,9 @@ export type FeatureModule = {
   basedOn: string | null;
   contract: any | null;
   resourceCatalog: any | null;
+  externalResource?: string | null;
   resourceCatalogPath: string | null;
-  view: { schemaVersion: number; regions: any[] };
+  view: { schemaVersion: number; bindings: any[]; regions: any[] };
   viewPath: string | null;
   moduleDirectory: string;
   skillPath: string;

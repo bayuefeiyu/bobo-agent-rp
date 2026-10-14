@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "story-stage",
+  "version": "1.0.0",
+  "kind": "custom",
+  "root": "frontends/story-stage",
+  "entry": "index.mjs",
+  "apiVersion": { "major": 1, "minor": 0 },
+  "hostVersion": { "major": 1, "minor": 0 },
+  "requiredCapabilities": ["get.card", "get.state", "post.opening", "post.input"],
+  "optionalCapabilities": ["get.modules", "get.narrative-attempts"],
+  "assets": ["index.mjs", "stage.css"],
+  "immersive": false
+}

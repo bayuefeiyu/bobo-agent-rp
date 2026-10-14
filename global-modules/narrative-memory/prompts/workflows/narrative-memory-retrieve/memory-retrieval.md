@@ -3,3 +3,4 @@
 严格遵守本次有效预算。可以先查看初次候选，再根据新信息至多进行一次弹性补查。事件摘要已包含 coveredEventIds，需要时直接查看所需叶事件，不额外请求展开目录。偏实体使用 direct、related、possible；偏信息使用 confirmed、suggested、possible、not-found。状态只表示已有记录的支持或关联程度，不代答需要综合判断的问题。
 
 把 JSON 写入工作文件并通过交付工具提交，结构为 `{"queries":[{"query":"原询问","kind":"entity|information|broad","matches":[{"recordId":"稳定ID","recordType":"memory.entity|memory.relationship|memory.event|memory.event-summary|memory.cognition|memory.knower-group","status":"允许状态"}]}],"restrictedPerspectives":[{"input":"原名称","resolvedId":"稳定实体ID或null"}]}`。query 保留调用方的原询问，不复制分析全文或改写成你的结论；内部检索拆解不写入交付，文件中不写解释文字。
+本次检索只处理调用方提供的查询范围。某项没有匹配记录是完整且有效的结果；证据不足时保留 not-found 或空 matches，不为每项找到答案而扩大范围或重复尝试。已有目录与读取结果足以判断时停止探索，并按原定结构完成交付。

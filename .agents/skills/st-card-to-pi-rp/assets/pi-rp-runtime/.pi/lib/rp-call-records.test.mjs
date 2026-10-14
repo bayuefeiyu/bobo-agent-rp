@@ -1,0 +1,68 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, appendFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { installCallRecorder, readCallRecords, callRecordPath } from "./rp-call-records.mjs";
+
+test("calls retain provider context, separate usage, tools, retries and member identity without options", async t => {
+  const root = await mkdtemp(join(tmpdir(), "rp-call-records-")); t.after(() => rm(root, { recursive: true, force: true }));
+  let listener, contexts = [];
+  const session = { agent: { streamFunction(model, context, options) { contexts.push(context); return "stream"; } }, subscribe(handler) { listener = handler; return () => {}; } };
+  const run = { id: "run", nodes: { node: { attempts: [{}] } } };
+  const node = { id: "node" }, binding = { modelId: "configured" }, model = { id: "provider-id", provider: "fake" };
+  let recorder = installCallRecorder(session, { sessionDirectory: root, run, node, binding, agentId: "agent" });
+  const context = { systemPrompt: "actual system", messages: [{ role: "user", content: "first" }], tools: [] };
+  assert.equal(session.agent.streamFunction(model, context, { apiKey: "secret-not-recorded" }), "stream");
+  context.messages[0].content = "mutated afterwards";
+  listener({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read", arguments: {} }], usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 0, totalTokens: 42 } } });
+  listener({ type: "tool_execution_start", toolName: "read", toolCallId: "tool1", args: {} });
+  listener({ type: "tool_execution_end", toolName: "read", toolCallId: "tool1", result: { content: "tool result" } });
+  session.agent.streamFunction(model, { ...context, messages: [...context.messages, { role: "toolResult", content: "tool result" }, { role: "user", content: "budget reminder" }] });
+  listener({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [], errorMessage: "offline" } });
+  await recorder.finish(new Error("offline"));
+  run.nodes.node.attempts.push({});
+  recorder = installCallRecorder(session, { sessionDirectory: root, run, node: { id: "pseudo-member", metadata: { recordNodeId: "node" } }, binding, agentId: "second-agent", memberId: "leader" });
+  session.agent.streamFunction(model, { messages: [] });
+  listener({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }], usage: { input: 1, output: 1, totalTokens: 2 } } });
+  await recorder.finish();
+  const record = await readCallRecords(root, "run", "node");
+  assert.equal(record.calls.length, 3);
+  assert.equal(record.calls[0].request.messages[0].content, "first");
+  assert.equal(record.calls[0].tools.length, 2);
+  assert.equal(record.calls[1].request.messages.at(-1).content, "budget reminder");
+  assert.equal(record.calls[1].status, "failed");
+  assert.equal(record.calls[1].usage, null);
+  assert.equal(record.calls[2].attempt, 2);
+  assert.equal(record.calls[2].memberId, "leader");
+  assert.equal(record.usage.totalTokens, 44);
+  assert.equal(record.usageComplete, false);
+  assert.ok(!(await readFile(callRecordPath(root, "run", "node"), "utf8")).includes("secret-not-recorded"));
+  await appendFile(callRecordPath(root, "run", "node"), '{"unfinished":');
+  assert.equal((await readCallRecords(root, "run", "node")).calls.length, 3);
+  assert.throws(() => callRecordPath(root, "../run", "node"), /Invalid/);
+});
+
+test("installed Pi model loop records both actual requests across a tool call", async t => {
+  const packageRoot = process.env.PI_PACKAGE_ROOT || resolve(process.env.APPDATA, "npm/node_modules/@earendil-works/pi-coding-agent");
+  const { Agent } = await import(pathToFileURL(join(packageRoot, "node_modules/@earendil-works/pi-agent-core/dist/index.js")));
+  const { AssistantMessageEventStream } = await import(pathToFileURL(join(packageRoot, "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js")));
+  const root = await mkdtemp(join(tmpdir(), "rp-pi-calls-")); t.after(() => rm(root, { recursive: true, force: true }));
+  let count = 0;
+  const model = { id: "test", provider: "test", api: "openai-completions", contextWindow: 10000, maxTokens: 1000, input: ["text"], reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const agent = new Agent({ initialState: { model, systemPrompt: "system", tools: [{ name: "lookup", description: "lookup", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "found" }] }) }] }, streamFn: () => {
+    const stream = new AssistantMessageEventStream(); const index = ++count;
+    const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: index === 1 ? "toolUse" : "stop", content: index === 1 ? [{ type: "toolCall", id: "lookup-1", name: "lookup", arguments: {} }] : [{ type: "text", text: "complete" }], usage: { input: index * 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: index * 10 + 2 } };
+    queueMicrotask(() => { stream.push({ type: "done", reason: message.stopReason, message }); stream.end(); }); return stream;
+  } });
+  const recorder = installCallRecorder({ agent, subscribe: handler => agent.subscribe(handler) }, { sessionDirectory: root, run: { id: "pi-run", nodes: { node: { attempts: [{}] } } }, node: { id: "node" }, binding: { modelId: "test" }, agentId: "agent" });
+  await agent.prompt("task"); await recorder.finish();
+  const result = await readCallRecords(root, "pi-run", "node");
+  assert.equal(result.calls.length, 2);
+  assert.equal(result.calls[0].request.messages[0].role, "system");
+  assert.ok(JSON.stringify(result.calls[0].request.messages[0]).includes("system"));
+  assert.equal(result.calls[1].request.messages.at(-1).role, "toolResult");
+  assert.equal(result.calls[0].tools.length, 2);
+  assert.deepEqual(result.calls.map(call => call.usage.totalTokens), [12, 22]);
+});

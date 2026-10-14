@@ -54,18 +54,21 @@ export function taskSourceHash(source) {
   return `sha256:${createHash("sha256").update(String(source || ""), "utf8").digest("hex")}`;
 }
 
-export function createTaskStageController(plan, { now = () => new Date().toISOString() } = {}) {
+export function createTaskStageController(plan, { now = () => new Date().toISOString(), restored = null } = {}) {
   if (!plan || !Array.isArray(plan.stages) || !plan.stages.length) throw taskFailure("Task stage plan must contain at least one stage.");
-  let currentIndex = 0;
-  let exhausted = plan.staged !== true;
-  const calls = new Map();
-  const events = plan.staged ? [{ type: "stage-issued", stage: 1, at: now() }] : [];
+  if (restored && (restored.sourceHash !== plan.sourceHash || !Number.isInteger(restored.currentIndex) || restored.currentIndex < 0 || restored.currentIndex >= plan.stages.length)) throw taskFailure("Persisted task stages differ from the frozen task.");
+  let currentIndex = restored?.currentIndex ?? 0;
+  let exhausted = restored?.exhausted ?? (plan.staged !== true);
+  const calls = new Map(restored?.calls || []);
+  const events = restored?.events || (plan.staged ? [{ type: "stage-issued", stage: 1, at: now() }] : []);
 
   return Object.freeze({
     get staged() { return plan.staged === true; },
     get exhausted() { return exhausted; },
     get currentStage() { return currentIndex + 1; },
     get events() { return structuredClone(events); },
+    snapshot() { return { sourceHash: plan.sourceHash, currentIndex, exhausted, calls: [...calls], events: structuredClone(events) }; },
+    get currentText() { return [plan.common, plan.staged ? stageMessage(currentIndex + 1, plan.stages[currentIndex]) : plan.stages[0]].filter(Boolean).join("\n\n"); },
     reminder() {
       return plan.staged && !exhausted
         ? `当前分阶段任务尚未全部发放。继续完成阶段 ${currentIndex + 1}；完成后单独调用 rp_task_next({})。`

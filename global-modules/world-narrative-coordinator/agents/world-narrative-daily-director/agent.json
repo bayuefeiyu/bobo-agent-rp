@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "world-narrative-daily-director",
   "name": "世界叙事日常导演",
-  "description": "执行前置或后置的轻量复盘、孵化、监督、指导发布和深度启动判断。",
+  "description": "后置主导正文复盘、持续规划和正文后任务；前置结合新输入调整规划并定稿本轮正文指导。",
   "promptFile": "prompts/agents/world-narrative-daily-director.md",
   "tools": [
     "edit",

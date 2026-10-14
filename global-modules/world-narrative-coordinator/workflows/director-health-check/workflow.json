@@ -32,5 +32,9 @@
       }
     }
   ],
-  "ownerModuleId": "world-narrative-coordinator"
+  "ownerModuleId": "world-narrative-coordinator",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

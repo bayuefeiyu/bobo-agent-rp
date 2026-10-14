@@ -4,6 +4,8 @@
 
 ## 必需依赖
 
+深度导演另有默认配套的创作资料库：导入本模块的深度推演工作流时，默认加入 `creative-reference-library` 并在转卡方案中展示，用户可明确排除。单人 `plan` 节点在阅读剧情与记忆后、长期分支设计前调用一次 b；会议版由讨论早期的 `creative-reference` 助理执行，全体共享一次和参考资料。固定关闭语义粗筛，未就绪时跳过，资料不成为世界事实。日常前后置导演及其他工作流暂不增加该调用。用户排除时，转卡须同步移除相关绑定、会议助理和提示词指引。见[默认接入规则](../creative-reference-library/IMPORT.md)。
+
 - `features/card-context-library/module.json`
 - `features/narrative-memory/module.json`
 
@@ -13,10 +15,10 @@
 
 导入器需按卡片已确认的正文工作流选择模块内绑定，而不是把模块工作流复制到卡片根目录：
 
-1. 导演版前台正文：正文 Agent 完成情景分析和记忆检索后调用前置日常导演；前置写入 `private-state`，正文节点再调用 `materialize-guidance(publicationId=publication-narrative, channel=narrative)` 并继续创作。
-2. 后置导演：若卡片启用近场/广域叙事，使用模块内 `workflows/director-post-with-narratives/workflow.json`，并把其 `trigger.workflowId` 明确绑定到实际选中的前台正文工作流全限定 ID，例如 `narrative-controls/advanced-memory-rp` 或 `narrative-controls/standard-rp`。正文写作节点必须导出 `post-turn-context`，后置流程阻塞下一轮，依次完成主要复盘和委托决策、两个候选分支并行创作、导演第二次 Agent 调用统审、两个发布分支并行发布及通用来源捕获。若未启用这两个模块，可采用精简 `workflows/director-post-turn/workflow.json`。
+1. 导演版前台正文：正文 Agent 完成情景分析和记忆检索后调用前置日常导演；前置继承后置规划与条件化交接，结合本轮输入定稿正文指导，写入 `private-state`，正文节点再调用 `materialize-guidance(publicationId=publication-narrative, channel=narrative)` 并继续创作。后置主导实际正文复盘、持续规划和下一轮预案，保存在私有记录与 `turn-brief-current` 中；后置不预写下一轮正文的最终指导，但负责正文后任务的具体频道指导。
+2. 后置导演：若卡片启用近场/广域叙事，使用模块内 `workflows/director-post-with-narratives/workflow.json`，并把其 `trigger.workflowId` 明确绑定到实际选中的前台正文工作流全限定 ID，例如 `narrative-controls/advanced-memory-rp` 或 `narrative-controls/standard-rp`。正文写作节点必须导出 `post-turn-context`。后置作为本轮收尾执行，入口必须配置 kind=turn-background 与 trigger.blockNextTurnUntilReady=true，整条链完成前阻止下一次输入：先调用只读的 `post-director-analysis` 完成主要复盘与委托决策，再调用短时持锁的 `commit-post-director-update` 原子提交；随后完成候选创作、统审、发布及通用来源捕获。若未启用这两个模块，可采用精简 `workflows/director-post-turn/workflow.json`。复盘、委托创作、统审、发布及所配置的阻塞归档全部完成后，下一轮前置才读取本轮已落地的结果；失败须处理，不能自动放行。
 3. 深度包装：使用并保留模块内已注册的 `workflows/director-deep-wrapper/workflow.json`。确定性启动节点根据后置交接中的 `shouldStart` 和 reasonCodes 读取 `settings.deep.workflowMode`：`single` 调用 `world-narrative-coordinator/deep-director-planning`，`team` 调用可变人数的 `world-narrative-coordinator/deep-director-team-planning`。团队版先用短锁登记运行，会议期间不占写锁，最后再用短锁把深度报告与参考资料原子提交；失败、取消或跳过均通过生命周期收尾释放运行状态。
-4. 开场初始化：使用模块内 `world-narrative-coordinator/director-opening-bootstrap`，其 `trigger.type=after-opening` 且阻塞首次输入，复用后置导演 Agent 并传入 `phase=opening`。模块内的 `world-narrative-coordinator/director-opening-deep-wrapper` 在初始化完成后检查深度启动建议；是否建议启动由开场初始化结合 `settings.opening.deepMode` 决定。
+4. 开场初始化：使用模块内 `world-narrative-coordinator/director-opening-bootstrap`，其 `trigger.type=after-opening` 只在基础数据写入期间短暂阻塞首次输入。代码初始化 bootstrap 与简短交接，不调用后置导演 Agent、不提前规划或归档。首次具体指导由前置结合实际输入处理。`settings.opening.deepMode` 默认字符串 `"false"`；只有用户明确改为 `"background"` 才由 `director-opening-deep-wrapper` 启动开场后台推演，该推演不阻塞首次输入。缺少深度报告本身不构成自动启动理由。
 5. 统计、手动维护和手动完整性修复：使用模块内已注册的 `world-narrative-coordinator/director-health-check`、`world-narrative-coordinator/director-manual-maintenance` 与 `world-narrative-coordinator/director-integrity-repair-entry`。统计更新 `health-dashboard` 前端快照但不维护数据；维护和修复仍只由用户手动启动。`director-integrity-repair-entry` 是入口包装，实际修复工作流仍是 `world-narrative-coordinator/director-integrity-repair`；两者都由 `module.json.workflowFiles` 注册。
 
 导入时必须把模块内触发器绑定到卡片实际启用的全限定工作流 ID。近场/广域后置流程的 `trigger.workflowId` 应是 `narrative-controls/standard-rp` 或 `narrative-controls/advanced-memory-rp`；归档捕获工作流的 `trigger.workflowId` 应是 `world-narrative-coordinator/director-post-turn` 或 `world-narrative-coordinator/director-post-with-narratives`。转换器应根据用户确认的前台和后置选择写入这些真实引用，不能保留模板占位符。
@@ -38,7 +40,7 @@
 
 校验器会逐个检查 `trigger.documents` 的 `fromNode` 与 `output` 是否真的存在于所引用的源工作流、输出作用域是否为 `turn`/`session`/`public`，以及每个节点的 `metadata.triggerInputs` 是否有对应映射；四类问题都是错误而非警告。
 
-前置与后置不会同时执行，可以锁定同一 `private-state`。旧版单 Agent 深度导演仍在运行期间锁定 `deep-workbench`；团队版只在 begin、commit、finish 三个短事务中锁相应目录，长时间讨论不占写入通道，并可与日常导演并行。内部工作流未声明 `writeLocks` 时，模块内部写工作流默认锁整个模块，保持原有排他行为。
+前置仅锁定 `private-state`；后置的只读分析不持写锁，提交阶段才短时锁定 `private-state` 与 `archive-outbox`。单 Agent 深度导演锁定 `deep-workbench`，与前置的私有状态写入互不阻塞；团队版只在 begin、commit、finish 三个短事务中锁相应目录。内部工作流未声明 `writeLocks` 时仍默认锁整个模块。写锁仅控制数据访问；整轮等待由后置入口的阻塞触发器负责，不因分析阶段没有写锁而放行下一轮。
 
 导演归档交接由卡片现有通用 `narrative-memory/narrative-memory-source-capture` 接入：只查询 `archive-outbox` 的 ready 条目和 `archive-source` 视图，成功捕获后由模块确定性节点用回执更新 `status=captured` 与 `sourceCaptureId`。`contentVersion` 由确定性代码根据业务内容变化维护，Agent 不填写或决定该值；捕获身份绑定来源记录与该版本。近场、广域已发布故事也走同一来源捕获协议，并由叙事记忆中各自的预定义说明指导归档；不要创建模块专属归档 Agent。
 

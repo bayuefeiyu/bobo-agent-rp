@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 4,
+  "id": "search-units",
+  "ownerModuleId": "creative-reference-library",
+  "title": "资料单元评分检索",
+  "description": "返回可能相关的创作参考资料。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "revision": "2",
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "text",
+        "required": false,
+        "description": "自然语言或关键词请求，支持text/textFile。"
+      },
+      "keywords": {
+        "type": "parameter",
+        "valueType": "string-array",
+        "required": false,
+        "description": "宽泛关键词。"
+      },
+      "context": {
+        "type": "parameter",
+        "valueType": "string",
+        "required": false,
+        "description": "可选创作上下文。"
+      },
+      "budget": {
+        "type": "parameter",
+        "valueType": "object",
+        "required": false,
+        "description": "降低宿主预算上限。"
+      },
+      "includeSemanticCandidates": {
+        "type": "parameter",
+        "valueType": "boolean",
+        "required": false,
+        "description": "默认false；显式开启时需要已就绪的向量索引。"
+      }
+    },
+    "exports": {
+      "references": {
+        "format": "document-set",
+        "description": "仅含标题和完整正文的创作参考集。"
+      }
+    }
+  },
+  "defaults": {
+    "agentId": "creative-reference-library/scorer",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4
+  },
+  "nodes": [
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "prepare",
+      "title": "冻结请求和预算",
+      "type": "code",
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "workflowCalls": [],
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "metadata": {
+        "entryFile": "runtime/prepare.mjs",
+        "mode": "score"
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "select",
+      "title": "有限候选评分",
+      "type": "agent",
+      "agentId": "creative-reference-library/scorer",
+      "dependsOn": [
+        "prepare"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare"
+        ]
+      },
+      "promptFile": "prompts/workflows/score.md",
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "outputs": {
+        "result": {
+          "path": "scores.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scores"
+            ],
+            "properties": {
+              "scores": {
+                "type": "array",
+                "maxItems": 40,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "score"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "workflowCalls": [],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "initialContext": {
+          "currentInput": false
+        },
+        "nodeOutputInputs": [
+          "prepare"
+        ],
+        "referenceScore": true
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "compose",
+      "title": "组装参考资料",
+      "type": "code",
+      "dependsOn": [
+        "select",
+        "prepare"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "select",
+          "prepare"
+        ]
+      },
+      "outputs": {
+        "references": {
+          "path": "references",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workflowCalls": [],
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "metadata": {
+        "entryFile": "runtime/compose.mjs",
+        "mode": "score"
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "return",
+      "title": "返回参考资料",
+      "type": "workflow-return",
+      "dependsOn": [
+        "compose"
+      ],
+      "exports": {
+        "references": {
+          "fromNode": "compose",
+          "output": "references"
+        }
+      },
+      "outputs": {}
+    }
+  ]
+}

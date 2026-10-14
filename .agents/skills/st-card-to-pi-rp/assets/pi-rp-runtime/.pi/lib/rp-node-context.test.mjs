@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assembleInitialContext, conciseWorkspaceIndex, currentTaskMessage, parseRolePrompt, promptSourcePathAllowed, readPromptFile, recentNarrativeMessages, seededPiMessage, selectPrompts } from "./rp-node-context.mjs";
+import { assembleInitialContext, conciseWorkspaceIndex, currentTaskMessage, parseRolePrompt, promptSourcePathAllowed, readPromptFile, recentNarrativeMessages, seededPiMessage, selectPrompts, selectPromptGroups } from "./rp-node-context.mjs";
 import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,23 @@ test("role markers produce real messages and adjacent author blocks merge", () =
   assert.equal(context.systemPrompt, "BASE\n\nSystem rule");
   assert.deepEqual(context.messages.map(item => item.role), ["user", "assistant", "user"]);
   assert.throws(() => assembleInitialContext({ baseSystem: "BASE", prefix: parseRolePrompt("<!-- role: user -->\nA\n<!-- role: system -->\nB") }), /system role block/);
+});
+
+test("independent prefix and Agent system instructions coexist with authored example dialogue",()=>{
+  const total=parseRolePrompt("TOTAL SYSTEM\n<!-- role: user -->\nEXAMPLE QUESTION\n<!-- role: assistant -->\nEXAMPLE ANSWER\n<!-- role: user -->\nAUTHOR PREFACE");
+  const model=parseRolePrompt("MODEL SYSTEM");
+  const context=assembleInitialContext({baseSystem:"BASE",prefixGroups:selectPromptGroups(total,model),agent:parseRolePrompt("AGENT SYSTEM"),history:[{role:"assistant",content:"HISTORY"}],current:{role:"user",content:"CURRENT TASK"}});
+  assert.equal(context.systemPrompt,"BASE\n\nTOTAL SYSTEM\n\nMODEL SYSTEM\n\nAGENT SYSTEM");
+  assert.deepEqual(context.messages,[{role:"user",content:"EXAMPLE QUESTION"},{role:"assistant",content:"EXAMPLE ANSWER"},{role:"user",content:"AUTHOR PREFACE"},{role:"assistant",content:"HISTORY"},{role:"user",content:"CURRENT TASK"}]);
+  assert.throws(()=>assembleInitialContext({baseSystem:"BASE",prefixGroups:[parseRolePrompt("<!-- role: user -->\nA\n<!-- role: system -->\nB")]}),/within the same prompt source/);
+});
+
+test("exclusive selection preserves source groups and independently authored start tails",()=>{
+  const total=parseRolePrompt("TOTAL"),model=parseRolePrompt("MODEL");
+  assert.deepEqual(selectPromptGroups(total,model,true),[model]);
+  assert.deepEqual(selectPromptGroups(total,[],true),[total]);
+  const context=assembleInitialContext({baseSystem:"BASE",current:{role:"user",content:"TASK"},tailGroups:[parseRolePrompt("USER TAIL","user"),parseRolePrompt("SYSTEM TAIL","system")]});
+  assert.equal(context.systemPrompt,"BASE\n\nSYSTEM TAIL");assert.equal(context.messages[0].content,"TASK\n\nUSER TAIL");
 });
 
 test("exclusive prompt selection falls back only when model content is empty", () => {

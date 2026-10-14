@@ -1,0 +1,86 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "enabled",
+    "indexEveryTurns",
+    "protectionMode",
+    "protectRecentTurns",
+    "targetCharacters",
+    "maxCharacters",
+    "overlapCharacters",
+    "shortTailCharacters",
+    "candidatesPerQuery",
+    "maxResults",
+    "maxOutputCharacters",
+    "maxPerTurn",
+    "deadlineMs"
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "indexEveryTurns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "protectionMode": {
+      "type": "string",
+      "enum": [
+        "context",
+        "fixed"
+      ]
+    },
+    "protectRecentTurns": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50
+    },
+    "targetCharacters": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 10000
+    },
+    "maxCharacters": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 20000
+    },
+    "overlapCharacters": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "shortTailCharacters": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2000
+    },
+    "candidatesPerQuery": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60
+    },
+    "maxResults": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "maxOutputCharacters": {
+      "type": "integer",
+      "minimum": 128,
+      "maximum": 40000
+    },
+    "maxPerTurn": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    },
+    "deadlineMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 30000
+    }
+  }
+}

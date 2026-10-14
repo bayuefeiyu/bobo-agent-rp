@@ -20,6 +20,8 @@ if (value.source !== "messages" || !["user", "assistant"].includes(value.data.ro
   throw new Error(`Message record ${value.id} has invalid message data.`);
 }
 return {
+  id: value.id,
+  revision: value.revision,
   sequence: value.sequence,
   turn: value.binding.turn,
   role: value.data.role,

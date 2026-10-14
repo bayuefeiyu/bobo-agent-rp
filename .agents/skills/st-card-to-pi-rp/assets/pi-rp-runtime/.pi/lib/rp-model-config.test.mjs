@@ -19,14 +19,18 @@ test("normalizes optional model head and tail prompts", () => {
   assert.equal(model.maxConcurrency, 3);
 });
 
-test("keeps agent default model as a low-priority convenience", () => {
+test("Agent assignment is the only persistent model binding; retry overrides stay explicit", () => {
   const agent = normalizeAgentProfile({ schemaVersion: 1, ownerModuleId: "test", id: "writer", defaultModelId: "agent-default" });
   assert.equal(agent.id, "test/writer");
   assert.equal(agent.ownerModuleId, "test");
   const workflow = { defaults: { modelId: "workflow-default" } };
-  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: "node-model" }, workflow, agent }).modelId, "node-model");
-  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: null }, workflow, agent }).modelId, "workflow-default");
+  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: "node-model" }, workflow, agent }).modelId, "agent-default");
+  assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: null }, workflow, agent }).modelId, "agent-default");
   assert.equal(resolveNodeProfiles({ node: { agentId: "test/writer", modelId: null }, workflow: { defaults: {} }, agent }).modelId, "agent-default");
+  assert.equal(resolveNodeProfiles({node:{},workflow,agent,modelOverride:"temporary"}).modelId,"temporary");
+  const unassigned=normalizeAgentProfile({schemaVersion:1,ownerModuleId:"test",id:"unassigned"});
+  assert.equal(unassigned.defaultModelId,null);
+  assert.equal(resolveNodeProfiles({node:{},workflow,agent:unassigned}).modelId,null);
 });
 
 test("places the model head after Pi system text and leaves the call-time tail out of persistent context", () => {

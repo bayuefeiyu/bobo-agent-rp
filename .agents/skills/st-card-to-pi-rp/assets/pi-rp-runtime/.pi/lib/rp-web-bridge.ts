@@ -5,7 +5,7 @@ import type { HostSessionScope } from "./rp-host-session-scope.ts";
 export function bindWebBridge<T extends Record<string, unknown>>(scope: HostSessionScope<ActiveBridge>, operations: T): T {
   const owner = scope.requireCurrent();
   return Object.fromEntries(Object.entries(operations).map(([name, operation]) => [name, typeof operation !== "function" ? operation : (...args: unknown[]) => {
-    if (!scope.matches(owner)) throw Object.assign(new Error("This Web bridge is not active."), { status: 409 });
+    if (!scope.matches(owner)) throw Object.assign(new Error("This Web bridge is not active."), { status: 409, code: "session_changed" });
     return scope.run(() => operation(...args));
   }])) as T;
 }

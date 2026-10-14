@@ -6,6 +6,8 @@
 
 > **不要从 `play/` 游玩环境发起开发。** 根目录修改不会传播到已安装运行时、已转换卡或 session。修改授权边界见 [PI-RP-DEVELOPMENT-SCOPE.md](PI-RP-DEVELOPMENT-SCOPE.md)。
 
+前后端分离的边界与实施顺序见[计划](FRONTEND-BACKEND-SEPARATION-PLAN.md)，实际交付与验收见[实施记录](FRONTEND-SEPARATION-IMPLEMENTATION.md)。API/schema/能力的维护源在 packages/rp-web-contract；SDK 与共享 HTTP 服务分别在 packages/rp-web-client、packages/rp-web-server。修改后运行 generate-web-contract.mjs、sync-web-assets.mjs 和 generate-management-pages.mjs，check:generated 检查漂移。创作者接入见[指南](FRONTEND-CREATOR-GUIDE.md)。本次仅支持新基线，不兼容旧卡。
+
 ## 1. 前置条件
 
 | 工具 | 要求 | 说明 |
@@ -42,7 +44,7 @@ npm run verify:all
 npm run typecheck
 ```
 
-`package-lock.json` 固定开发依赖。完整离线集成还需要安装 `scripts/development-runtime.json` 声明的 Pi 版本；可通过 `VERIFY_PI_HOME` 指定安装根目录。Python 需满足前置条件并可导入 PyYAML；验证入口先探测系统命令，再检查 Conda 环境变量、环境清单及常见安装位置。自定义位置可设置 `VERIFY_PYTHON`；显式指定但无效的解释器会使验证失败，不会悄悄换用其他环境。
+`package-lock.json` 固定开发依赖。完整离线集成需要安装 Pi；可通过 `VERIFY_PI_HOME` 指定安装根目录。安装版本与 `scripts/development-runtime.json` 的已验证版本不同仅提示，不阻断验证或启动；实际转译、卡包及测试失败仍会导致验证失败。已验证版本保留真实记录，不因差异自动改写。Python 需满足前置条件并可导入 PyYAML；验证入口先探测系统命令，再检查 Conda 环境变量、环境清单及常见安装位置。自定义位置可设置 `VERIFY_PYTHON`；显式指定但无效的解释器会使验证失败，不会悄悄换用其他环境。
 
 | 命令 | 范围 |
 | --- | --- |

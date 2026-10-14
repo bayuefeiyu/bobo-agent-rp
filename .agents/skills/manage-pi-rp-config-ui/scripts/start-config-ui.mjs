@@ -9,11 +9,14 @@ import { createConfigProfileStore } from "../../st-card-to-pi-rp/assets/pi-rp-ru
 import { createRpConfigStore } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-config-store.mjs";
 import { defaultCommonSettings, normalizeCommonSettings } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-common-settings.mjs";
 import { removeSavedUserProfile } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-user-profiles.mjs";
-import { createApplication } from "../../st-card-to-pi-rp/assets/pi-rp-web/server.mjs";
+import { createApplication } from "../../../../packages/rp-web-server/index.mjs";
+import { createStaticHost } from "../../../../packages/rp-web-server/static-host.mjs";
 import { normalizeDataContract } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-data-contracts.mjs";
 import { normalizeModuleFrontendView } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-module-frontend.mjs";
 import { buildConfigCatalog } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-config-catalog.mjs";
 import { loadModuleComponents } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-module-registry.mjs";
+import { historyServiceManagement, historyConfiguration } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-narrative-history.mjs";
+import { referenceBinding, referenceStatus, saveReferenceBinding, referenceSemanticManagement, browseReferenceDirectories } from "../../st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/rp-reference-library.mjs";
 
 const repositoryRoot = resolve(process.cwd());
 const runtimeRoot = resolve(repositoryRoot, ".agents", "skills", "st-card-to-pi-rp", "assets", "pi-rp-runtime");
@@ -156,17 +159,23 @@ const bridge = {
     sessionId: null,
     modules: catalog.modules.map((module, index) => ({
       id: module.id, title: module.title, description: module.description, displayOrder: index,
-      available: false, view: { schemaVersion: 2, regions: [] }, data: null,
+      available: false, view: { schemaVersion: 3, bindings: [], regions: [] },
     })),
   }),
   getImageGeneration: async () => ({ available: false, sessionId: null, profiles: [], connections: [], preferences: null, requests: [], renders: [] }),
+  getComfyConnections: async () => ({ connections: [] }),
   listModels: async () => ({ current: { id: "pi:current", name: "当前 Pi 模型", virtual: true }, profiles: await configStore.listModels() }),
   listAgents: async () => ({ agents: await configStore.listAgents() }),
   listWorkflows: async () => ({ activeWorkflowId: null, workflows: await configStore.listWorkflows() }),
   listWorkflowRuns: async () => ({ runs: [] }),
   getWorkflowPolicy: async () => configStore.getRuntimePolicy(),
 
-  getConfigContext: async () => ({ mode: "development", scope: "global", ownerId: "global", token }),
+  getConfigContext: async () => ({ mode: "development", scope: "global", ownerId: "global", token, modelSecretCopy: true }),
+  getReferenceLibrary: async () => ({ ...(await referenceStatus()), root: (await referenceBinding())?.root || "" }),
+  saveReferenceLibrary: async value => saveReferenceBinding(value),
+  browseReferenceDirectories: async value => browseReferenceDirectories(value),
+  referenceSemanticManagement: async (operation, value) => referenceSemanticManagement(operation, value),
+  historyServiceManagement: async (operation, value) => operation === "status" ? { sessionAvailable: false, configuration: await (await historyConfiguration()).publicSettings() } : historyServiceManagement(operation, value),
   authorizeConfigMutation: async value => {
     if (value !== token) throw Object.assign(new Error("Configuration session token is invalid."), { status: 403 });
   },
@@ -183,7 +192,9 @@ const bridge = {
   deleteConfigProfile: async id => profileStore.remove(id),
   importConfigProfile: async value => profileStore.importProfile(value.profile, { id: value.id, name: value.name }),
   exportConfigProfile: async id => profileStore.exportProfile(id),
-  saveConfigModelSecret: async (profileId, modelId, value) => profileStore.saveModelSecret(profileId, modelId, value.apiKey || ""),
+  saveConfigModelSecret: async (profileId, modelId, value) => value.sourceModelId
+    ? profileStore.copyModelSecret(profileId, value.sourceModelId, modelId)
+    : profileStore.saveModelSecret(profileId, modelId, value.apiKey || ""),
   activateConfigProfile: async id => ({ ...(await profileStore.activate(id)), appliesToExistingModuleData: false, workflowInstancesKeepStartSnapshot: true }),
 
   selectOpening: unavailable,
@@ -242,7 +253,7 @@ const bridge = {
   updateWorkflowTrigger: unavailable,
 };
 
-const server = createServer(createApplication({ cardStore, bridge }));
+const server = createServer(createApplication({ cardStore, bridge, mode: "development", identity: () => ({ cardId: null, chatId: null }), unavailable: Object.keys(bridge).filter(key => bridge[key] === unavailable), staticHost: createStaticHost({ root: resolve(repositoryRoot, ".agents/skills/st-card-to-pi-rp/assets/pi-rp-web/public"), mounts: { "/vendor/rp-web-client/": resolve(repositoryRoot, "packages/rp-web-client"), "/vendor/rp-web-contract/": resolve(repositoryRoot, "packages/rp-web-contract") } }) }));
 server.listen(0, "127.0.0.1");
 await once(server, "listening");
 const address = server.address();

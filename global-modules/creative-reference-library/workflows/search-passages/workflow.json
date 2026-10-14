@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 4,
+  "id": "search-passages",
+  "ownerModuleId": "creative-reference-library",
+  "title": "资料片段向量检索",
+  "description": "向量召回与rerank返回可能相关的正文片段。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "revision": "1",
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "text",
+        "required": false,
+        "description": "自然语言或关键词请求，支持text/textFile。"
+      },
+      "keywords": {
+        "type": "parameter",
+        "valueType": "string-array",
+        "required": false,
+        "description": "宽泛关键词。"
+      },
+      "budget": {
+        "type": "parameter",
+        "valueType": "object",
+        "required": false,
+        "description": "降低宿主预算上限。"
+      }
+    },
+    "exports": {
+      "references": {
+        "format": "document-set",
+        "description": "仅含标题和原文片段的创作参考集。"
+      }
+    }
+  },
+  "defaults": {
+    "agentId": null,
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4
+  },
+  "nodes": [
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "search",
+      "title": "向量召回与重排",
+      "type": "code",
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {
+        "references": {
+          "path": "references",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workflowCalls": [],
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "metadata": {
+        "entryFile": "runtime/search-passages.mjs"
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "return",
+      "title": "返回参考资料",
+      "type": "workflow-return",
+      "dependsOn": [
+        "search"
+      ],
+      "exports": {
+        "references": {
+          "fromNode": "search",
+          "output": "references"
+        }
+      },
+      "outputs": {}
+    }
+  ]
+}

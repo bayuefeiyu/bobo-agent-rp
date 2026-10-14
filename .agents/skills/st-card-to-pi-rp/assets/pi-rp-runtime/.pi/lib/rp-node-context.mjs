@@ -1,5 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { selectTranscriptRange } from "./rp-transcript-projection.mjs";
 
 const MARKER = /^<!-- role: (system|user|assistant) -->$/;
 
@@ -42,28 +43,34 @@ export function mergeAdjacentMessages(messages) {
 }
 
 export function selectPrompts(total, model, exclusive = false) {
-  return exclusive ? (model.length ? model : total) : [...total, ...model];
+  return selectPromptGroups(total,model,exclusive).flat();
 }
+export function selectPromptGroups(total,model,exclusive=false) { return exclusive?[model.length?model:total]:[total,model]; }
 
-export function assembleInitialContext({ baseSystem, prefix = /** @type {Array<{role:string,content:string}>} */ ([]), agent = /** @type {Array<{role:string,content:string}>} */ ([]), card = /** @type {Array<{role:string,content:string}>} */ ([]), player = /** @type {Array<{role:string,content:string}>} */ ([]), history = /** @type {Array<{role:string,content:string}>} */ ([]), current, tail = /** @type {Array<{role:string,content:string}>} */ ([]) }) {
-  const messages = [...prefix, ...agent, ...card, ...player, ...history, ...(current ? [current] : []), ...tail];
+export function assembleInitialContext({ baseSystem, prefix = /** @type {Array<{role:string,content:string}>} */ ([]), prefixGroups = /** @type {Array<Array<{role:string,content:string}>>|null} */ (null), agent = /** @type {Array<{role:string,content:string}>} */ ([]), card = /** @type {Array<{role:string,content:string}>} */ ([]), player = /** @type {Array<{role:string,content:string}>} */ ([]), history = /** @type {Array<{role:string,content:string}>} */ ([]), current, tail = /** @type {Array<{role:string,content:string}>} */ ([]), tailGroups = /** @type {Array<Array<{role:string,content:string}>>|null} */ (null) }) {
+  const groups=[...(prefixGroups||[prefix]),agent,card,player,history,...(current?[[current]]:[]),...(tailGroups||[tail])];
   const system = [baseSystem];
   const conversation = [];
-  let seenConversation = false;
-  for (const message of messages) {
-    if (message.role === "system") {
-      if (seenConversation) throw new Error("A system role block cannot follow user or assistant messages.");
-      system.push(message.content);
-    } else {
-      seenConversation = true;
-      conversation.push(message);
+  // Each authored source has its own leading system block and optional examples.
+  // Pi takes system text separately: an earlier source's examples must not prevent
+  // the next source (model/Agent/card) from contributing its own system instructions.
+  for(const messages of groups){
+    let seenConversation=false;
+    for (const message of messages) {
+      if (message.role === "system") {
+        if (seenConversation) throw new Error("A system role block cannot follow user or assistant messages within the same prompt source.");
+        system.push(message.content);
+      } else {
+        seenConversation = true;
+        conversation.push(message);
+      }
     }
   }
   return { systemPrompt: system.filter(Boolean).join("\n\n"), messages: mergeAdjacentMessages(conversation) };
 }
 
 export function recentNarrativeMessages(records, beforeTurn, limit, truncatedNotice = "") {
-  const eligible = records.filter(record => record.binding.turn < beforeTurn && ["user", "assistant"].includes(record.data.role));
+  const eligible = selectTranscriptRange(records, { toTurn: beforeTurn - 1 }).filter(record => ["user", "assistant"].includes(record.data.role));
   const assistants = eligible.filter(record => record.data.role === "assistant").slice(-limit);
   if (!assistants.length) return [];
   const first = eligible.indexOf(assistants[0]);
@@ -111,7 +118,7 @@ export function seededPiMessage(message, model, timestamp = Date.now()) {
   };
 }
 
-export async function readPromptFile(root, path) {
+export async function readPromptFile(root, path, seen = []) {
   if (!path) return "";
   if (typeof path !== "string" || isAbsolute(path)) throw new Error("Prompt path must be relative.");
   const normalized = path.replaceAll("\\", "/");
@@ -124,7 +131,14 @@ export async function readPromptFile(root, path) {
   const actualTarget = await realpath(target);
   const actualRelation = relative(actualRoot, actualTarget);
   if (!actualRelation || actualRelation === ".." || actualRelation.startsWith(`..${sep}`) || isAbsolute(actualRelation)) throw new Error(`Prompt symlink escapes prompts/: ${path}`);
-  return readFile(target, "utf8");
+  if (seen.includes(actualTarget) || seen.length >= 8) throw new Error(`Shared prompt include cycle or depth exceeded: ${path}`);
+  const source = await readFile(target, "utf8");
+  let expanded = "", position = 0;
+  for (const match of source.matchAll(/\{\{include:(prompts\/shared\/[^{}\r\n]+)\}\}/g)) {
+    expanded += source.slice(position, match.index) + (await readPromptFile(root, match[1].trim(), [...seen, actualTarget])).trimEnd();
+    position = match.index + match[0].length;
+  }
+  return expanded + source.slice(position);
 }
 
 export async function promptSourcePathAllowed(workspace, requested, promptRoots) {

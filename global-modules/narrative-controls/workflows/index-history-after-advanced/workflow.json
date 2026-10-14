@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 4,
+  "id": "index-history-after-advanced",
+  "ownerModuleId": "narrative-controls",
+  "title": "渐进索引历史正文",
+  "description": "后台索引已采用正文，遵守近期保护与入库CD。",
+  "kind": "turn-background",
+  "revision": "1",
+  "trigger": {
+    "type": "after-workflow",
+    "workflowId": "narrative-controls/advanced-memory-rp",
+    "blockNextTurnUntilReady": false
+  },
+  "instancePolicy": {
+    "mode": "single",
+    "maxConcurrentInstances": 1
+  },
+  "nodes": [
+    {
+      "id": "index",
+      "title": "index",
+      "type": "code",
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-controls",
+          "collectionId": "settings",
+          "capabilities": [
+            "narrative.history.read"
+          ],
+          "views": [
+            "processor"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 8000
+          }
+        }
+      ],
+      "workflowCalls": [],
+      "runtimeServices": [
+        "narrativeHistory"
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "outputs": {},
+      "metadata": {
+        "entryFile": "runtime/index-history.mjs"
+      }
+    }
+  ]
+}

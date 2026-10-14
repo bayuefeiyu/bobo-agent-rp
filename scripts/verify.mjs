@@ -68,7 +68,9 @@ function spawnToLog(command, args, logName) {
   const started = Date.now();
   let res;
   try {
-    res = spawnSync(command, args, { cwd: root, stdio: ["ignore", fd, fd], timeout: PER_FILE_TIMEOUT_MS });
+    const childEnvironment = { ...process.env };
+    delete childEnvironment.NODE_TEST_CONTEXT; // A nested node:test runner must emit text, not its parent's V8 event stream.
+    res = spawnSync(command, args, { cwd: root, env: childEnvironment, stdio: ["ignore", fd, fd], timeout: PER_FILE_TIMEOUT_MS });
   } finally {
     closeSync(fd);
   }
@@ -318,6 +320,7 @@ function printSummary() {
   const tests = results.filter((r) => r.kind === "test");
   const checks = results.filter((r) => r.kind === "check");
   const envs = results.filter((r) => r.kind === "env");
+  const environmentWarnings = envs.filter((r) => r.warning);
   const failedTests = tests.filter((r) => r.failed);
   const sandboxDiagnostics = tests.filter((r) => r.sandboxDiagnostic);
   const failedChecks = checks.filter((r) => !r.ok);
@@ -345,7 +348,7 @@ function printSummary() {
     rows.push([name, String(list.length), String(f), String(p), String(fl), String(sk), `${(ms / 1000).toFixed(1)}s`, verdict]);
   }
   for (const r of checks) rows.push([r.id, "-", "-", "-", "-", "-", `${(r.durationMs / 1000).toFixed(1)}s`, r.ok ? "通过" : "失败"]);
-  for (const r of envs) rows.push([r.id, "-", "-", "-", "-", "-", "-", r.ok ? "通过" : "不满足"]);
+  for (const r of envs) rows.push([r.id, "-", "-", "-", "-", "-", "-", r.warning ? "提示" : r.ok ? "通过" : "不满足"]);
   const header = ["套件", "文件", "用例", "通过", "失败", "跳过", "耗时", "结果"];
   const widths = header.map((h, i) => Math.max(...[h, ...rows.map((row) => row[i])].map(displayWidth)));
   const renderRow = (cells) => cells.map((c, i) => pad(c, widths[i])).join("  ").replace(/\s+$/, "");
@@ -360,6 +363,10 @@ function printSummary() {
   if (envs.some((r) => !r.ok)) {
     console.log("\n环境预检未通过：");
     for (const r of envs.filter((x) => !x.ok)) console.log(`  - ${r.id}: ${r.detail}`);
+  }
+  if (environmentWarnings.length) {
+    console.log("\n环境提示（不拦截）：");
+    for (const r of environmentWarnings) console.log(`  - ${r.id}: ${r.detail}`);
   }
   if (sandboxDiagnostics.length) {
     console.log(`\n受限环境诊断 ${sandboxDiagnostics.length} 项（--sandbox-skips 只显示原因，失败仍会使验证失败）：`);
@@ -387,7 +394,8 @@ function printSummary() {
     mode, onlySuite, node: process.version, completedAt: new Date().toISOString(), ok,
     summary: { discoveredFiles: tests.length, executedFiles: tests.length - unexecuted, unexecutedFiles: unexecuted,
       parsedTests: totalTests, pass: totalPass, fail: totalFail, skipped: totalSkipped,
-      failedTestFiles: failedTests.length, failedChecks: failedChecks.length, failedEnvironmentChecks: envBlocked.length },
+      failedTestFiles: failedTests.length, failedChecks: failedChecks.length, failedEnvironmentChecks: envBlocked.length,
+      environmentWarnings: environmentWarnings.length },
     results,
   }, null, 2));
   console.log(`\n结果：${ok ? "通过" : "失败"}`);
@@ -400,7 +408,7 @@ function printSummary() {
 function suiteOf(record) {
   const file = record.label;
   if (file.startsWith(".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/")) return "engine（公共运行库）";
-  if (file.startsWith(".agents/skills/st-card-to-pi-rp/assets/pi-rp-web/")) return "web（前端与桥）";
+  if (file.startsWith(".agents/skills/st-card-to-pi-rp/assets/pi-rp-web/") || file.startsWith("packages/rp-web-") || file.startsWith("examples/minimal-rp-frontend/")) return "web（前端与桥）";
   if (file.startsWith("global-modules/")) return "modules（全局模块）";
   if (file.endsWith(".py")) return "python（校验与提取）";
   return "tools（其余 Skill 脚本）";
@@ -550,10 +558,11 @@ if (includeIntegration) {
   if (pi && pi.version !== runtime.engine?.testedVersion) {
     record({
       id: "env:pi-version",
-      label: "Pi 版本与声明一致",
+      label: "Pi 版本差异提示",
       kind: "env",
-      ok: false,
-      detail: `安装版本 ${pi.version} 与 development-runtime.json 声明 ${runtime.engine?.testedVersion} 不一致；请先验证再更新声明。`,
+      ok: true,
+      warning: true,
+      detail: `安装版本 ${pi.version} 与 development-runtime.json 声明已验证版本 ${runtime.engine?.testedVersion} 不一致；仅提示，不拦截，继续执行实际集成检查。`,
     });
   }
 

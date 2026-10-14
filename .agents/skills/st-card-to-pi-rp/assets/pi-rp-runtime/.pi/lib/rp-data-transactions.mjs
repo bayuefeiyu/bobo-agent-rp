@@ -24,7 +24,7 @@ export async function readDataTransaction(sessionDirectory, batchId) {
   });
 }
 
-export async function listDataReceipts(sessionDirectory) {
+export async function listDataReceipts(sessionDirectory, { includeInactive = false } = {}) {
   const receiptRoot = safeResolve(sessionDirectory, "workspace", "receipts");
   const names = await readdir(receiptRoot).catch(error => error?.code === "ENOENT" ? [] : Promise.reject(error));
   const receipts = [];
@@ -33,7 +33,18 @@ export async function listDataReceipts(sessionDirectory) {
     const receipt = await readFile(safeResolve(receiptRoot, name), "utf8").then(JSON.parse);
     if (receipt && typeof receipt === "object" && typeof receipt.batchId === "string") receipts.push(receipt);
   }
-  return receipts;
+  if (includeInactive) return receipts;
+  const executionManifest = await readFile(resolve(sessionDirectory, "workflow", "executions.json"), "utf8").then(JSON.parse).catch(error => error.code === "ENOENT" ? null : Promise.reject(error));
+  return receipts.filter(receipt => {
+    if (!receipt.executionId) return true;
+    let execution = executionManifest?.executions?.[receipt.executionId];
+    if (!execution) return false;
+    while (execution) {
+      if (!execution.selected) return false;
+      execution = execution.parentId ? executionManifest.executions[execution.parentId] : null;
+    }
+    return true;
+  });
 }
 
 /** @param {string} sessionDirectory

@@ -15,9 +15,12 @@ const { readDataReceipt } = await importRuntimeTestModule("rp-data-transactions.
 const { getDataRecord, queryData } = await importRuntimeTestModule("rp-data-query.mjs");
 const { createDataReadView, readDataReadViewCollection } = await importRuntimeTestModule("rp-data-read-view.mjs");
 const { normalizeWorkflowDefinition } = await importRuntimeTestModule("rp-workflows.mjs");
+const { RpWorkflowEngine } = await importRuntimeTestModule("rp-workflow-engine.mjs");
+const { createControlNodeExecutor } = await importRuntimeTestModule("rp-node-control-executor.ts");
 import { execute as materialize } from "../workflow/materialize-guidance.mjs";
 import { execute as preparePrivate } from "../workflow/prepare-private-context.mjs";
 import { execute as beginDeepOperation } from "../workflow/begin-deep-operation.mjs";
+import { execute as initializeOpening } from "../workflow/initialize-opening.mjs";
 import { execute as commitDeepOperation } from "../workflow/commit-deep-operation.mjs";
 import { execute as finishDeepOperation } from "../workflow/finish-deep-operation.mjs";
 import { buildAgentChangeBatch } from "../lib/agent-change-batch.mjs";
@@ -41,6 +44,75 @@ async function fixture() {
   };
   return { contract, sessionDirectory, store, access, data };
 }
+
+test("opening initialization performs only two atomic base-state updates and is idempotent", async () => {
+  const { store, data, access } = await fixture();
+  const submissions = [];
+  data.submit = async (batch, options) => {
+    submissions.push(batch);
+    return executeDataBatch(store, batch, { access, context: { binding: options.binding } });
+  };
+  const input = { run: { id: "opening-test", turn: 0, trigger: { openingId: "opening-00" } }, conversation: { messages: [] }, data };
+  await initializeOpening(input);
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].operations.length, 2);
+  assert.equal((await data.get({ moduleId: "world-narrative-coordinator", collectionId: "private-state", id: "director-bootstrap-current", view: "director" })).value.initialized, true);
+  assert.equal((await initializeOpening(input)).reused, true);
+  assert.equal(submissions.length, 1);
+});
+
+test("shipped post-turn graphs keep the turn barrier through analysis and both publications", async () => {
+  const graphs = ["director-post-turn", "director-post-with-narratives"];
+  for (const id of graphs) {
+    const workflow = JSON.parse(await readFile(resolve(moduleRoot, "workflows", id, "workflow.json"), "utf8"));
+    const stages = id.endsWith("with-narratives") ? ["analyze-post-director", "publish-local", "publish-world"] : ["analyze-post-director", "review"];
+    // Keep the shipped scheduling and dependency graph; replace model/module calls with gates.
+    workflow.nodes = workflow.nodes.map(node => ({ id: node.id, type: "code", dependsOn: node.dependsOn || [] }));
+    const releases = new Map(), arrivals = new Map(), started = new Map();
+    const gates = new Map(stages.map(id => {
+      started.set(id, new Promise(resolve => arrivals.set(id, resolve)));
+      return [id, new Promise(resolve => releases.set(id, resolve))];
+    }));
+    const engine = new RpWorkflowEngine({ executor: async ({ node }) => {
+      arrivals.get(node.id)?.();
+      if (gates.has(node.id)) await gates.get(node.id);
+      return { output: {} };
+    } });
+    const run = await engine.start(workflow, { turn: 3 });
+    try {
+      for (const stage of stages) {
+        await started.get(stage);
+        assert.equal(engine.hasBlockingTurnRun(), true, `${id}/${stage} must hold the next turn`);
+        assert.equal(engine.blockingTurnRuns()[0].turn, 3);
+        releases.get(stage)();
+      }
+      assert.equal((await engine.wait(run.id)).status, "completed");
+      assert.equal(engine.hasBlockingTurnRun(), false);
+    } finally {
+      for (const release of releases.values()) release();
+      await engine.cancel(run.id);
+    }
+  }
+});
+
+test("the short post commit executes production code nodes, commits authority, and exports the result", async () => {
+  const { store, sessionDirectory, contract, data } = await fixture();
+  const brief = await data.get({ moduleId: "world-narrative-coordinator", collectionId: "private-state", id: "turn-brief-current", view: "director" });
+  const workflow = normalizeWorkflowDefinition(JSON.parse(await readFile(resolve(moduleRoot, "workflows/commit-post-director-update/workflow.json"), "utf8")));
+  const active = { sessionDirectory, cardId: "fixture", cardName: "Fixture", turn: 1, playerName: "Player", playerDescription: "", stableCardContext: "", messages: [], featureModules: [{ id: "world-narrative-coordinator", moduleDirectory: moduleRoot, contract, moduleKind: "hybrid", resourceCatalog: null }] };
+  const execute = createControlNodeExecutor({ scope: { requireCurrent: () => active, requireChat: () => active }, turn: { current: null }, rememberDataReceipt: (run, nodeId, receipt) => {
+    run.nodes[nodeId].dataReadBatchIds.push(receipt.batchId); run.dataReadBatchIds.push(receipt.batchId); return receipt;
+  } });
+  const engine = new RpWorkflowEngine({ executor: task => execute(task, { callInputs: [], upstreamHandoffs: [], dataReadBatchIds: task.dataReadBatchIds }) });
+  const result = { changes: { operations: [{ moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.turn-brief", action: "update", targetId: brief.id, expectedRevision: brief.revision, data: { ...brief.value, turn: 1, summary: "Completed bounded review." } }] }, delegations: { local: null, world: null } };
+  const run = await engine.start(workflow, { turn: 1, textInput: JSON.stringify(result), outputPaths: { delegations: "delegations" }, callContext: { parentRunId: "root", parentNodeId: "commit", parentWorkflowId: "test/root" } });
+  const completed = await engine.wait(run.id);
+  assert.equal(completed.status, "completed", JSON.stringify(completed.nodes));
+  const saved = (await store.readCollection("world-narrative-coordinator", "private-state")).records.find(record => record.id === brief.id);
+  assert.equal(saved.revision, 2);
+  assert.equal(saved.data.summary, "Completed bounded review.");
+  assert.equal(completed.nodes.return.output.outputs.delegations, "delegations");
+});
 
 test("package, contract, workflows, schemas, and initial records normalize", async () => {
   normalizeFeatureModuleManifest(JSON.parse(await readFile(resolve(moduleRoot, "module.json"), "utf8")));
@@ -425,10 +497,18 @@ test("team deep wrapper resumes its own running operation instead of abandoning 
   assert.deepEqual(JSON.parse(await readFile(resolve(workspace, "deep-publication-basis.json"), "utf8")), frozenBasis);
 });
 
-test("materializer preserves channel boundaries and deterministic priority", async () => {
+test("private planning reaches the director while narrative receives only selected guidance in priority order", async () => {
   const { sessionDirectory, store, access, data } = await fixture();
+  const brief = {
+    turn: 1,
+    summary: "调查没有实质进展，保留商会暗线。",
+    activeConcerns: ["若继续调查，给出可验证线索；若离开则暂缓，不强行拦截。参见 plan-investigation。"],
+    publicationSummary: ["现场调查指导需由前置结合新输入核对。"],
+    deepRecommendation: { shouldStart: false, reasonCodes: [] },
+  };
   const batch = {
     protocolVersion: 1, batchId: "guidance-fixture", status: "pending", commitPolicy: "atomic", operations: [
+      { operationId: "handoff", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.turn-brief", action: "update", targetId: "turn-brief-current", expectedRevision: 1, data: brief },
       { operationId: "create-advice", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.guidance", action: "create", targetId: "guidance-advice", data: { title: "普通建议", content: "缓慢推进。", status: "active", channels: ["narrative"], kind: "direction", contextNature: null, strength: "advisory", lastReviewedTurn: 1 } },
       { operationId: "create-guardrail", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.guidance", action: "create", targetId: "guidance-guardrail", data: { title: "紧急纠偏", content: "不要凭空追加追兵。", status: "active", channels: ["narrative"], kind: "correction", contextNature: null, strength: "guardrail", lastReviewedTurn: 1 } },
       { operationId: "create-hidden", moduleId: "world-narrative-coordinator", collectionId: "private-state", recordType: "director.guidance", action: "create", targetId: "guidance-behind-scenes", data: { title: "幕后专用", content: "仅幕后可见。", status: "active", channels: ["behind-scenes"], kind: "context", contextNature: "plan", strength: "priority", lastReviewedTurn: 1 } },
@@ -444,6 +524,7 @@ test("materializer preserves channel boundaries and deterministic priority", asy
   assert.ok(text.indexOf("紧急纠偏") < text.indexOf("普通建议"));
   assert.match(text, /已有追兵仍可继续出场/);
   assert.doesNotMatch(text, /幕后专用|仅幕后可见/);
+  for (const privateText of [brief.summary, ...brief.activeConcerns, ...brief.publicationSummary]) assert.ok(!text.includes(privateText));
   const privateWorkspace = await mkdtemp(resolve(tmpdir(), "director-private-"));
   await preparePrivate({ workspace: privateWorkspace, data: {
     query: request => queryData(store, request, { capabilities: request.collectionId === "private-state" ? ["director.private.read"] : request.collectionId === "deep-workbench" ? ["director.deep.read"] : request.collectionId === "reference-library" ? ["director.reference.read"] : ["director.settings.read"], views: [request.view], runtimeLimit: 10000, runtimeCharacters: 2000000, nodeLimit: 10000, nodeCharacters: 2000000 }),
@@ -452,6 +533,11 @@ test("materializer preserves channel boundaries and deterministic priority", asy
   const index = await readFile(resolve(privateWorkspace, "private-context", "DOCUMENTS.md"), "utf8");
   assert.match(index, /guidance-guardrail/);
   assert.match(index, /turn-brief-current/);
+  const current = await readFile(resolve(privateWorkspace, "private-context", "CURRENT.md"), "utf8");
+  for (const privateText of [brief.summary, ...brief.activeConcerns, ...brief.publicationSummary]) assert.ok(current.includes(privateText));
+  assert.match(current, /records\/turn-brief-current.json/);
+  const handoff = JSON.parse(await readFile(resolve(privateWorkspace, "private-context", "records", "turn-brief-current.json"), "utf8"));
+  assert.deepEqual(handoff.value.data || handoff.value, brief);
 });
 
 test("archive handoff schema rejects missing knowledge scope", async () => {

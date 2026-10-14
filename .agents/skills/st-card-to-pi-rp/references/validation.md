@@ -71,6 +71,8 @@ Apply the data-design Skill's complete [validation contract](../../design-pi-rp-
 
 ## Workflow audit
 
+For the approved creative-reference default, verify the caller mapping in [global-modules.md](global-modules.md#default-creative-reference-library-integration): narrative creation and deep planning only, b only, one shared call per node, semantic candidates fixed false, and correctly delivered advisory documents. Check both ordinary and team modes. Add b to the existing foreground `requiresNarrativeAgentCallable` declaration; resolve any deep/default integration warning before publishing unless the user explicitly chose another design. Test the normal unbound case without attempting to access real private material.
+
 Validate the DAG, conditions, joins, retries, triggers, instance policy, blocking behavior, and exactly one foreground narrative. For each node, verify:
 
 - its prompt assumptions match declared context and upstream logical outputs;

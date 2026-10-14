@@ -7,7 +7,6 @@
   "revision": "1",
   "defaults": {
     "agentId": null,
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -81,5 +80,9 @@
       }
     },
     "exports": {}
+  },
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
   }
 }

@@ -21,7 +21,8 @@ from typing import Any
 from .authoring import component_ref, validate_director_prompt, validate_skill_frontmatter
 from .filesystem import load_json, require_file, safe_relative_path
 from .frontend import (
-    validate_frontend_view_v2,
+    frontend_binding_declarations,
+    validate_frontend_view_v3,
     validate_prompt_controls_resources,
     validate_resource_catalog,
     validate_time_adapter,
@@ -74,18 +75,226 @@ def validate_name_templates(root: Path, errors: list[str]) -> None:
         check_structure(value, relative.as_posix())
 
 
-def validate_runtime_services(node: dict[str, Any], label: str, errors: list[str]) -> None:
+def _runtime_service_owner(label: str, owner_module_id: str | None) -> str | None:
+    if owner_module_id is not None:
+        return owner_module_id
+    normalized = label.replace("\\", "/")
+    match = re.search(r"(?:^|/)(?:features|global-modules)/([^/]+)/", normalized)
+    return match.group(1) if match else None
+
+
+def validate_runtime_services(
+    node: dict[str, Any],
+    label: str,
+    errors: list[str],
+    owner_module_id: str | None = None,
+) -> None:
     services = node.get("runtimeServices", [])
     if not isinstance(services, list) or any(not isinstance(service, str) for service in services):
         errors.append(f"{label}.runtimeServices must be a string array")
         return
     if len(services) != len(set(services)):
         errors.append(f"{label}.runtimeServices must not contain duplicates")
-    if services and node.get("type", "agent") != "code":
+    node_type = node.get("type", "agent")
+    if any(service != "referenceLibrary" for service in services) and node_type != "code":
         errors.append(f"{label}.runtimeServices is supported only for code nodes")
+    if "narrativeHistory" in services and (
+        node_type != "code" or _runtime_service_owner(label, owner_module_id) != "narrative-controls"
+    ):
+        errors.append(f"{label}.runtimeServices narrativeHistory requires its owning module and a code node")
     unsupported = sorted(set(services) - RUNTIME_SERVICES)
     if unsupported:
         errors.append(f"{label}.runtimeServices contains unsupported services: {unsupported}")
+    if "referenceLibrary" in services and (
+        node_type not in {"code", "agent"}
+        or _runtime_service_owner(label, owner_module_id) != "creative-reference-library"
+    ):
+        errors.append(
+            f"{label}.runtimeServices referenceLibrary requires its owning module and a code or agent node"
+        )
+
+
+COLLABORATION_TOOLS = {"read", "write", "edit", "rp_files", "rp_call"}
+COLLABORATION_MEETING_FIELDS = {"leader", "secretary", "experts", "agenda", "baseRetrieval", "budgets", "deliverables"}
+
+
+def _javascript_truthy(value: Any) -> bool:
+    """Match the runtime's truthiness for configuration-field presence checks."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (int, float)) and value == 0:
+        return False
+    if isinstance(value, str) and not value:
+        return False
+    return True
+
+
+def validate_collaboration_team(
+    team: Any,
+    label: str,
+    errors: list[str],
+    *,
+    registered_agents: set[str] | None = None,
+    owner_id: str | None = None,
+    outputs: dict[str, Any] | None = None,
+    generated_output: Any = None,
+    require_output_owners: bool = True,
+    required_calls: Any = None,
+) -> bool:
+    """Validate the schema-2 collaboration branch shared by module/card workflows.
+
+    ``outputs`` is optional for preset resources.  A preset describes a target node before
+    that node's output declarations are available, so it is checked for valid owner
+    references and permissions but not for complete output coverage.  The target node
+    always passes its declared outputs and receives the complete coverage check.
+    """
+    if not isinstance(team, dict):
+        errors.append(f"{label} must be a schemaVersion 2 collaboration object")
+        return False
+    if team.get("schemaVersion") != 2 or team.get("protocol") != "collaboration":
+        errors.append(f"{label} must use schemaVersion 2 and protocol collaboration")
+        return False
+    # These fields belong to the meeting protocol.  Any JavaScript-truthy value would
+    # silently change the protocol and therefore fails closed here as well.
+    for field in sorted(COLLABORATION_MEETING_FIELDS):
+        if field in team and _javascript_truthy(team.get(field)):
+            errors.append(f"{label} cannot declare meeting field {field}")
+    assistants = team.get("assistants")
+    if isinstance(assistants, list) and assistants:
+        errors.append(f"{label} cannot declare meeting field assistants")
+
+    members = team.get("members")
+    if not isinstance(members, list) or len(members) < 2:
+        errors.append(f"{label}.members must contain at least two members")
+        members = []
+    safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+    member_ids: list[str] = []
+    member_tools: dict[str, set[str]] = {}
+    for index, member in enumerate(members):
+        member_label = f"{label}.members[{index}]"
+        if not isinstance(member, dict):
+            errors.append(f"{member_label} must be an object")
+            continue
+        member_id = member.get("id")
+        if not isinstance(member_id, str) or not safe_id.fullmatch(member_id):
+            errors.append(f"{member_label}.id is invalid")
+        else:
+            member_ids.append(member_id)
+        agent_id = member.get("agentId")
+        if not isinstance(agent_id, str) or not component_ref(agent_id):
+            errors.append(f"{member_label}.agentId must reference module-id/agent-id")
+        elif registered_agents is not None:
+            qualified = agent_id if component_ref(agent_id) else f"{owner_id}/{agent_id}"
+            if qualified not in registered_agents:
+                errors.append(f"{member_label}.agentId must reference a registered module Agent: {agent_id!r}")
+        tools = member.get("tools")
+        if not isinstance(tools, list) or any(not isinstance(tool, str) or tool not in COLLABORATION_TOOLS for tool in tools):
+            errors.append(f"{member_label}.tools contains an unsupported collaboration tool")
+            tools = []
+        if isinstance(member_id, str):
+            member_tools[member_id] = set(tools)
+        for text_field in ("label", "role", "modelId", "prompt", "focus"):
+            if text_field in member and member[text_field] is not None and not isinstance(member[text_field], str):
+                errors.append(f"{member_label}.{text_field} must be a string or null")
+    if len(member_ids) != len({member_id.lower() for member_id in member_ids}):
+        errors.append(f"{label}.member IDs must be unique")
+    member_id_set = set(member_ids)
+
+    for field in ("initialMemberId", "stageOwnerId", "completionMemberId"):
+        value = team.get(field)
+        if not isinstance(value, str) or value not in member_id_set:
+            errors.append(f"{label}.{field} must reference a team member")
+
+    output_owners = team.get("outputOwners")
+    if output_owners is None and not require_output_owners:
+        output_owners = {}
+    elif not isinstance(output_owners, dict):
+        errors.append(f"{label}.outputOwners must be an object")
+        output_owners = {}
+    for output_id, owner in output_owners.items():
+        if not isinstance(output_id, str) or not safe_id.fullmatch(output_id):
+            errors.append(f"{label}.outputOwners contains an invalid output ID")
+        if not isinstance(owner, str) or owner not in member_id_set:
+            errors.append(f"{label}.outputOwners.{output_id} must reference a team member")
+        elif "write" not in member_tools.get(owner, set()):
+            errors.append(f"{label}.outputOwners.{output_id} owner requires write permission")
+    if outputs is not None:
+        generated = generated_output if isinstance(generated_output, str) else None
+        for output_id in outputs:
+            if output_id == generated:
+                continue
+            if output_id not in output_owners:
+                errors.append(f"{label}.outputOwners must assign an owner for output {output_id}")
+        for output_id in output_owners:
+            if output_id not in outputs or output_id == generated:
+                errors.append(f"{label}.outputOwners references unknown or runtime-generated output {output_id}")
+    elif require_output_owners and "outputOwners" not in team:
+        errors.append(f"{label}.outputOwners must be an object")
+
+    limits = team.get("limits")
+    if limits is None:
+        limits = {}
+    if not isinstance(limits, dict):
+        errors.append(f"{label}.limits must be an object")
+    else:
+        for name, value in limits.items():
+            if name not in {"maxActivations", "maxToolCalls", "maxProtocolReminders"}:
+                errors.append(f"{label}.limits contains an unsupported field {name}")
+            elif isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 10000:
+                errors.append(f"{label}.limits.{name} must be an integer from 1 to 10000")
+    if isinstance(required_calls, list) and required_calls and not any("rp_call" in tools for tools in member_tools.values()):
+        errors.append(f"{label} required calls need an authorized member with rp_call")
+    return True
+
+
+def validate_collaboration_preset_resource(
+    module_root: Path,
+    owner_id: str,
+    node_label: str,
+    node_id: str,
+    node: dict[str, Any],
+    registered_agents: set[str],
+    errors: list[str],
+) -> None:
+    """Validate a module-owned collaboration preset referenced by node metadata."""
+    metadata = node.get("metadata")
+    if not isinstance(metadata, dict) or "collaborationPreset" not in metadata:
+        return
+    reference = metadata.get("collaborationPreset")
+    label = f"{node_label}.metadata.collaborationPreset"
+    if not isinstance(reference, str) or not safe_relative_path(reference) or not reference.lower().endswith(".json"):
+        errors.append(f"{label} must reference a safe relative JSON resource")
+        return
+    preset_path = module_root / reference
+    if not preset_path.is_file():
+        errors.append(f"{label} does not exist: {reference}")
+        return
+    preset = load_json(preset_path, errors)
+    if not isinstance(preset, dict):
+        return
+    if set(preset) != {"schemaVersion", "nodeId", "promptFile", "team"}:
+        errors.append(f"{label} resource must contain exactly schemaVersion, nodeId, promptFile, and team")
+    if preset.get("schemaVersion") != 1:
+        errors.append(f"{label}.schemaVersion must be 1")
+    preset_node_id = preset.get("nodeId")
+    if not isinstance(preset_node_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", preset_node_id):
+        errors.append(f"{label}.nodeId is invalid")
+    elif preset_node_id != node_id:
+        errors.append(f"{label}.nodeId must match target node {node_id}")
+    prompt_file = preset.get("promptFile")
+    prompt_label = f"{label}.promptFile"
+    if not isinstance(prompt_file, str) or not safe_relative_path(prompt_file) or not prompt_file.startswith("prompts/"):
+        errors.append(f"{prompt_label} must be a safe module-relative path under prompts/")
+    elif not (module_root / prompt_file).is_file():
+        errors.append(f"{prompt_label} does not exist: {prompt_file}")
+    validate_collaboration_team(
+        preset.get("team"),
+        f"{label}.team",
+        errors,
+        registered_agents=registered_agents,
+        owner_id=owner_id,
+        require_output_owners=False,
+    )
 
 
 def declared_frontend_module_ids(root: Path, manifest: Any) -> set[str]:
@@ -154,12 +363,30 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
     safe_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
     ids: set[str] = set()
     module_fields = {"schemaVersion", "id", "moduleKind", "basedOn", "title", "description", "surface", "contextOrder", "displayOrder", "dataContractFile", "resourceCatalogFile", "frontendViewFile", "skillFile", "agentFiles", "workflowFiles"}
+    module_fields_v8 = module_fields | {"externalResource"}
     index_types = {"string", "number", "boolean", "enum", "id", "id-list", "string-list", "time"}
     index_operators = {"eq", "neq", "contains", "in", "gt", "gte", "lt", "lte"}
     surface_paths = module_surface_paths(root, values)
     all_module_workflows = module_workflow_map(root, surface_paths)
     all_resource_catalogs = module_resource_catalog_map(root, surface_paths)
     allowed_node_types = {"agent", "team", "code", "call", "gate", "join", "workflow-return", "turn-finalize"}
+    registered_agents: set[str] = set()
+    for module_path in values:
+        if not safe_relative_path(module_path):
+            continue
+        module_file = root / module_path
+        module_root = module_file.parent
+        module = load_json(module_file, [])
+        if not isinstance(module, dict) or not isinstance(module.get("id"), str):
+            continue
+        module_id = module["id"]
+        for agent_path in module.get("agentFiles", []) if isinstance(module.get("agentFiles"), list) else []:
+            if not safe_relative_path(agent_path):
+                continue
+            agent = load_json(module_root / agent_path, [])
+            if isinstance(agent, dict) and isinstance(agent.get("id"), str):
+                agent_id = agent["id"]
+                registered_agents.add(agent_id if component_ref(agent_id) else f"{module_id}/{agent_id}")
     for index, path_value in enumerate(values):
         label = f"feature_modules[{index}]"
         if not safe_relative_path(path_value):
@@ -169,8 +396,13 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
         module = load_json(root / path_value, errors)
         if not isinstance(module, dict):
             continue
-        if set(module) != module_fields or module.get("schemaVersion") != 7:
+        schema_version = module.get("schemaVersion")
+        expected_fields = module_fields_v8 if schema_version == 8 else module_fields
+        if set(module) != expected_fields:
             errors.append(f"{label} must use the exact module v7 field set")
+            continue
+        if schema_version not in {7, 8}:
+            errors.append(f"{label}.schemaVersion must be 7 or 8")
             continue
         module_id = module.get("id")
         if not isinstance(module_id, str) or not safe_id.fullmatch(module_id):
@@ -188,8 +420,17 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
         if module_kind not in {"data", "resource", "hybrid"}:
             errors.append(f"{label}.moduleKind is invalid")
             continue
+        external_resource = module.get("externalResource") if schema_version == 8 else None
+        if external_resource is not None and (
+            external_resource != "creative-reference-library/v1"
+            or module_id != "creative-reference-library"
+            or module_kind != "resource"
+        ):
+            errors.append(f"{label} has an unsupported external resource binding")
+        if external_resource and any(module.get(field) is not None for field in ("dataContractFile", "resourceCatalogFile", "frontendViewFile")):
+            errors.append(f"{label} external resources must use null catalog, contract, and frontend paths")
         has_data = module_kind in {"data", "hybrid"}
-        has_resources = module_kind in {"resource", "hybrid"}
+        has_resources = not external_resource and module_kind in {"resource", "hybrid"}
         if has_data != isinstance(module.get("dataContractFile"), str):
             errors.append(f"{label}.dataContractFile must match moduleKind {module_kind}")
         if has_resources != isinstance(module.get("resourceCatalogFile"), str):
@@ -207,6 +448,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
             if module.get(field) is not None:
                 require_file(module_root, module.get(field), f"{label}.{field}", errors)
         owned_contract = load_json(module_root / module["dataContractFile"], []) if has_data and safe_relative_path(module.get("dataContractFile")) and (module_root / module["dataContractFile"]).is_file() else {}
+        registered_module_agents: set[str] = set()
         for component_field, directory_name, filename in (("agentFiles", "agents", "agent.json"), ("workflowFiles", "workflows", "workflow.json")):
             declared = module.get(component_field)
             if not isinstance(declared, list) or any(not safe_relative_path(path) for path in declared):
@@ -225,6 +467,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                 ref = ref if component_ref(ref) else f"{module_id}/{ref}"
                 if not component_ref(ref) or not ref.startswith(module_id + "/") or value.get("ownerModuleId") != module_id:
                     errors.append(f"{label}.{component_field} component must belong to {module_id}")
+                elif component_field == "agentFiles":
+                    registered_module_agents.add(ref)
                 if ref in component_ids:
                     errors.append(f"{label}.{component_field} contains duplicate component ID {ref}")
                 component_ids.add(ref)
@@ -313,7 +557,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                     for node_index, node in enumerate(owned_nodes):
                         if isinstance(node, dict):
                             owned_node_label = f"{workflow_label}.nodes[{node_index}]"
-                            validate_runtime_services(node, owned_node_label, errors)
+                            validate_runtime_services(node, owned_node_label, errors, module_id)
                             node_type = node.get("type", "agent")
                             if node_type not in allowed_node_types:
                                 errors.append(f"{owned_node_label}.type is invalid")
@@ -322,7 +566,34 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                             required_calls: set[str] = set()
                             if node_type == "team":
                                 team = node.get("team")
-                                if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
+                                collaboration_marker = isinstance(team, dict) and (
+                                    team.get("schemaVersion") == 2 or team.get("protocol") == "collaboration"
+                                )
+                                is_collaboration = isinstance(team, dict) and team.get("schemaVersion") == 2 and team.get("protocol") == "collaboration"
+                                if is_collaboration:
+                                    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+                                    snapshot = metadata.get("documentWorkspaceSnapshot") if isinstance(metadata, dict) else None
+                                    generated_output = snapshot.get("output") if isinstance(snapshot, dict) else None
+                                    node_outputs = node.get("outputs") if isinstance(node.get("outputs"), dict) else {}
+                                    validate_collaboration_team(
+                                        team,
+                                        f"{owned_node_label}.team",
+                                        errors,
+                                        registered_agents=registered_agents,
+                                        owner_id=module_id,
+                                        outputs=node_outputs,
+                                        generated_output=generated_output,
+                                        required_calls=node.get("requiredCalls"),
+                                    )
+                                elif collaboration_marker:
+                                    validate_collaboration_team(
+                                        team,
+                                        f"{owned_node_label}.team",
+                                        errors,
+                                        registered_agents=registered_agents,
+                                        owner_id=module_id,
+                                    )
+                                elif not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
                                     errors.append(f"{owned_node_label}.team must be a schemaVersion 1 object")
                                 else:
                                     members = [team.get("leader"), team.get("secretary")]
@@ -386,6 +657,15 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                                 sorted(required_calls),
                                 errors,
                             )
+                            validate_collaboration_preset_resource(
+                                module_root,
+                                module_id,
+                                owned_node_label,
+                                node.get("id") if isinstance(node.get("id"), str) else "<unknown>",
+                                node,
+                                registered_agents,
+                                errors,
+                            )
                             if owned.get("kind") == "module-internal":
                                 effective_locks = owned_locks if isinstance(owned_locks, list) else [{"moduleId": module_id, "collectionId": None}]
                                 for access in node.get("moduleAccess", []) if isinstance(node.get("moduleAccess", []), list) else []:
@@ -423,7 +703,7 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
             continue
         view = load_json(module_root / module["frontendViewFile"], errors) if module.get("frontendViewFile") else None
         if isinstance(view, dict):
-            for region in view.get("regions", []):
+            for region in frontend_binding_declarations(view):
                 if not isinstance(region, dict) or region.get("type") != "workflow-controls":
                     continue
                 for item in region.get("workflows", []) if isinstance(region.get("workflows"), list) else []:
@@ -444,6 +724,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                 errors.append(f"{collection_label} is invalid")
                 continue
             storage = collection.get("storage")
+            if collection.get("executionScope", "story") not in ("story", "session"):
+                errors.append(f"{collection_label}.executionScope must be story or session")
             if not isinstance(storage, dict) or storage.get("kind") not in {"record-log", "snapshot", "hybrid"}:
                 errors.append(f"{collection_label}.storage is invalid")
                 continue
@@ -545,8 +827,8 @@ def validate_feature_modules(root: Path, values: Any, errors: list[str], warning
                     if invalid_views:
                         errors.append(f"{label}.capability {capability_id} has undefined views for {collection_id}: {sorted(invalid_views)}")
         if view is not None:
-            validate_frontend_view_v2(view, contract, f"{label}.frontendViewFile", errors)
-            for region in view.get("regions", []) if isinstance(view, dict) else []:
+            validate_frontend_view_v3(view, contract, f"{label}.frontendViewFile", errors)
+            for region in frontend_binding_declarations(view):
                 if not isinstance(region, dict) or region.get("type") != "prompt-controls" or not safe_relative_path(region.get("controlsFile")):
                     continue
                 controls_path = module_root / region["controlsFile"]

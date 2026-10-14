@@ -6,8 +6,6 @@ import { extname, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { parseRecordLines, reviseRecord } from "./rp-records.mjs";
-
 import { removeSavedUserProfile } from "./rp-user-profiles.mjs";
 import { defaultCommonSettings } from "./rp-common-settings.mjs";
 
@@ -18,6 +16,8 @@ import { bridgeBusy } from "./rp-turn-state.ts";
 import { pruneWorkflowState } from "./rp-workspace.mjs";
 
 import { cleanupArtifacts } from "./rp-data-artifacts.mjs";
+import { createExecutionService } from "./rp-executions.mjs";
+import { createSessionDataStore } from "./rp-session-data-store.ts";
 
 import { messageSourceReference } from "./rp-narrative-source.mjs";
 
@@ -37,7 +37,11 @@ type Dependencies = {
   boundCardId: string | null;
   pi: ExtensionAPI;
   cardSessionsDirectory: string;
-  rewriteMessages: () => Promise<void>;
+  loadConversation: (target: ActiveBridge, directory: string) => Promise<RecordEnvelope[]>;
+  reviseMessage: (target: ActiveBridge, id: string, content: string, expectedRevision: number, operationId: string) => Promise<void>;
+  findInputOperation: (target: ActiveBridge, operationId: string) => Promise<RecordEnvelope | undefined>;
+  readMessageHistory: (target: ActiveBridge, id: string, options: any) => Promise<any>;
+  queryConversation: (target: ActiveBridge, options: any) => Promise<any>;
   updateMetadata: () => Promise<void>;
   pruneModuleRecords: (target: ActiveBridge, deletedMessageIds: Set<string>) => Promise<void>;
   hydrateNodeCompletionTurns: (sessionDirectory: string | null) => Promise<void>;
@@ -48,10 +52,17 @@ type Dependencies = {
   ensureActiveRecord: () => Promise<void>;
   turn: { current: RpRun | null };
 };
-export function createChatWebBridge({ webSnapshot, scope, manifest, commonSettingsDirectory, cardSettingsPath, isolatedRuntime, cardDirectory, context, boundCardId, pi, cardSessionsDirectory, rewriteMessages, updateMetadata, pruneModuleRecords, hydrateNodeCompletionTurns, restoreWorkflowRuns, ensureFeatureModuleRecords, appendMessage, dispatchWorkflowEvent, ensureActiveRecord, turn }: Dependencies) {
+export function createChatWebBridge({ webSnapshot, scope, manifest, commonSettingsDirectory, cardSettingsPath, isolatedRuntime, cardDirectory, context, boundCardId, pi, cardSessionsDirectory, loadConversation, reviseMessage, readMessageHistory, queryConversation, findInputOperation, updateMetadata, pruneModuleRecords, hydrateNodeCompletionTurns, restoreWorkflowRuns, ensureFeatureModuleRecords, appendMessage, dispatchWorkflowEvent, ensureActiveRecord, turn }: Dependencies) {
 return {
 renderCardText,
 getState: async () => webSnapshot(),
+getTranscript: async (options: any = {}) => queryConversation(scope.requireCurrent(), options),
+getMessageHistory: async (sequence: number, options: any = {}) => {
+  const target = scope.requireCurrent();
+  const message = target.messages.find(record => record.sequence === sequence);
+  if (!message || !target.sessionDirectory) throw httpError(404, "Saved message was not found.");
+  return readMessageHistory(target, message.id, options);
+},
 getSettings: async () => ({
             common: scope.requireCurrent()?.commonSettings || defaultCommonSettings,
             card: scope.requireCurrent()?.cardSettings || { schemaVersion: 1, cardId: manifest.id, settings: {} },
@@ -145,13 +156,10 @@ listSessions: async () => {
               if (!directory.isDirectory()) continue;
               const recordDirectory = resolveSessionDirectory(cardSessionsDirectory, directory.name);
               try {
-                const [metadataText, messagesText] = await Promise.all([
-                  readFile(resolve(recordDirectory, "session.json"), "utf8"),
-                  readFile(resolve(recordDirectory, "messages.jsonl"), "utf8"),
-                ]);
+                const metadataText = await readFile(resolve(recordDirectory, "session.json"), "utf8");
                 const metadata = JSON.parse(metadataText);
                 if (metadata.cardId && metadata.cardId !== manifest.id) continue;
-                const recordMessages = parseRecordLines(messagesText) as RecordEnvelope[];
+                const recordMessages = await loadConversation(scope.requireCurrent(), recordDirectory);
                 if (recordMessages.length === 0) continue;
                 const lastMessage = recordMessages.at(-1);
                 sessions.push({
@@ -178,15 +186,14 @@ deleteSession: async (sessionId: string) => {
             });
             return { deleted: sessionId };
           },
-updateMessage: async (sequence: number, content: string) => {
+updateMessage: async (sequence: number, content: string, expectedRevision?: number, operationId?: string) => {
             if (!scope.requireCurrent()?.recordId || !scope.requireChat().sessionDirectory) throw httpError(409, "There is no active saved chat to edit.");
+            if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 1) throw httpError(409, "Editing requires the displayed message revision.");
             if (bridgeBusy(scope.requireCurrent())) throw httpError(409, "Wait for the current turn and its blocking background workflows before editing messages.");
             const index = scope.requireCurrent().messages.findIndex(message => message.sequence === sequence);
             if (index === -1) throw httpError(404, "Saved message was not found.");
             const previous = scope.requireCurrent().messages[index];
-            const updated = reviseRecord(previous, { ...previous.data, content }) as RecordEnvelope;
-            scope.requireCurrent().messages[index] = updated;
-            await rewriteMessages();
+            await reviseMessage(scope.requireCurrent(), previous.id, content, expectedRevision!, operationId || randomUUID());
             await updateMetadata();
             return webSnapshot();
           },
@@ -195,12 +202,17 @@ deleteMessage: async (sequence: number) => {
             if (bridgeBusy(scope.requireCurrent())) throw httpError(409, "Wait for the current turn and its blocking background workflows before deleting messages.");
             const index = scope.requireCurrent().messages.findIndex(message => message.sequence === sequence);
             if (index === -1) throw httpError(404, "Saved message was not found.");
-            const deleted = scope.requireCurrent().messages.splice(index);
+            const deleted = scope.requireCurrent().messages.slice(index);
             const deletedFromTurn = deleted.reduce((minimum, message) => Math.min(minimum, message.binding.turn), Number.POSITIVE_INFINITY);
-            scope.requireCurrent().messages = scope.requireCurrent().messages.map((message, nextSequence) => ({ ...message, sequence: nextSequence }));
-            scope.requireCurrent().turn = scope.requireCurrent().messages.reduce((maximum, message) => Math.max(maximum, message.binding.turn), 0);
             const deletedMessageIds = new Set(deleted.map(message => message.id));
+            if (Number.isSafeInteger(deletedFromTurn)) {
+              const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+              const executionIds = await createExecutionService(store).prune(deletedFromTurn);
+              await cleanupArtifacts(scope.requireChat().sessionDirectory, { type: "execution", executionIds });
+            }
             await pruneModuleRecords(scope.requireCurrent(), deletedMessageIds);
+            scope.requireCurrent().messages = await loadConversation(scope.requireCurrent(), scope.requireChat().sessionDirectory);
+            scope.requireCurrent().turn = scope.requireCurrent().messages.reduce((maximum, message) => Math.max(maximum, message.binding.turn), 0);
             if (Number.isSafeInteger(deletedFromTurn)) {
               await pruneWorkflowState(scope.requireChat().sessionDirectory, deletedFromTurn);
               scope.requireCurrent().workflowEngine.pruneRuns((run: any) => (Number.isSafeInteger(run.turn) && run.turn >= deletedFromTurn) || (Number.isSafeInteger(run.visibleThroughTurn) && run.visibleThroughTurn >= deletedFromTurn));
@@ -211,7 +223,6 @@ deleteMessage: async (sequence: number) => {
             if (becameEmpty) {
               await rm(deletedDirectory, { recursive: true, force: false });
             } else {
-              await rewriteMessages();
               await updateMetadata();
             }
             if (becameEmpty) {
@@ -227,12 +238,9 @@ resumeSession: async (sessionId: string) => {
             let metadata;
             let recordMessages: RecordEnvelope[];
             try {
-              const [metadataText, messagesText] = await Promise.all([
-                readFile(resolve(recordDirectory, "session.json"), "utf8"),
-                readFile(resolve(recordDirectory, "messages.jsonl"), "utf8"),
-              ]);
+              const metadataText = await readFile(resolve(recordDirectory, "session.json"), "utf8");
               metadata = JSON.parse(metadataText);
-              recordMessages = parseRecordLines(messagesText) as RecordEnvelope[];
+              recordMessages = await loadConversation(scope.requireCurrent(), recordDirectory);
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code === "ENOENT") throw httpError(404, "Saved chat was not found.");
               throw error;
@@ -271,14 +279,25 @@ selectOpening: async (opening: any) => {
             content: opening.content,
             createdAt,
             narrativeSource: { producerKind: "card", producerId: scope.requireCurrent().cardId, layer: "story", characterId: null },
+            operationId: `opening:${scope.requireCurrent().candidateRecordId}:${opening.id}`,
           });
           await updateMetadata();
           await dispatchWorkflowEvent({ type: "after-opening", openingId: opening.id, messageId: openingRecord?.id || null }, { id: `opening-${opening.id}`, turn: 0 });
           return webSnapshot();
           },
-submitInput: async (content: string) => {
+submitInput: async (content: string, operationId?: string) => {
+          if (scope.executionId) throw httpError(409, "Adopt this candidate or return to the adopted narrative before continuing.");
           if (!scope.requireCurrent()?.openingId) throw httpError(409, "Select an opening first.");
+          if (operationId) {
+            const existing = await findInputOperation(scope.requireCurrent(), operationId);
+            if (existing) {
+              if (existing.data.role !== "user" || existing.data.content !== content) throw httpError(409, "This input operation ID was already used for different content.");
+              return webSnapshot();
+            }
+          }
           if (scope.requireCurrent().pending || !scope.requireCurrent().context.isIdle()) throw httpError(409, "Pi is still processing the previous message.");
+          // Activation during an already accepted turn changes the next input only.
+          const submittedWorkflowId = scope.requireCurrent().activeWorkflowId;
           const blockers = scope.requireCurrent().workflowEngine.blockingTurnRuns();
           if (blockers.length) {
             const first = blockers[0];
@@ -286,6 +305,7 @@ submitInput: async (content: string) => {
             throw httpError(409, `Background workflow ${first.workflowTitle}${additional} must finish or be cancelled before the next player turn.`);
           }
           await ensureActiveRecord();
+          await createExecutionService(createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules })).beginTurn(scope.requireCurrent().turn + 1);
           scope.requireCurrent().lastTurnFailure = null;
           await cleanupArtifacts(scope.requireChat().sessionDirectory, { type: "turn", turn: scope.requireCurrent().turn + 1 });
           scope.requireCurrent().turn += 1;
@@ -298,6 +318,7 @@ submitInput: async (content: string) => {
             content,
             createdAt: new Date().toISOString(),
             narrativeSource: { producerKind: "user", producerId: null, layer: "in-world", characterId: null },
+            operationId: operationId || randomUUID(),
           });
           await updateMetadata();
           turn.current = {
@@ -320,7 +341,7 @@ submitInput: async (content: string) => {
             baseModel: scope.requireCurrent().context.model,
           };
           try {
-            const workflow = await scope.requireCurrent().configStore.getWorkflow(scope.requireCurrent().activeWorkflowId);
+            const workflow = await scope.requireCurrent().configStore.getWorkflow(submittedWorkflowId);
             if (workflow.kind !== "foreground") throw new Error(`Active workflow ${workflow.id} is not a foreground workflow.`);
             const unresolved = unresolvedWorkflowCalls(workflow, scope.requireCurrent().featureModules);
             if (unresolved.length) {

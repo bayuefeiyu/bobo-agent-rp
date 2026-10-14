@@ -3,82 +3,266 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>选择角色卡</title>
+  <title>选择角色卡 · Pi RP</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #151821; color: #f4f2ed; }
-    body { margin: 0; padding: clamp(20px, 4vw, 64px); }
-    main { max-width: 1200px; margin: auto; }
-    h1 { font-size: clamp(28px, 4vw, 44px); margin: 0 0 8px; }
-    .intro { color: #b9becb; margin: 0 0 36px; }
-    .columns { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 36px; }
-    h2 { font-size: 21px; margin: 0 0 16px; }
-    input { width: 100%; box-sizing: border-box; border: 1px solid #586171; border-radius: 10px; padding: 12px; margin-bottom: 18px; background: #252b37; color: white; font: inherit; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+    /* ===== 设计系统 token：与卡内前端同源（P2，见 FRONTEND-REDESIGN-PLAN.md）===== */
+    :root {
+      --paper: #f2efe8;
+      --paper-top: #f8f6f1;
+      --paper-bottom: #efebe2;
+      --paper-raised: #faf7f2;
+      --paper-sunken: #eae3d6;
+      --ink: #29251f;
+      --ink-soft: #62574e;
+      --ink-faint: #7c6e63;
+      --line: rgba(87, 72, 54, 0.14);
+      --line-strong: rgba(87, 72, 54, 0.22);
+      --accent: #8f5742;
+      --accent-deep: #713f2f;
+      --accent-wash: rgba(143, 87, 66, 0.08);
+      --accent-line-strong: rgba(143, 87, 66, 0.5);
+      --danger: #8d3f34;
+      --danger-wash: #fff1ec;
+      --r-md: 12px;
+      --r-lg: 16px;
+      --r-xl: 20px;
+      --shadow-1: 0 1px 2px rgba(43, 34, 24, 0.05), 0 8px 22px rgba(43, 34, 24, 0.055);
+      --shadow-2: 0 2px 6px rgba(43, 34, 24, 0.07), 0 18px 44px rgba(43, 34, 24, 0.13);
+      --dur: 160ms;
+      --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+      --focus-outline: #b07818;
+
+      color-scheme: light;
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    :where(button, a, input):focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
+    ::selection { background: rgba(143, 87, 66, 0.18); }
+    * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 0%, var(--accent-wash), transparent 36rem),
+        linear-gradient(180deg, var(--paper-top) 0%, var(--paper-bottom) 100%);
+      background-attachment: fixed;
+    }
+
+    main { max-width: 1240px; margin: auto; padding: clamp(24px, 5vh, 56px) clamp(20px, 4vw, 64px) 64px; }
+
+    /* ===== 品牌区 ===== */
+    .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+    .brand-mark {
+      display: grid; place-items: center;
+      width: 44px; height: 44px;
+      border-radius: 13px;
+      color: #fff; background: var(--accent);
+      font-family: Georgia, "Noto Serif SC", serif; font-size: 1.5rem;
+      box-shadow: var(--shadow-1);
+    }
+    .brand h1 {
+      margin: 0;
+      font-family: Georgia, "Noto Serif SC", "Songti SC", serif;
+      font-size: clamp(26px, 3.4vw, 36px);
+      font-weight: 560; letter-spacing: -0.01em;
+    }
+    .intro { margin: 0 0 30px; color: var(--ink-faint); font-size: 0.95rem; }
+
+    #status { min-height: 24px; margin: 0 0 18px; color: var(--accent-deep); font-size: 0.86rem; font-weight: 600; }
+    #status:empty { margin: 0; min-height: 0; }
+    #status .dots { display: inline-block; margin-left: 4px; }
+    #status .dots i {
+      display: inline-block; width: 4px; height: 4px; margin-right: 3px;
+      border-radius: 50%; background: var(--accent);
+      animation: bounce 1s infinite ease-in-out;
+    }
+    #status .dots i:nth-child(2) { animation-delay: 0.15s; }
+    #status .dots i:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+    .columns { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: clamp(24px, 4vw, 48px); align-items: start; }
+
+    h2 {
+      margin: 0 0 14px;
+      font-family: Georgia, "Noto Serif SC", serif;
+      font-size: 1.15rem; font-weight: 600;
+    }
+
+    /* ===== 搜索（Pill）===== */
+    .search-wrap { position: relative; margin-bottom: 20px; }
+    .search-wrap svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--ink-faint); pointer-events: none; }
+    #search {
+      width: 100%; box-sizing: border-box;
+      padding: 12px 16px 12px 40px;
+      border: 1px solid var(--line); border-radius: 999px;
+      background: var(--paper-raised); color: var(--ink);
+      font: inherit; font-size: 0.92rem;
+      transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+    }
+    #search::placeholder { color: var(--ink-faint); }
+    #search:focus { outline: none; border-color: var(--accent-line-strong); box-shadow: 0 0 0 3px rgba(143, 87, 66, 0.12); }
+
+    /* ===== 卡网格 ===== */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 16px; }
     button { font: inherit; color: inherit; cursor: pointer; }
-    .card { text-align: left; background: #252b37; border: 1px solid #424b5c; border-radius: 12px; overflow: hidden; padding: 0; }
-    .card:hover, .recent button:hover { border-color: #c7a968; }
-    .card img, .cover { display: block; width: 100%; height: 220px; object-fit: cover; background: #343d4d; }
-    .cover { display: grid; place-items: center; font-size: 48px; }
-    .card span.copy { display: block; padding: 12px; }
-    .card strong, .recent strong { display: block; }
-    .card small, .recent small { color: #b9becb; display: block; margin-top: 5px; line-height: 1.4; }
-    .recent { display: grid; gap: 10px; }
-    .recent button { text-align: left; padding: 14px; border-radius: 10px; background: #252b37; border: 1px solid #424b5c; }
-    #status { min-height: 24px; margin: 0 0 20px; color: #e8c985; }
-    .empty { color: #b9becb; }
+    .card {
+      position: relative;
+      text-align: left;
+      padding: 0; overflow: hidden;
+      border: 1px solid var(--line); border-radius: var(--r-lg);
+      background: var(--paper-raised);
+      box-shadow: var(--shadow-1);
+      transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+    }
+    .card:hover:not(:disabled), .card:focus-visible { border-color: var(--accent-line-strong); box-shadow: var(--shadow-2); transform: translateY(-3px); }
+    .card:disabled { cursor: not-allowed; }
+    .card .cover-wrap { display: block; overflow: hidden; background: var(--paper-sunken); }
+    .card img, .cover {
+      display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+      transition: transform 300ms var(--ease);
+    }
+    .cover { display: grid; place-items: center; color: var(--accent); background: var(--paper-sunken); font-family: Georgia, "Noto Serif SC", serif; font-size: 2.6rem; }
+    .card:hover:not(:disabled) img { transform: scale(1.04); }
+    .card span.copy { display: block; padding: 12px 13px 14px; }
+    .card strong { display: block; font-family: Georgia, "Noto Serif SC", serif; font-size: 0.98rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card small {
+      display: -webkit-box; margin-top: 5px;
+      color: var(--ink-faint); font-size: 0.78rem; line-height: 1.5;
+      overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    }
+    .card .badge {
+      position: absolute; top: 10px; left: 10px;
+      padding: 4px 9px; border-radius: 999px;
+      color: var(--ink-soft); background: rgba(250, 247, 242, 0.92);
+      font-size: 0.68rem; font-weight: 700;
+      box-shadow: var(--shadow-1);
+    }
+    .card:disabled .cover-wrap, .card:disabled strong { opacity: 0.55; }
+
+    /* ===== 最近游玩（时间线）===== */
+    .recent { position: relative; display: grid; gap: 4px; padding-left: 18px; }
+    .recent::before { content: ""; position: absolute; left: 5px; top: 12px; bottom: 12px; width: 1px; background: var(--line); }
+    .recent-item { position: relative; display: block; width: 100%; }
+    .recent-item::before {
+      content: ""; position: absolute; left: -17px; top: 20px;
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--paper-raised); border: 2px solid var(--accent);
+    }
+    .recent-item:first-child::before { background: var(--accent); }
+    .recent-item button {
+      width: 100%; text-align: left;
+      padding: 12px 14px; border-radius: var(--r-md);
+      border: 1px solid transparent; background: transparent;
+      transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    }
+    .recent-item button:hover:not(:disabled), .recent-item button:focus-visible { background: var(--paper-raised); border-color: var(--line); }
+    .recent-item button:disabled { cursor: not-allowed; opacity: 0.55; }
+    .recent strong { display: block; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: 0.74rem; }
+
+    .empty { margin: 8px 0; color: var(--ink-faint); font-size: 0.88rem; }
+
     @media (max-width: 780px) { .columns { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>选择角色卡</h1>
-    <p class="intro">选择一张卡后，启动它自己的游玩前端。</p>
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true">π</span>
+      <h1>Pi RP</h1>
+    </header>
+    <p class="intro">选择一张角色卡，启动它自己的游玩前端。</p>
     <p id="status" role="status" aria-live="polite"></p>
     <div class="columns">
-      <section aria-labelledby="all-title"><h2 id="all-title">所有卡</h2><input id="search" type="search" placeholder="搜索卡名或简介" autocomplete="off" /><div id="cards" class="grid"></div></section>
-      <section aria-labelledby="recent-title"><h2 id="recent-title">最近游玩</h2><div id="recent" class="recent"></div></section>
+      <section aria-labelledby="all-title">
+        <h2 id="all-title">所有卡</h2>
+        <label class="search-wrap">
+          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">搜索卡名或简介</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+          <input id="search" type="search" placeholder="搜索卡名或简介" autocomplete="off" />
+        </label>
+        <div id="cards" class="grid"></div>
+      </section>
+      <section aria-labelledby="recent-title">
+        <h2 id="recent-title">最近游玩</h2>
+        <div id="recent" class="recent"></div>
+      </section>
     </div>
   </main>
   <script type="module">
-    const token = "__LAUNCHER_TOKEN__";
+    import { createRpClient } from "/vendor/rp-web-client/index.mjs";
+    const client = createRpClient({ baseUrl: location.href });
+    await client.connect();
     const cardsElement = document.querySelector("#cards"), recentElement = document.querySelector("#recent"), status = document.querySelector("#status"), search = document.querySelector("#search");
     let cards = [], recent = [], launching = false;
+
+    function relativeTime(value) {
+      const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+      if (seconds < 60) return "刚刚";
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes} 分钟前`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} 小时前`;
+      const days = Math.floor(hours / 24);
+      if (days < 30) return `${days} 天前`;
+      return new Date(value).toLocaleDateString();
+    }
+
     async function openCard(id) {
       if (launching) return;
       launching = true; status.textContent = `正在启动 ${id}…`;
+      status.insertAdjacentHTML("beforeend", '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>');
       try {
-        const response = await fetch("/api/launch", { method: "POST", headers: { "content-type": "application/json", "x-launcher-token": token }, body: JSON.stringify({ cardId: id }) });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || "启动失败");
+        const result = await client.request("launch", { method: "POST", body: { cardId: id } });
+        if (result.warnings?.length) {
+          status.textContent = result.warnings.join("\n");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
         window.location.assign(result.url);
       } catch (error) { status.textContent = error.message; launching = false; }
     }
+
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
       cardsElement.replaceChildren(); recentElement.replaceChildren();
       for (const card of cards.filter(card => `${card.name} ${card.id} ${card.description}`.toLocaleLowerCase().includes(query))) {
         const button = document.createElement("button"); button.className = "card"; button.type = "button";
-        if (card.cover) { const image = document.createElement("img"); image.src = `/api/cards/${encodeURIComponent(card.id)}/cover`; image.alt = ""; button.append(image); }
-        else { const placeholder = document.createElement("span"); placeholder.className = "cover"; placeholder.textContent = card.name[0] || "卡"; button.append(placeholder); }
+        const coverWrap = document.createElement("span"); coverWrap.className = "cover-wrap";
+        if (card.cover) { const image = document.createElement("img"); image.src = client.resourceUrl(`cards/${encodeURIComponent(card.id)}/cover`); image.alt = ""; coverWrap.append(image); }
+        else { const placeholder = document.createElement("span"); placeholder.className = "cover"; placeholder.textContent = card.name[0] || "卡"; coverWrap.append(placeholder); }
+        button.append(coverWrap);
         const copy = document.createElement("span"); copy.className = "copy";
         const title = document.createElement("strong"); title.textContent = card.name; copy.append(title);
         if (card.description) { const detail = document.createElement("small"); detail.textContent = card.description; copy.append(detail); }
-        button.append(copy); button.disabled = !card.launchable; button.title = card.launchable ? "打开角色卡" : "这张卡尚未打包独立运行时";
+        button.append(copy);
+        if (!card.launchable) { const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = "未打包"; button.append(badge); }
+        button.disabled = !card.launchable; button.title = card.launchable ? "打开角色卡" : "这张卡尚未打包独立运行时";
         button.addEventListener("click", () => openCard(card.id)); cardsElement.append(button);
       }
       if (!cardsElement.children.length) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "没有找到角色卡。"; cardsElement.append(empty); }
       for (const item of recent) {
         const card = cards.find(card => card.id === item.id);
         if (!card) continue;
+        const wrap = document.createElement("span"); wrap.className = "recent-item";
         const button = document.createElement("button"); button.type = "button"; button.disabled = !card.launchable;
         const title = document.createElement("strong"); title.textContent = card.name;
-        const when = document.createElement("small"); when.textContent = new Date(item.lastOpenedAt).toLocaleString();
-        button.append(title, when); button.addEventListener("click", () => openCard(card.id)); recentElement.append(button);
+        const when = document.createElement("small"); when.textContent = relativeTime(item.lastOpenedAt); when.title = new Date(item.lastOpenedAt).toLocaleString();
+        button.append(title, when); button.addEventListener("click", () => openCard(card.id)); wrap.append(button); recentElement.append(wrap);
       }
       if (!recentElement.children.length) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "还没有游玩记录。"; recentElement.append(empty); }
     }
+
+    status.textContent = "读取卡目录中…";
     search.addEventListener("input", render);
-    try { const result = await fetch("/api/cards").then(response => response.json()); cards = result.cards; recent = result.recent; render(); }
+    try { const result = await client.request("cards"); cards = result.cards; recent = result.recent; status.textContent = ""; render(); }
     catch (error) { status.textContent = `卡目录读取失败：${error.message}`; }
   </script>
 </body>

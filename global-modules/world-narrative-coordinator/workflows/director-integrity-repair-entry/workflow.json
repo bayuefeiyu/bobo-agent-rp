@@ -7,7 +7,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-integrity-repairer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -37,5 +36,9 @@
       }
     }
   ],
-  "ownerModuleId": "world-narrative-coordinator"
+  "ownerModuleId": "world-narrative-coordinator",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

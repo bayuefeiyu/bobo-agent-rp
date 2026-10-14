@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>独立游玩示例</title><body><main id="stage"></main><p id="error" role="alert"></p><script type="module">
+import { createRpClient } from "/vendor/rp-web-client/index.mjs";
+import { mount } from "./frontends/story-stage/index.mjs";
+const client = createRpClient({ baseUrl: location.href }), controller = new AbortController();
+try {
+  await client.connect();
+  const renderer = await mount({ container: document.querySelector("#stage"), client, signal: controller.signal, assetUrl: path => new URL(`./frontends/story-stage/${path}`, location.href).href, host: { openManagement: panel => window.open(`/platform/?panel=${encodeURIComponent(panel)}`, "rp-management") } });
+  window.addEventListener("pagehide", () => { controller.abort(); renderer.unmount(); client.dispose(); }, { once: true });
+} catch (error) { document.querySelector("#error").textContent = error.message; }
+</script></body></html>

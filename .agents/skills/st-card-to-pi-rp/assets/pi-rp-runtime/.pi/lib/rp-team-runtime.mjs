@@ -134,7 +134,7 @@ function validateReferenceDocuments(text, expectedIds) {
 }
 
 export class TeamMeetingRuntime {
-  constructor({ config, workspace, runId, nodeId, invokeMember, startWorkflow, invokeTool = async () => { throw new Error("No team tool adapter is registered."); }, isCancelled = () => false, context = "" }) {
+  constructor({ config, workspace, runId, nodeId, invokeMember, startWorkflow, invokeTool = async () => { throw new Error("No team tool adapter is registered."); }, isCancelled = () => false, isWorkflowAvailable = () => true, context = "" }) {
     this.config = normalizeTeamDefinition(config);
     validateTeamBudgets(this.config);
     this.workspace = resolve(workspace);
@@ -145,6 +145,7 @@ export class TeamMeetingRuntime {
     this.startWorkflow = startWorkflow;
     this.invokeTool = invokeTool;
     this.isCancelled = isCancelled;
+    this.isWorkflowAvailable = isWorkflowAvailable;
     this.context = context;
     this.coordination = Promise.resolve();
     this.coordinationError = null;
@@ -158,6 +159,11 @@ export class TeamMeetingRuntime {
     if (frozenConfig) {
       this.config = normalizeTeamDefinition(frozenConfig);
       validateTeamBudgets(this.config);
+    }
+    // Recheck optional external capabilities after restoring frozen settings.
+    // A resumed meeting must not re-expose a currently unavailable library.
+    for (const ability of this.config.assistants) {
+      if (ability.enabled && ability.kind === "workflow" && !await this.isWorkflowAvailable(ability.target)) ability.enabled = false;
     }
     const state = await this.store.ensure(this.config, { runId: this.runId, nodeId: this.nodeId });
     if (state.completionRecovery?.status === "blocked") {

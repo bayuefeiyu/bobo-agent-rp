@@ -6,7 +6,9 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAgentDelivery } from "./rp-agent-delivery.mjs";
 import { registerAgentDeliveryTools } from "./rp-agent-delivery-tools.mjs";
+import { installReferenceModelBudget } from "./rp-reference-library.mjs";
 import { createTaskStageController, parseTaskStages, registerTaskStageTool } from "./rp-task-stages.mjs";
+import { agentSoftBudgetExtension } from "./rp-agent-soft-budget.mjs";
 
 // Exercise the installed Pi engine with a deterministic stream; no provider, credentials,
 // user settings, network or model tokens are used.
@@ -26,6 +28,62 @@ async function loadPi() {
   return null;
 }
 const pi = await loadPi();
+
+test("installed Pi receives soft-budget reminders after tool results and completes beyond the budget", { skip: !pi }, async () => {
+  const handlers = {};
+  agentSoftBudgetExtension({ metadata: { softBudget: { modelRequests: 2, outputTokens: 1, elapsedSeconds: 600 } } }, { kind: "module-external" })[0].factory({ on: (event, handler) => { handlers[event] = handler; } });
+  let requests = 0;
+  const contexts = [];
+  const agent = new pi.Agent({ initialState: { model: { id: "offline", name: "offline", api: "openai-completions", provider: "offline", contextWindow: 100000, maxTokens: 1000 }, tools: [{ name: "finish_artifact", label: "Finish", description: "Finish artifact", parameters: pi.Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "artifact checked" }] }) }] },
+    transformContext: messages => handlers.context({ messages }).messages,
+    streamFn: (_model, context) => {
+      contexts.push(structuredClone(context.messages));
+      requests++;
+      const stream = new pi.AssistantMessageEventStream();
+      const finished = requests === 3;
+      stream.push({ type: "done", reason: finished ? "stop" : "toolUse", message: { role: "assistant", content: finished ? [{ type: "text", text: "completed" }] : [{ type: "toolCall", id: `artifact-${requests}`, name: "finish_artifact", arguments: {} }], api: "openai-completions", provider: "offline", model: "offline", stopReason: finished ? "stop" : "toolUse", timestamp: Date.now(), usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } });
+      return stream;
+    } });
+  agent.subscribe(event => { if (event.type === "message_end") handlers.message_end(event); });
+  await agent.prompt("Complete the artifact.");
+  assert.equal(requests, 3, "the soft budget must not abort or create an extra completion request");
+  assert.equal(agent.state.messages.at(-1).content[0].text, "completed");
+  assert.ok(contexts[1].some(message => JSON.stringify(message.content).includes("缩小探索范围")));
+  assert.ok(contexts[2].some(message => JSON.stringify(message.content).includes("已达到建议预算")));
+  assert.ok(agent.state.messages.every(message => !JSON.stringify(message.content).includes("软预算提醒")), "the reminder never becomes business/session history");
+});
+
+test("installed Pi stops before provider dispatch when the reference model budget is exhausted", { skip: !pi }, async () => {
+  let requests = 0, charges = 0, transforms = 0;
+  const agent = new pi.Agent({
+    initialState: {
+      model: { id: "offline", name: "offline", api: "openai-completions", provider: "offline", contextWindow: 100000, maxTokens: 1000 },
+      tools: [{ name: "continue_search", label: "Continue", description: "Continue searching", parameters: pi.Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "done" }] }) }],
+    },
+    transformContext: async messages => { transforms++; return messages; },
+    streamFn: () => {
+      requests++;
+      const stream = new pi.AssistantMessageEventStream();
+      stream.push({ type: "done", reason: "toolUse", message: {
+        role: "assistant", content: [{ type: "toolCall", id: "continue", name: "continue_search", arguments: {} }],
+        api: "openai-completions", provider: "offline", model: "offline", stopReason: "toolUse", timestamp: Date.now(),
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      } });
+      return stream;
+    },
+  });
+  const exhausted = Object.assign(new Error("Reference model call budget exhausted."), { code: "budget_exhausted" });
+  const guard = installReferenceModelBudget(agent, async () => { if (++charges > 1) throw exhausted; });
+  await agent.prompt("Search references.");
+  assert.equal(requests, 1, "the second provider request must never start");
+  assert.equal(transforms, 1, "the existing context transform is preserved for allowed requests");
+  assert.equal(charges, 2);
+  assert.equal(guard.error, exhausted);
+  assert.equal(agent.state.messages.at(-1).stopReason, "error");
+  await agent.prompt("Try again.");
+  assert.equal(requests, 1, "retries in the same attempt cannot bypass the failed budget guard");
+  assert.equal(charges, 2);
+});
 
 test("installed Pi delivers, repairs JSON, rejects batched completion and ends without another model turn", { skip: !pi }, async t => {
   const workspace = await mkdtemp(join(tmpdir(), "rp-delivery-pi-"));

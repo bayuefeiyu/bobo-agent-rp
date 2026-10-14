@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 4,
+  "id": "image-render-recovery",
+  "ownerModuleId": "comfy-image-generation",
+  "title": "恢复图片提交",
+  "kind": "global-background",
+  "revision": "1",
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 2,
+    "dedupeKey": "$.requestId"
+  },
+  "trigger": {
+    "type": "manual"
+  },
+  "executionPolicy": {
+    "enabled": false,
+    "allowHistoricalWrites": true
+  },
+  "nodes": [
+    {
+      "id": "render",
+      "type": "code",
+      "retry": {
+        "maxAttempts": 1
+      },
+      "moduleAccess": [
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "requests",
+          "capabilities": [
+            "image.requests.prepare"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 1000000
+          }
+        },
+        {
+          "moduleId": "comfy-image-generation",
+          "collectionId": "renders",
+          "capabilities": [
+            "image.renders.execute"
+          ],
+          "views": [
+            "maintenance"
+          ],
+          "queryBudget": {
+            "maxRecords": 1000,
+            "maxCharacters": 1000000
+          }
+        }
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/render-operation.mjs",
+        "action": "recover",
+        "unboundData": true
+      }
+    }
+  ]
+}

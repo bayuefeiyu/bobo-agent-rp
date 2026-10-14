@@ -65,6 +65,8 @@ export function normalizeConfigProfile(value, { scope = null } = {}) {
     if (!("thinking" in model) && "thinkingLevel" in model) model.thinking = typeof model.thinkingLevel === "string" ? model.thinkingLevel : "off";
     delete model.thinkingLevel;
   }
+  const fallback=value.workflowOverrides?.runtimePolicy?.modelFailure;
+  if(fallback?.silentFallback===true&&fallback.defaultFallbackModelId!=="pi:current"&&!models.some(model=>model.id===fallback.defaultFallbackModelId))throw new Error("请先选择有效的兜底模型，再开启兜底。");
   return {
     schemaVersion: 1,
     kind: "pi-rp-config-profile",
@@ -75,6 +77,7 @@ export function normalizeConfigProfile(value, { scope = null } = {}) {
     models,
     agentOverrides: cleanObject(value.agentOverrides),
     workflowOverrides: cleanObject(value.workflowOverrides),
+    nodeModeBackups: cleanObject(value.nodeModeBackups),
     moduleOverrides: cleanObject(value.moduleOverrides),
     compatibility: {
       moduleProtocol: Number.isSafeInteger(value.compatibility?.moduleProtocol) ? value.compatibility.moduleProtocol : 7,
@@ -265,6 +268,18 @@ export function createConfigProfileStore({ rootDirectory, directory, scope, owne
       assertId(modelId, "modelId");
       const secrets = await secretDocument();
       return secrets.profiles?.[scope]?.[ownerId]?.[profileId]?.models?.[modelId]?.apiKey || "";
+    },
+    async copyModelSecret(profileId, sourceModelId, targetModelId) {
+      assertId(profileId, "profileId");assertId(sourceModelId, "sourceModelId");assertId(targetModelId, "targetModelId");
+      const profile = await readProfile(profileId);
+      if (!profile.models.some(model => model.id === sourceModelId) || !profile.models.some(model => model.id === targetModelId)) throw new Error("Both source and target models must exist in the same configuration profile.");
+      const secrets = await secretDocument();
+      secrets.profiles[scope] ||= {};secrets.profiles[scope][ownerId] ||= {};secrets.profiles[scope][ownerId][profileId] ||= { models: {} };
+      const models = secrets.profiles[scope][ownerId][profileId].models ||= {};
+      const apiKey = models[sourceModelId]?.apiKey || "";
+      if (apiKey) models[targetModelId] = { apiKey };else delete models[targetModelId];
+      await atomicJson(secretsPath, secrets, { sensitive: true });
+      return { modelId: targetModelId, hasSecret: Boolean(apiKey) };
     },
   };
 }

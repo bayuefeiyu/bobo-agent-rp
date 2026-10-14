@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { addTokenUsage, emptyTokenUsage, normalizeTokenUsage } from "./rp-token-usage.mjs";
 import { mergeSourceReferences, normalizeNarrativeSourceDeclaration, workflowNodeNarrativeSource } from "./rp-narrative-source.mjs";
 import { normalizeTeamDefinition } from "./rp-team-config.mjs";
+import { validateCollaborationOutputs } from "./rp-team-collaboration-config.mjs";
 
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const TERMINAL = new Set(["completed", "skipped", "failed", "cancelled"]);
@@ -13,7 +14,7 @@ const CONTEXT_MODES = new Set(["fixed", "previous-output", "inherit", "custom"])
 const OUTPUT_SCOPES = new Set(["node", "workflow", "turn", "session", "public"]);
 const RETAIN_POLICIES = new Set(["node", "run", "turn", "session", "permanent"]);
 const OUTPUT_KINDS = new Set(["file", "directory"]);
-const RUNTIME_SERVICES = new Set(["random"]);
+const RUNTIME_SERVICES = new Set(["random", "referenceLibrary", "narrativeHistory"]);
 const PARAMETER_VALUE_TYPES = new Set(["any", "string", "number", "integer", "boolean", "object", "array", "string-array"]);
 
 function canonical(value) {
@@ -206,8 +207,8 @@ function normalizeOutputs(value, nodeId) {
   }));
 }
 
-function normalizeAgentDelivery(value, outputs, nodeId, type) {
-  if (type !== "agent") throw new Error(`node ${nodeId}.delivery is only supported on Agent nodes.`);
+function normalizeAgentDelivery(value, outputs, nodeId, type, team = null) {
+  if (type !== "agent" && !(type === "team" && team?.protocol === "collaboration")) throw new Error(`node ${nodeId}.delivery is only supported on Agent or collaboration nodes.`);
   const declaration = assertObject(value, `node ${nodeId}.delivery`);
   if (Object.keys(declaration).some(key => !["primaryOutput", "maxReminders"].includes(key))) throw new Error(`node ${nodeId}.delivery contains unsupported fields.`);
   const primaryOutput = declaration.primaryOutput == null ? null : assertId(declaration.primaryOutput, `node ${nodeId}.delivery.primaryOutput`);
@@ -391,6 +392,9 @@ export function normalizeWorkflowDefinition(value) {
   if (!WORKFLOW_KINDS.has(kind)) throw new Error(`Unsupported workflow kind: ${kind}`);
   if (!MODULE_WORKFLOW_KINDS.has(kind) && input.agentCallable !== undefined && input.agentCallable !== false) throw new Error("Only module workflows may declare agentCallable.");
   const agentCallable = MODULE_WORKFLOW_KINDS.has(kind) && input.agentCallable === true;
+  const executionPolicy = input.executionPolicy === undefined ? {} : assertObject(input.executionPolicy, "workflow.executionPolicy");
+  if (Object.keys(executionPolicy).some(key => !["enabled", "allowHistoricalWrites"].includes(key))) throw new Error("workflow.executionPolicy contains unsupported fields.");
+  for (const key of ["enabled", "allowHistoricalWrites"]) if (executionPolicy[key] !== undefined && typeof executionPolicy[key] !== "boolean") throw new Error(`workflow.executionPolicy.${key} must be boolean.`);
   const workflowInterface = normalizeWorkflowInterface(input.interface, kind);
   if (!Array.isArray(input.nodes) || input.nodes.length === 0) throw new Error("workflow.nodes must contain at least one node.");
 
@@ -441,7 +445,9 @@ export function normalizeWorkflowDefinition(value) {
       if (binding.maxCalls !== null && binding.maxCalls < 1) throw new Error(`node ${rawNode.id}.requiredCalls target ${required} cannot be required with maxCalls 0.`);
     }
     const runtimeServices = uniqueIds(rawNode.runtimeServices, `node ${rawNode.id}.runtimeServices`);
-    if (runtimeServices.length && type !== "code") throw new Error(`node ${rawNode.id}.runtimeServices is supported only for code nodes.`);
+    if (runtimeServices.some(service => service !== "referenceLibrary") && type !== "code") throw new Error(`node ${rawNode.id}.runtimeServices is supported only for code nodes.`);
+    if (runtimeServices.includes("referenceLibrary") && (!["code", "agent"].includes(type) || input.ownerModuleId !== "creative-reference-library")) throw new Error(`node ${rawNode.id} referenceLibrary requires its owning module and a code or agent node.`);
+    if (runtimeServices.includes("narrativeHistory") && (type !== "code" || input.ownerModuleId !== "narrative-controls")) throw new Error(`node ${rawNode.id} narrativeHistory requires its owning module and a code node.`);
     const unsupportedServices = runtimeServices.filter(service => !RUNTIME_SERVICES.has(service));
     if (unsupportedServices.length) throw new Error(`node ${rawNode.id}.runtimeServices contains unsupported services: ${unsupportedServices.join(", ")}.`);
     const target = rawNode.target === undefined || rawNode.target === null ? null : assertWorkflowRef(rawNode.target, `node ${rawNode.id}.target`);
@@ -476,7 +482,6 @@ export function normalizeWorkflowDefinition(value) {
       description: typeof rawNode.description === "string" ? rawNode.description.trim() : "",
       type,
       agentId: typeof rawNode.agentId === "string" && rawNode.agentId.trim() ? assertWorkflowRef(rawNode.agentId.includes("/") ? rawNode.agentId.trim() : `${ownerModuleId}/${rawNode.agentId.trim()}`, "node.agentId") : null,
-      modelId: typeof rawNode.modelId === "string" && rawNode.modelId.trim() ? rawNode.modelId.trim() : null,
       prompt: typeof rawNode.prompt === "string" && rawNode.prompt.trim() ? rawNode.prompt.trim() : null,
       promptFile: typeof rawNode.promptFile === "string" && rawNode.promptFile.trim() ? rawNode.promptFile.trim() : null,
       dependsOn,
@@ -491,7 +496,7 @@ export function normalizeWorkflowDefinition(value) {
       narrativeSource,
       join: { mode: joinMode, quorum },
       outputs,
-      ...(rawNode.delivery !== undefined ? { delivery: normalizeAgentDelivery(rawNode.delivery, outputs, rawNode.id, type) } : {}),
+      ...(rawNode.delivery !== undefined ? { delivery: normalizeAgentDelivery(rawNode.delivery, outputs, rawNode.id, type, team) } : {}),
       workspaceHandoff,
       moduleAccess: normalizeModuleAccess(rawNode.moduleAccess, rawNode.id),
       workflowCalls,
@@ -510,6 +515,7 @@ export function normalizeWorkflowDefinition(value) {
   });
   for (const node of nodes) {
     if (node.type === "team") {
+      if (node.team.protocol === "collaboration") validateCollaborationOutputs(node.team, node);
       const declaredCalls = new Set(node.workflowCalls.map(binding => binding.target));
       const missingCalls = [...node.team.assistants, ...(node.team.baseRetrieval ? [node.team.baseRetrieval] : [])]
         .filter(ability => ability.enabled && ability.kind === "workflow" && !declaredCalls.has(ability.target))
@@ -660,7 +666,6 @@ export function normalizeWorkflowDefinition(value) {
     revision: typeof input.revision === "string" && input.revision.trim() ? input.revision.trim() : "1",
     defaults: {
       agentId: typeof input.defaults?.agentId === "string" ? assertWorkflowRef(input.defaults.agentId.includes("/") ? input.defaults.agentId : `${ownerModuleId}/${input.defaults.agentId}`, "workflow.defaults.agentId") : null,
-      modelId: typeof input.defaults?.modelId === "string" ? input.defaults.modelId : null,
       context: normalizeContext(input.defaults?.context),
     },
     instancePolicy: {
@@ -673,6 +678,7 @@ export function normalizeWorkflowDefinition(value) {
     turnContext: kind === "foreground" ? { recentCompleteTurns } : null,
     writeLocks,
     terminalFinalizer,
+    executionPolicy: { enabled: executionPolicy.enabled !== false, allowHistoricalWrites: executionPolicy.allowHistoricalWrites === true },
     nodes,
   };
 }
@@ -688,9 +694,19 @@ export function resolveCodeNodeRoute(node, output) {
 export function createWorkflowRun(definition, options = {}) {
   const workflow = normalizeWorkflowDefinition(definition);
   const now = options.now || new Date().toISOString();
+  const id = options.id || `workflow-${randomUUID()}`;
   return {
     schemaVersion: 3,
-    id: options.id || `workflow-${randomUUID()}`,
+    id,
+    executionId: options.executionId || null,
+    executionParentId: options.executionParentId || null,
+    previousExecutionId: options.previousExecutionId || null,
+    narrativeAttemptId: options.narrativeAttemptId || null,
+    executionCandidate: options.executionCandidate === true,
+    executionLifecycle: options.executionLifecycle === true,
+    reexecutionRoot: options.reexecutionRoot === true,
+    newExecutionRootId: options.newExecutionRootId || (options.reexecutionRoot === true ? id : null),
+    logicalCallId: options.logicalCallId || null,
     workflowId: workflow.id,
     workflowRevision: workflow.revision,
     kind: workflow.kind,
@@ -760,8 +776,8 @@ function dependenciesState(workflow, run, node) {
   }
   if (node.join.mode === "collect") return { ready: terminal === states.length, impossible: false };
   return {
-    ready: states.every(state => state.status === "completed" || state.status === "skipped"),
-    impossible: terminal === states.length && states.some(state => state.status === "failed" || state.status === "cancelled"),
+    ready: states.every(state => state.status === "completed" || state.status === "skipped" && state.error !== "dependency_unavailable"),
+    impossible: states.some(state => state.status === "failed" || state.status === "cancelled" || state.status === "skipped" && state.error === "dependency_unavailable"),
   };
 }
 
@@ -820,7 +836,8 @@ export function startWorkflowNode(definition, run, nodeId, attempt, now = new Da
     attempt: state.attempts.length + 1,
     status: "running",
     agentId: attempt.agentId || null,
-    modelId: attempt.modelId || "pi:current",
+    modelId: attempt.modelId || null,
+    modelFallback: attempt.modelFallback || null,
     resolvedModel: attempt.resolvedModel || null,
     startedAt: now,
     completedAt: null,
@@ -979,6 +996,16 @@ export function resumeWorkflowNodeAfterChild(run, nodeId, now = new Date().toISO
   if (!state || state.status !== "awaiting-child") throw new Error(`Node ${nodeId} is not waiting on a child workflow.`);
   state.status = "pending";
   clearNodeFailure(state);
+  state.completedAt = null;
+  // Failed dependencies are settled transitively. A retry must reconsider those nodes, while
+  // leaving completed work and intentional condition/cooldown skips untouched.
+  for (const dependent of Object.values(run.nodes)) {
+    if (dependent.status === "skipped" && dependent.error === "dependency_unavailable") {
+      dependent.status = "pending";
+      dependent.error = null;
+      dependent.completedAt = null;
+    }
+  }
   const status = runStatusAfterUnblocking(Object.values(run.nodes));
   if (status) run.status = status;
   const remaining = Object.values(run.nodes).find(candidate => candidate.status === "awaiting-child");
@@ -995,9 +1022,18 @@ export function prepareWorkflowNodeRetry(run, nodeId, now = new Date().toISOStri
   }
   state.status = "pending";
   clearNodeFailure(state);
+  state.completedAt = null;
+  for (const dependent of Object.values(run.nodes)) {
+    if (dependent.status === "skipped" && dependent.error === "dependency_unavailable") {
+      dependent.status = "pending";
+      dependent.error = null;
+      dependent.completedAt = null;
+    }
+  }
   const status = runStatusAfterUnblocking(Object.values(run.nodes));
   if (status) run.status = status;
   run.error = null;
+  run.completedAt = null;
   run.updatedAt = now;
   return state;
 }
@@ -1122,10 +1158,10 @@ export function assertWorkflowCallAllowed(callerWorkflow, callerNode, targetWork
     if (!input || input.type !== "document" || !input.formats.includes("document-workspace-snapshot") || input.kind === "file") throw new Error(`Node ${callerNode.id} documentSnapshotInput must target a directory-capable document-workspace-snapshot input.`);
   }
   if (agent) {
-    if (callerNode.type !== "agent") throw new Error("Agent workflow calls require an agent node.");
+    if (callerNode.type !== "agent" && !(callerNode.type === "team" && callerNode.team?.protocol === "collaboration")) throw new Error("Agent workflow calls require an Agent or collaboration node.");
     if (!target.agentCallable) throw new Error(`Module workflow ${reference} is not callable by Agents.`);
   }
-  if (["agent", "code"].includes(callerNode.type) && !callerNode.workflowCalls.some(binding => binding.target === reference)) {
+  if ((["agent", "code"].includes(callerNode.type) || callerNode.team?.protocol === "collaboration") && !callerNode.workflowCalls.some(binding => binding.target === reference)) {
     throw new Error(`Node ${callerNode.id} is not allowed to call ${reference}.`);
   }
   if (callerNode.type === "call" && callerNode.target !== reference) throw new Error(`Call node ${callerNode.id} targets another workflow.`);
@@ -1133,7 +1169,7 @@ export function assertWorkflowCallAllowed(callerWorkflow, callerNode, targetWork
 }
 
 export function workflowCallAuthorization(callerNode, reference) {
-  if (!["agent", "code"].includes(callerNode.type)) return null;
+  if (!["agent", "code"].includes(callerNode.type) && callerNode.team?.protocol !== "collaboration") return null;
   return callerNode.workflowCalls.find(binding => binding.target === reference) || null;
 }
 

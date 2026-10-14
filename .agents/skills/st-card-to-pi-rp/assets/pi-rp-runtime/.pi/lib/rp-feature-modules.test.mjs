@@ -46,3 +46,12 @@ test("normalizes resource-only modules without fake data or frontend files", () 
   assert.equal(resource.dataContractFile, null);
   assert.equal(resource.resourceCatalogFile, "catalog.json");
 });
+
+test("v8 external binding is exact and cannot grant an unrelated module access", () => {
+  const external = { ...manifest, schemaVersion: 8, id: "creative-reference-library", moduleKind: "resource", externalResource: "creative-reference-library/v1", surface: "background", dataContractFile: null, resourceCatalogFile: null, frontendViewFile: null };
+  assert.equal(normalizeFeatureModuleManifest(external).externalResource, "creative-reference-library/v1");
+  assert.throws(() => normalizeFeatureModuleManifest({ ...external, id: "other" }), /unsupported external/);
+  assert.throws(() => normalizeFeatureModuleManifest({ ...external, schemaVersion: 7 }), /exact/);
+  assert.throws(() => normalizeFeatureModuleManifest({ ...external, resourceCatalogFile: "catalog.json" }), /match moduleKind/);
+  assert.equal(normalizeFeatureModuleManifest({ ...manifest, schemaVersion: 8, externalResource: null }).dataContractFile, "data-contract.json");
+});

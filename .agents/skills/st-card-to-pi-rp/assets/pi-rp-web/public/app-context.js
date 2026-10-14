@@ -1,9 +1,13 @@
+import { createRpClient } from "./vendor/rp-web-client/index.mjs";
 // 页面共享依赖；面板只依赖此模块，不反向加载应用入口。
 export const state = {};
 export const elements = {};
 let boundDocument = null;
 export function initializePageContext() {
   if (boundDocument === document) return false;
+  client?.dispose();
+  client = null;
+  connection = null;
   boundDocument = document;
   for (const key of Object.keys(state)) delete state[key];
   for (const key of Object.keys(elements)) delete elements[key];
@@ -23,6 +27,8 @@ export function initializePageContext() {
   featureModuleSignature: "",
   expandedFeatureModules: new Set(),
   promptControlDrafts: new Map(),
+  moduleRegionViews: new Map(),
+  moduleTabSelections: new Map(),
   moduleDisplayDraft: null,
   models: [],
   agents: [],
@@ -33,6 +39,7 @@ export function initializePageContext() {
   workflowRenderSignature: "",
   tokenRenderSignature: "",
   imageGeneration: null,
+  comfyConnections: null,
   imageGenerationRegion: null,
   imagePromptRenderId: null,
   imageViewerItems: [],
@@ -72,7 +79,6 @@ export function initializePageContext() {
   moduleSettingsList: document.querySelector("#module-settings-list"),
   moduleSettingsStatus: document.querySelector("#module-settings-status"),
   resetModuleSettings: document.querySelector("#reset-module-settings"),
-  saveModuleSettings: document.querySelector("#save-module-settings"),
   cardSearch: document.querySelector("#card-search"),
   cardGrid: document.querySelector("#card-grid"),
   returnToSelector: document.querySelector("#return-to-selector"),
@@ -84,6 +90,7 @@ export function initializePageContext() {
   activateWorkflow: document.querySelector("#activate-workflow"),
   refreshWorkflows: document.querySelector("#refresh-workflows"),
   showActiveWorkflow: document.querySelector("#show-active-workflow"),
+  showRunningWorkflow: document.querySelector("#show-running-workflow"),
   workflowSummary: document.querySelector("#workflow-summary"),
   workflowNodeList: document.querySelector("#workflow-node-list"),
   workflowRunList: document.querySelector("#workflow-run-list"),
@@ -126,27 +133,34 @@ export function initializePageContext() {
   comfyInsecureRemote: document.querySelector("#comfy-insecure-remote"),
   comfyTestConnection: document.querySelector("#comfy-test-connection"),
   comfyConnectionStatus: document.querySelector("#comfy-connection-status"),
+  comfyRemoveConnection: document.querySelector("#comfy-remove-connection"),
   comfyProfileDocuments: document.querySelector("#comfy-profile-documents"),
 });
   return true;
 }
 
+let client;
+let connection;
+export function getClient() {
+  if (!client) {
+    client = createRpClient({ baseUrl: window.location.href, fetch: (...args) => fetch(...args) });
+    client.onContext(context => { if (typeof CustomEvent === "function") window.dispatchEvent(new CustomEvent("rp-read-context", { detail: context })); });
+  }
+  return client;
+}
 export async function request(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.error || "请求失败，请稍后重试。");
-    error.status = response.status;
-    if (response.status === 409 && isInactiveBridgeMessage(error.message)) {
-      showHandoff("这个页面已经失效", "它属于已经结束的 Pi 会话。请关闭此页，并使用最新打开的 Web RP 页面。");
-    }
+  const current = getClient();
+  connection ||= current.connect().catch(error => { connection = null; throw error; });
+  await connection;
+  try { return await current.request(path, { ...options, headers: { "content-type": "application/json", ...options.headers } }); }
+  catch (error) {
+    if (error.code === "session_changed") showHandoff("这个页面已经失效", "聊天或 Pi 会话已改变，请重新打开当前页面。");
     throw error;
   }
-  return payload;
 }
+export function resourceUrl(path) { return getClient().resourceUrl(path); }
+export function watch(path, listener, options) { return getClient().watch(path, listener, options); }
+export async function previewAttempt(executionId) { getClient().preview(executionId); state.moduleRegionViews.clear(); return request("/api/v1/state"); }
 
 export function showError(error) {
   elements.errorBanner.textContent = error.message || String(error);
@@ -188,8 +202,4 @@ export function showHandoff(title, description) {
   elements.handoffOverlay.hidden = false;
   elements.handoffOverlay.focus();
   document.title = "页面已交接 · Pi RP";
-}
-
-export function isInactiveBridgeMessage(message) {
-  return /bridge is not active|closed Pi session/i.test(message || "");
 }

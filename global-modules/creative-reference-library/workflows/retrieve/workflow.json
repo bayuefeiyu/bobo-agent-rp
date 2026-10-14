@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 4,
+  "id": "retrieve",
+  "ownerModuleId": "creative-reference-library",
+  "title": "资料自主检索",
+  "description": "返回可能相关的创作参考资料。",
+  "kind": "module-external",
+  "agentCallable": true,
+  "revision": "2",
+  "interface": {
+    "inputs": {
+      "request": {
+        "type": "text",
+        "required": false,
+        "description": "自然语言或关键词请求，支持text/textFile。"
+      },
+      "keywords": {
+        "type": "parameter",
+        "valueType": "string-array",
+        "required": false,
+        "description": "宽泛关键词。"
+      },
+      "context": {
+        "type": "parameter",
+        "valueType": "string",
+        "required": false,
+        "description": "可选创作上下文。"
+      },
+      "budget": {
+        "type": "parameter",
+        "valueType": "object",
+        "required": false,
+        "description": "降低宿主预算上限。"
+      },
+      "includeSemanticCandidates": {
+        "type": "parameter",
+        "valueType": "boolean",
+        "required": false,
+        "description": "默认false；显式开启时需要已就绪的向量索引。"
+      }
+    },
+    "exports": {
+      "references": {
+        "format": "document-set",
+        "description": "仅含标题和完整正文的创作参考集。"
+      }
+    }
+  },
+  "defaults": {
+    "agentId": "creative-reference-library/retriever",
+    "context": {
+      "mode": "fixed"
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4
+  },
+  "nodes": [
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "prepare",
+      "title": "冻结请求和预算",
+      "type": "code",
+      "context": {
+        "mode": "fixed"
+      },
+      "outputs": {},
+      "workflowCalls": [],
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "metadata": {
+        "entryFile": "runtime/prepare.mjs",
+        "mode": "retrieve"
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "select",
+      "title": "自主查询选择",
+      "type": "agent",
+      "agentId": "creative-reference-library/retriever",
+      "dependsOn": [
+        "prepare"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "prepare"
+        ]
+      },
+      "promptFile": "prompts/workflows/retrieve.md",
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "outputs": {
+        "result": {
+          "path": "selection.json",
+          "kind": "file",
+          "format": "json",
+          "scope": "workflow",
+          "retain": "run",
+          "jsonSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "uniqueItems": true,
+                "maxItems": 40,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "unit",
+                        "passage"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delivery": {
+        "primaryOutput": "result"
+      },
+      "workflowCalls": [
+        {
+          "target": "creative-reference-library/search-units"
+        },
+        {
+          "target": "creative-reference-library/search-passages"
+        }
+      ],
+      "retry": {
+        "maxAttempts": 2
+      },
+      "metadata": {
+        "documentWorkspace": true,
+        "initialContext": {
+          "currentInput": true
+        },
+        "nodeOutputInputs": [
+          "prepare"
+        ],
+        "referenceScore": false
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "compose",
+      "title": "组装参考资料",
+      "type": "code",
+      "dependsOn": [
+        "select",
+        "prepare"
+      ],
+      "context": {
+        "mode": "previous-output",
+        "fromNodes": [
+          "select",
+          "prepare"
+        ]
+      },
+      "outputs": {
+        "references": {
+          "path": "references",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workflowCalls": [],
+      "runtimeServices": [
+        "referenceLibrary"
+      ],
+      "metadata": {
+        "entryFile": "runtime/compose.mjs",
+        "mode": "retrieve"
+      }
+    },
+    {
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "id": "return",
+      "title": "返回参考资料",
+      "type": "workflow-return",
+      "dependsOn": [
+        "compose"
+      ],
+      "exports": {
+        "references": {
+          "fromNode": "compose",
+          "output": "references"
+        }
+      },
+      "outputs": {}
+    }
+  ]
+}

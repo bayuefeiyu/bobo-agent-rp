@@ -19,6 +19,12 @@
       "mode": "at-most-one",
       "instruction": "由玩家选择一个档位；代码仅交付当前选择。",
       "fallback": null
+    },
+    "input-review": {
+      "title": "输入审查",
+      "mode": "at-most-one",
+      "instruction": "由玩家选择一个档位；代码仅交付当前选择。无档位为空白，不追加要求。",
+      "fallback": null
     }
   },
   "documents": [
@@ -95,6 +101,81 @@
       "related": [],
       "sources": [
         "按用户确认的导演拨档方案编写。"
+      ]
+    },
+    {
+      "id": "input-review-off",
+      "path": "documents/options/input-review/off.md",
+      "title": "无",
+      "summary": "空白，不追加输入审查要求。",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "input-review",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-review",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "2026-10-11 用户指定的输入审查四档要求。"
+      ]
+    },
+    {
+      "id": "input-review-reasonable",
+      "path": "documents/options/input-review/reasonable.md",
+      "title": "合理性",
+      "summary": "前置导演输入审查：合理性。",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "input-review",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-review",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "2026-10-11 用户指定的输入审查四档要求。"
+      ]
+    },
+    {
+      "id": "input-review-strict",
+      "path": "documents/options/input-review/strict.md",
+      "title": "严格合理性",
+      "summary": "前置导演输入审查：严格合理性。",
+      "categories": [
+        "director-prompt-option"
+      ],
+      "subcategory": "input-review",
+      "readPolicy": "choice",
+      "authority": "binding",
+      "appliesAt": [
+        "planning",
+        "checking"
+      ],
+      "priority": 0,
+      "selectionGroup": "input-review",
+      "readWhen": [],
+      "perspective": "general",
+      "aliases": [],
+      "related": [],
+      "sources": [
+        "2026-10-11 用户指定的输入审查四档要求。"
       ]
     },
     {

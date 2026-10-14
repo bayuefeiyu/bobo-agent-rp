@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>Pi RP</title>
-    <link rel="stylesheet" href="/styles.css?v=24" />
-    <link rel="stylesheet" href="/config.css?v=5" />
+    <link rel="stylesheet" href="/styles.css?v=27" />
+    <link rel="stylesheet" href="/config.css?v=7" />
   </head>
   <body>
     <div class="app-layout">
@@ -28,14 +28,10 @@
           <button id="tab-system" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-system" data-panel="system">
             <span class="tab-icon" aria-hidden="true">设</span><span>系统设置</span>
           </button>
-            <span class="tab-icon" aria-hidden="true">模</span><span>API 与模型</span>
-          </button>
-            <span class="tab-icon" aria-hidden="true">A</span><span>Agent 配置</span>
-          </button>
           <button id="tab-workflows" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-workflows" data-panel="workflows">
             <span class="tab-icon" aria-hidden="true">流</span><span>工作流</span>
           </button>
-          <button id="tab-profiles" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-profiles" data-panel="profiles" title="管理当前作用域的命名配置方案；API Key 等凭据仍只保存在本机缓存。">
+          <button id="tab-profiles" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-profiles" data-panel="profiles" title="管理当前作用域的配置方案；API Key 等凭据仍只保存在本机缓存。">
             <span class="tab-icon" aria-hidden="true">配</span><span>配置方案</span>
           </button>
           <button id="tab-tokens" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-tokens" data-panel="tokens">
@@ -46,6 +42,8 @@
       </aside>
 
       <div class="workspace">
+      <section id="custom-play" hidden aria-label="创作者游玩界面"></section>
+      <nav id="presentation-controls" hidden aria-label="官方游玩控制"><button id="presentation-manage" type="button">管理</button><button id="presentation-default" type="button">恢复默认界面</button></nav>
       <main class="shell">
         <header class="topbar">
         <div>
@@ -162,8 +160,10 @@
               <div class="setting-control setting-control-range">
                 <label for="font-size">字号</label>
                 <div class="range-control">
+                  <button id="font-size-minus" type="button" class="font-size-jump" title="最小字号">A−</button>
                   <input id="font-size" type="range" min="14" max="24" step="1" value="16" />
                   <output id="font-size-value" for="font-size">16 px</output>
+                  <button id="font-size-plus" type="button" class="font-size-jump" title="最大字号">A＋</button>
                 </div>
                 <p id="system-settings-status" class="setting-status" role="status" aria-live="polite"></p>
               </div>
@@ -177,13 +177,13 @@
                 <div id="module-settings-list" class="module-settings-list" aria-live="polite"></div>
                 <div class="module-settings-actions">
                   <button id="reset-module-settings" class="secondary-button" type="button">恢复默认</button>
-                  <button id="save-module-settings" type="submit">保存模块显示</button>
+                  <button id="retry-module-settings" class="secondary-button" type="button" hidden>重试</button>
                 </div>
                 <p id="module-settings-status" class="setting-status" role="status" aria-live="polite"></p>
               </div>
             </form>
             <form id="comfy-connection-form" class="settings-card" aria-labelledby="comfy-connection-heading">
-              <div class="setting-copy"><h3 id="comfy-connection-heading">ComfyUI 连接</h3><p>浏览器只看到连接 ID；凭据保存在系统的项目隔离缓存中。远程连接推荐 HTTPS。</p></div>
+              <div class="setting-copy"><h3 id="comfy-connection-heading">ComfyUI 连接</h3><p>测试使用当前填写的地址和令牌，不会保存配置；令牌留空时使用所选连接已保存的凭据。</p></div>
               <div class="setting-control config-fields">
                 <label>连接<select id="comfy-connection-select" class="setting-select"></select></label>
                 <div class="field-pair"><label>连接 ID<input id="comfy-connection-id" class="setting-input" required /></label><label>名称<input id="comfy-connection-title" class="setting-input" required /></label></div>
@@ -191,8 +191,7 @@
                 <label>访问令牌<input id="comfy-connection-token" class="setting-input" type="password" placeholder="留空保留已保存凭据" /></label>
                 <label>本机 output 路径（仅用于打开目录，可空）<input id="comfy-output-path" class="setting-input" /></label>
                 <label class="check-label"><input id="comfy-insecure-remote" type="checkbox" /> 明确允许非本机 HTTP</label>
-                <div class="config-actions"><button id="comfy-test-connection" type="button" class="secondary-button">测试连接</button><button type="submit">保存连接</button></div>
-                <p id="comfy-connection-status" class="setting-status"></p>
+                <div class="config-actions comfy-connection-actions"><button id="comfy-test-connection" type="button" class="secondary-button">测试连接</button><span id="comfy-connection-status" class="setting-status" role="status" aria-live="polite"></span><button type="submit">保存连接</button><button id="comfy-remove-connection" type="button" class="secondary-danger">移除连接</button><button id="comfy-reload-connections" type="button" class="secondary-button" hidden>重新读取连接</button></div>
                 <div id="comfy-profile-documents" class="comfy-profile-documents"></div>
               </div>
             </form>
@@ -203,7 +202,7 @@
 
         <section id="panel-workflows" class="panel settings-page" role="tabpanel" aria-labelledby="tab-workflows" hidden>
           <div class="settings-heading"><p class="step">WORKFLOW RUNTIME</p><h2>工作流运行</h2><p>查看工作流定义、节点和运行实例；运行策略、触发方式与节点配置统一在“配置方案”中修改。</p></div>
-          <div class="config-toolbar"><label>可用工作流<select id="workflow-select" class="setting-select"></select></label><button id="show-active-workflow" type="button" class="secondary-button">当前前台</button><button id="activate-workflow" type="button">激活 / 运行</button><button id="refresh-workflows" type="button" class="secondary-button">立即刷新</button></div>
+          <div class="config-toolbar"><label>可用工作流<select id="workflow-select" class="setting-select"></select></label><button id="show-active-workflow" type="button" class="secondary-button">当前前台</button><button id="show-running-workflow" type="button" class="secondary-button">正在运行</button><button id="activate-workflow" type="button">设为下轮前台</button><button id="refresh-workflows" type="button" class="secondary-button">立即刷新</button></div>
           <section id="workflow-summary" class="workflow-summary"></section>
           <div id="workflow-node-list" class="workflow-node-list"></div>
           <div class="settings-heading run-heading"><p class="step">LIVE RUNS</p><h3>正在执行与最近实例</h3></div>
@@ -222,7 +221,7 @@
           </div>
 
           <section class="profile-toolbar" aria-labelledby="profile-heading">
-            <div><p class="step">ACTIVE PROFILE</p><h3 id="profile-heading">命名配置方案</h3></div>
+            <div><p class="step">ACTIVE PROFILE</p><h3 id="profile-heading">配置方案</h3></div>
             <label class="compact-field"><span class="field-caption">当前方案
               <span class="help" tabindex="0" data-tooltip="切换后，模型与 Agent 从下一次调用生效；工作流从下一次实例生效。">?</span></span>
               <select id="profile-select"></select>
@@ -237,19 +236,22 @@
           <nav class="config-tabs" aria-label="配置类别">
             <button class="config-tab active" type="button" data-config-panel="models">模型</button>
             <button class="config-tab" type="button" data-config-panel="agents">Agents</button>
+<button class="config-tab" type="button" data-config-panel="assignments">模型指定</button>
             <button class="config-tab" type="button" data-config-panel="workflows">工作流</button>
             <button class="config-tab" type="button" data-config-panel="modules">模块参数</button>
+            <button class="config-tab" type="button" data-config-panel="references">资料库</button>
+            <button class="config-tab" type="button" data-config-panel="history">历史回顾</button>
           </nav>
 
+          <p id="status" class="config-status" role="status" aria-live="polite"></p>
           <section id="config-panel-models" class="config-category-panel"></section>
           <section id="config-panel-agents" class="config-category-panel" hidden></section>
+<section id="config-panel-assignments" class="config-category-panel" hidden></section>
           <section id="config-panel-workflows" class="config-category-panel" hidden></section>
           <section id="config-panel-modules" class="config-category-panel" hidden></section>
+          <section id="config-panel-references" class="config-category-panel" hidden></section>
+          <section id="config-panel-history" class="config-category-panel" hidden></section>
 
-          <footer class="save-bar">
-            <p id="status" role="status" aria-live="polite"></p>
-            <button id="save-profile" type="button">保存当前方案</button>
-          </footer>
         </section>
 
         <section id="panel-tokens" class="panel settings-page" role="tabpanel" aria-labelledby="tab-tokens" hidden>
@@ -311,7 +313,7 @@
         <footer><button value="cancel" class="secondary-button">关闭</button><button id="image-regenerate-confirm" value="default">修改并重新生成</button></footer>
       </form>
     </dialog>
-    <script type="module" src="/app.js?v=26"></script>
+    <script type="module" src="/app.js?v=28"></script>
   <script type="module" src="/config.js?v=4"></script>
   </body>
 </html>

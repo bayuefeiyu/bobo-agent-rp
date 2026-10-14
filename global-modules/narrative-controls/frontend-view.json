@@ -1,11 +1,9 @@
 {
-  "schemaVersion": 2,
-  "regions": [
+  "schemaVersion": 3,
+  "bindings": [
     {
       "id": "creative-requirements",
-      "type": "prompt-controls",
-      "title": "创作要求",
-      "description": "选择各项正文创作要求，保存后用于下一次正文生成。",
+      "kind": "prompts",
       "collectionId": "settings",
       "recordType": "narrative.preferences",
       "recordId": "narrative-preferences",
@@ -13,6 +11,171 @@
       "readCapability": "narrative.preferences.frontend",
       "updateCapability": "narrative.preferences.frontend",
       "controlsFile": "controls.json"
+    },
+    {
+      "id": "history-recall",
+      "kind": "settings",
+      "collectionId": "settings",
+      "recordType": "narrative.history-settings",
+      "recordId": "narrative-history-settings",
+      "view": "frontend",
+      "readCapability": "narrative.history.frontend",
+      "updateCapability": "narrative.history.frontend",
+      "fields": [
+        {
+          "path": "/enabled",
+          "label": "启用历史原文回顾",
+          "help": "默认关闭。开启后后台分批处理合格历史，后续正文创作自动收到相关原文。",
+          "type": "boolean"
+        },
+        {
+          "path": "/indexEveryTurns",
+          "label": "入库间隔（轮）",
+          "help": "累计此数量新满足条件的有效正文轮次后更新；首次开启会补建已有历史。",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "path": "/protectionMode",
+          "label": "近期保护方式",
+          "required": true,
+          "help": "跟随当前创作工作流的近期窗口，或使用固定保护轮数。CD可能形成暂未覆盖的历史空档。",
+          "type": "select",
+          "options": [
+            "context",
+            "fixed"
+          ]
+        },
+        {
+          "path": "/protectRecentTurns",
+          "label": "固定保护轮数",
+          "help": "固定方式生效；最近这些完整正文轮次不入库。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50
+        },
+        {
+          "path": "/targetCharacters",
+          "label": "切片目标长度",
+          "help": "连续聚合多个短自然段，接近此长度后在段落边界结束。",
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 10000
+        },
+        {
+          "path": "/maxCharacters",
+          "label": "切片最大长度",
+          "help": "切片硬上限；超长段落按句子拆分。",
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 20000
+        },
+        {
+          "path": "/overlapCharacters",
+          "label": "重叠长度上限",
+          "help": "相邻切片保留少量完整句子或段落。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        {
+          "path": "/shortTailCharacters",
+          "label": "短尾合并长度",
+          "help": "较短尾片尽量并入前片，仍遵守最大长度。",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        {
+          "path": "/candidatesPerQuery",
+          "label": "每路召回片段数",
+          "help": "上一轮正文和玩家输入分别向量召回，再合并交给rerank。",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        {
+          "path": "/maxResults",
+          "label": "最多历史摘录数",
+          "help": "允许少于此数量，不补齐低相关片段。",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        {
+          "path": "/maxOutputCharacters",
+          "label": "摘录总长度上限",
+          "help": "包含邻段补齐的总原文预算，超限片段省略。",
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 40000
+        },
+        {
+          "path": "/maxPerTurn",
+          "label": "单轮最多摘录数",
+          "help": "限制单个历史轮次占用的摘录数量。",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        {
+          "path": "/deadlineMs",
+          "label": "回顾超时（毫秒）",
+          "help": "超时跳过本轮回顾，正文继续生成。",
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 30000
+        }
+      ]
+    },
+    {
+      "id": "history-maintenance",
+      "kind": "workflows",
+      "workflows": [
+        {
+          "id": "maintain-history-index",
+          "title": "处理历史索引",
+          "parameters": [
+            {
+              "name": "operation",
+              "label": "操作",
+              "required": true,
+              "type": "select",
+              "default": "update",
+              "options": [
+                "update",
+                "rebuild",
+                "cancel",
+                "status"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "regions": [
+    {
+      "id": "creative-requirements",
+      "type": "prompt-controls",
+      "title": "创作要求",
+      "bindingId": "creative-requirements",
+      "description": "选择各项正文创作要求，修改自动保存，用于下一次正文生成。"
+    },
+    {
+      "id": "history-recall",
+      "type": "settings-form",
+      "title": "历史原文回顾",
+      "bindingId": "history-recall",
+      "description": "自动补充以前角色具体说过的话和动作；独立于记忆模块。服务在配置页的历史回顾中设置，参数修改自动保存，用于后续任务。"
+    },
+    {
+      "id": "history-maintenance",
+      "type": "workflow-controls",
+      "title": "历史索引维护",
+      "bindingId": "history-maintenance",
+      "description": "更新、重建或恢复当前会话历史索引；状态和任务进度在配置页历史回顾查看。"
     }
   ]
 }

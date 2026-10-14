@@ -40,7 +40,7 @@ test("a module frontend cannot activate its callable child instead of a backgrou
     await loadModuleComponents(root);
     const file = resolve(root, "frontend-view.json");
     const view = JSON.parse(await readFile(file, "utf8"));
-    const region = view.regions.find(item => item.type === "workflow-controls");
+    const region = view.bindings.find(item => item.kind === "workflows");
     region.workflows[0].id = "narrative-memory-archive";
     await writeFile(file, JSON.stringify(view));
     await assert.rejects(loadModuleComponents(root), /owned background entry workflow/);

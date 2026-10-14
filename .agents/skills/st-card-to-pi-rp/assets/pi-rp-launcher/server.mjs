@@ -1,8 +1,11 @@
+import { API_VERSION, HOST_VERSION, normalizeReadContext } from "./packages/rp-web-contract/index.mjs";
+import { matchOperation, validateOperationRequest, validateOperationResponse } from "./packages/rp-web-contract/operations.mjs";
+import { createStaticHost } from "./packages/rp-web-server/static-host.mjs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile, readdir, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateRuntimePackage } from "./validate-runtime-package.mjs";
 
@@ -11,7 +14,7 @@ const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 
 async function json(path) { return JSON.parse(await readFile(path, "utf8")); }
 async function present(path) { return lstat(path).then(() => true, error => error.code === "ENOENT" ? false : Promise.reject(error)); }
-function isInside(root, path) { const rel = relative(root, path); return Boolean(rel && rel !== ".." && !rel.startsWith(`..${sep}`)); }
+function isInside(root, path) { const rel = relative(root, path); return Boolean(rel && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)); }
 
 export async function scanCards(playRoot) {
   const cardsRoot = resolve(playRoot, "cards");
@@ -23,7 +26,8 @@ export async function scanCards(playRoot) {
     try {
       const manifest = await json(join(cardRoot, "manifest.json"));
       if (manifest.schema_version !== 2 || manifest.id !== item.name || typeof manifest.name !== "string" || !manifest.name.trim()) continue;
-      const launchable = await present(join(cardRoot, "runtime-lock.json")) && await present(join(cardRoot, "runtime", "launch.json"));
+      const lock = await json(join(cardRoot, "runtime-lock.json")).catch(() => null);
+      const launchable = lock?.packageFormat === 3 && lock?.schemaVersion === 2 && await present(join(cardRoot, "runtime", "launch.json"));
       let cover = null;
       if (typeof manifest.cover === "string" && /\.(png|jpe?g|webp)$/i.test(manifest.cover)) {
         const candidate = resolve(cardRoot, manifest.cover);
@@ -74,12 +78,14 @@ async function checkPiVersion(spawnPi, pi, cwd, testedVersion) {
     new Promise((_, rejectDone) => { timer = setTimeout(() => { child.kill(); rejectDone(new Error("Pi version check timed out.")); }, 10000); }),
   ]).finally(() => clearTimeout(timer));
   const actual = String(result).match(/\d+\.\d+\.\d+/)?.[0];
-  if (actual !== testedVersion) throw new Error(`Card was tested with Pi ${testedVersion}; installed Pi reports ${actual || String(result)}.`);
+  if (!actual) throw new Error(`Could not read the installed Pi version: ${String(result)}`);
+  return actual === testedVersion ? [] : [`角色卡已测试 Pi ${testedVersion}，当前安装 Pi ${actual}，将继续启动。`];
 }
 
 function send(response, status, body, type = "application/json; charset=utf-8") {
+  if (status < 400 && type.startsWith("application/json")) validateOperationResponse(response.rpOperation, body);
   response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
-  response.end(type.startsWith("application/json") ? JSON.stringify(body) : body);
+  response.end(type.startsWith("application/json") ? JSON.stringify(status < 400 ? { data: body, requestId: response.getHeader("x-request-id"), readContext: response.rpReadContext || null } : { error: { code: body.code || (status === 403 ? "forbidden" : status === 404 ? "not_found" : "invalid_request"), message: body.error, retryable: false, details: null }, requestId: response.getHeader("x-request-id") }) : body);
 }
 
 export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, spawnPi = spawn, openBrowser = null }) {
@@ -100,7 +106,7 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
     if (!validation.ok) throw new Error(`Card ${id} has invalid runtime dependencies: ${validation.errors.slice(0, 4).join("; ")}`);
     const launch = await json(join(cardRoot, "runtime", "launch.json"));
     const lock = await json(join(cardRoot, "runtime-lock.json"));
-    if (launch.schemaVersion !== 1 || launch.cardId !== id || lock.schemaVersion !== 1 || lock.cardId !== id || !Array.isArray(launch.skills)) throw new Error("Card launch metadata is incompatible.");
+    if (launch.schemaVersion !== 2 || launch.cardId !== id || lock.schemaVersion !== 2 || lock.cardId !== id || !Array.isArray(launch.skills)) throw new Error("Card launch metadata is incompatible.");
     const pathFor = value => {
       if (typeof value !== "string") throw new Error("Card launch path is invalid.");
       const path = resolve(cardRoot, value);
@@ -118,9 +124,9 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
     const current = active;
     if (current.url) {
       try {
-        const snapshot = await fetch(new URL("/api/state", current.url), { signal: AbortSignal.timeout(3000) }).then(response => {
+        const snapshot = await fetch(new URL("/api/v1/state", current.url), { signal: AbortSignal.timeout(3000) }).then(response => {
           if (!response.ok) throw new Error(`Card state returned HTTP ${response.status}.`);
-          return response.json();
+          return response.json().then(envelope => envelope.data);
         });
         if (typeof snapshot.busy !== "boolean" || !Array.isArray(snapshot.blockingWorkflows) || !Number.isInteger(snapshot.activeWorkflowRuns) || snapshot.activeWorkflowRuns < 0) throw new Error("Card state is incomplete.");
         if (snapshot.busy || snapshot.blockingWorkflows?.length || snapshot.activeWorkflowRuns > 0) throw new Error("The current card has unfinished work. Wait for it to finish before switching.");
@@ -173,21 +179,22 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
 
   async function launchCard(id) {
     if (starting) throw new Error("A card is already starting.");
-    if (active?.id === id && active.url) return { url: active.url, reused: true };
+    if (active?.id === id && active.url) return { url: active.url, reused: true, warnings: active.warnings };
     starting = true;
     try {
       const card = await cardDescription(id);
       const nodeMajor = Number(process.versions.node.split(".")[0]);
       if (nodeMajor !== card.testedNodeMajor) throw new Error(`Card was tested with Node ${card.testedNodeMajor}; launcher uses Node ${nodeMajor}.`);
       const pi = piInvocation();
-      await checkPiVersion(spawnPi, pi, root, card.testedVersion);
+      const warnings = await checkPiVersion(spawnPi, pi, root, card.testedVersion);
+      for (const warning of warnings) console.warn(warning);
       await stopActive();
       const stateDirectory = join(root, "launcher", "state");
       await mkdir(stateDirectory, { recursive: true });
       const readyPath = join(stateDirectory, `ready-${randomUUID()}.json`);
       const args = [...pi.prefix, "--mode", "rpc", "--approve", "--no-extensions", "-e", card.entry, "--no-skills", ...card.skills.flatMap(path => ["--skill", path]), "--no-prompt-templates", "--no-context-files", "--session-dir", join(root, "pi-sessions", id)];
       const child = spawnPi(pi.command, args, { cwd: root, env: { ...process.env, BOBO_RP_CARD_ID: id, BOBO_RP_READY_FILE: readyPath, BOBO_RP_LAUNCHER_URL: baseUrl }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
-      const current = { id, child, readyPath, url: null, stderr: "", stdout: "", exited: false };
+      const current = { id, child, readyPath, warnings, url: null, stderr: "", stdout: "", exited: false };
       active = current;
       child.on("exit", () => { current.exited = true; if (active === current) active = null; });
       child.on("error", error => { current.stderr = error.message; current.exited = true; if (active === current) active = null; });
@@ -204,7 +211,7 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
           current.url = ready.url;
           await saveRecent(recentPath, id);
           if (openBrowser) openBrowser(ready.url);
-          return { url: ready.url, reused: false };
+          return { url: ready.url, reused: false, warnings };
         }
         await new Promise(resolveDelay => setTimeout(resolveDelay, 100));
       }
@@ -215,15 +222,25 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
     } finally { starting = false; }
   }
 
+  const serverInstanceId = randomUUID();
+  const readContext = { serverInstanceId, cardId: null, chatId: null, executionId: null };
+  const staticHost = createStaticHost({ root: sourceDirectory, mounts: { "/vendor/": join(sourceDirectory, "packages") } });
+  const connection = { apiVersion: API_VERSION, hostVersion: HOST_VERSION, serverInstanceId, readContext, mode: "launcher", capabilities: ["connection", "get.cards", "get.cards.cardId.cover", "post.launch"], resources: { apiRoot: "/api/v1" }, authentication: { connection: "same-origin-cookie" } };
   const server = createServer(async (request, response) => {
+    response.setHeader("x-request-id", randomUUID());
+    response.rpReadContext = readContext;
     try {
       const url = new URL(request.url || "/", baseUrl);
+      response.rpOperation = matchOperation(request.method, url.pathname);
+      if (request.headers.host !== new URL(baseUrl).host || request.headers.origin && new URL(request.headers.origin).origin !== new URL(baseUrl).origin) return send(response, 403, { error: "Origin or Host is invalid." });
+      if (request.method === "GET" && url.pathname === "/api/v1/connection") return send(response, 200, connection);
       if (request.method === "GET" && url.pathname === "/") {
-        const html = (await readFile(join(sourceDirectory, "index.html"), "utf8")).replace("__LAUNCHER_TOKEN__", token);
+        response.setHeader("set-cookie", `rp-launcher=${token}; HttpOnly; SameSite=Strict; Path=/`);
+        const html = await readFile(join(sourceDirectory, "index.html"), "utf8");
         return send(response, 200, html, "text/html; charset=utf-8");
       }
-      if (request.method === "GET" && url.pathname === "/api/cards") return send(response, 200, { cards: await scanCards(root), recent: await recentCards(recentPath), active: active?.id || null });
-      const coverMatch = url.pathname.match(/^\/api\/cards\/([A-Za-z0-9][A-Za-z0-9._-]*)\/cover$/);
+      if (request.method === "GET" && url.pathname === "/api/v1/cards") return send(response, 200, { cards: await scanCards(root), recent: await recentCards(recentPath), active: active?.id || null });
+      const coverMatch = url.pathname.match(/^\/api\/v1\/cards\/([A-Za-z0-9][A-Za-z0-9._-]*)\/cover$/);
       if (request.method === "GET" && coverMatch) {
         const id = coverMatch[1], cardRoot = join(cardsRoot, id), manifest = await json(join(cardRoot, "manifest.json"));
         if (manifest.id !== id || typeof manifest.cover !== "string") throw new Error("Cover is unavailable.");
@@ -231,13 +248,18 @@ export async function startLauncher({ playRoot, host = "127.0.0.1", port = 0, sp
         if (!isInside(cardRoot, cover) || ![".png", ".jpg", ".jpeg", ".webp"].includes(extension) || !(await lstat(cover)).isFile()) throw new Error("Cover path is invalid.");
         return send(response, 200, await readFile(cover), { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" }[extension]);
       }
-      if (request.method === "POST" && url.pathname === "/api/launch") {
-        if (request.headers["x-launcher-token"] !== token) return send(response, 403, { error: "Launcher token is invalid." });
+      if (request.method === "POST" && url.pathname === "/api/v1/launch") {
+        if (!String(request.headers.cookie || "").split(/;\s*/).includes(`rp-launcher=${token}`)) return send(response, 403, { error: "Launcher session is invalid." });
+        const expected = normalizeReadContext(JSON.parse(url.searchParams.get("readContext") || "null"));
+        if (JSON.stringify(expected) !== JSON.stringify(readContext)) return send(response, 409, { error: "Launcher connection has changed.", code: "session_changed" });
         let body = "";
         for await (const chunk of request) { body += chunk; if (body.length > 4096) return send(response, 413, { error: "Request is too large." }); }
-        const { cardId } = JSON.parse(body);
+        const payload = JSON.parse(body);
+        validateOperationRequest(response.rpOperation, payload);
+        const { cardId } = payload;
         return send(response, 200, await launchCard(cardId));
       }
+      if (url.pathname.startsWith("/vendor/") && await staticHost(request, response, url)) return;
       send(response, 404, { error: "Not found." });
     } catch (error) { send(response, 400, { error: error.message || String(error) }); }
   });

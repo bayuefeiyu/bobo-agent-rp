@@ -4,10 +4,12 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { createApplication } from "../server.mjs";
-import { createCardStore } from "../server/card-store.mjs";
+import { createApplication } from "../../../../../../packages/rp-web-server/index.mjs";
+import { createCardStore } from "../../../../../../packages/rp-web-server/card-store.mjs";
+import { createStaticHost } from "../../../../../../packages/rp-web-server/static-host.mjs";
 import { renderCardText } from "../../pi-rp-runtime/.pi/lib/rp-card-text.mjs";
 
 async function createFixture() {
@@ -26,6 +28,32 @@ async function createFixture() {
     "utf8",
   );
   return cardDirectory;
+}
+
+function createApiFetch(base) {
+  let readContext = null;
+  return async function apiFetch(path, options = {}) {
+    const url = new URL(path, base);
+    if (url.pathname !== "/api/v1/connection" && readContext) {
+      url.searchParams.set("readContext", JSON.stringify(readContext));
+    }
+    const response = await fetch(url, options);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) return response;
+    const envelope = await response.json();
+    if (response.ok && envelope.readContext) readContext = envelope.readContext;
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      url: response.url,
+      envelope,
+      json: async () => response.ok ? envelope.data : envelope,
+      text: response.text.bind(response),
+      arrayBuffer: response.arrayBuffer.bind(response),
+    };
+  };
 }
 
 test("an opening with unresolved character macro is rejected instead of using the card title", async () => {
@@ -65,6 +93,7 @@ test("card-local server only transports view state and player input", async () =
     getConfigContext: async () => ({ mode: "play", scope: "card", ownerId: "test-card", token: "config-token" }),
     authorizeConfigMutation: async value => { if (value !== "config-token") throw Object.assign(new Error("Configuration session token is invalid."), { status: 403 }); },
     getConfigCatalog: async () => ({ schemaVersion: 1, agents: [], workflows: [], modules: [], runtimePolicy: workflowPolicy }),
+    browseReferenceDirectories: async value=>({path:value.path,directories:[]}),
     listConfigProfiles: async () => ({ activeProfileId: "test-profile", profiles: [{ id: "builtin", name: "内置默认", builtin: true }, { id: "test-profile", name: "Test" }] }),
     getConfigProfile: async () => configProfile,
     createConfigProfile: async value => ({ ...configProfile, ...value }),
@@ -80,7 +109,7 @@ test("card-local server only transports view state and player input", async () =
       sessionId: openingId ? "test-session" : null,
       modules: [{
         id: "character-memory", title: "角色记忆", description: "测试模块", displayOrder: 10,
-        available: Boolean(openingId), view: { schemaVersion: 1, regions: [] }, data: openingId ? { memories: [] } : null,
+        available: Boolean(openingId), view: { schemaVersion: 3, bindings: [], regions: [] }, data: openingId ? { memories: [] } : null,
       }],
     }),
     inspectDataImpact: async (messageId, revision, moduleId) => ({ messageId, revision, moduleId, matched: true, batches: [{ batchId: "batch-1" }] }),
@@ -104,6 +133,8 @@ test("card-local server only transports view state and player input", async () =
     restoreAgent: async agentId => ({ effective: { id: agentId }, overridden: false }),
     listWorkflows: async () => ({ activeWorkflowId: "demo-module/standard", workflows: [{ id: "demo-module/standard", ownerModuleId: "demo-module", title: "Standard", kind: "foreground", nodes: [] }] }),
     listWorkflowRuns: async () => ({ runs: [] }),
+    getWorkflowNodeProcessRecord: async (runId,nodeId,callId) => ({runId,nodeId,selectedCall:{id:callId||"latest"},calls:[{id:"first"},{id:"latest"}]}),
+    removeComfyConnection: async connectionId => ({removed:connectionId}),
     openWorkflowNodeProcessRecord: async (runId, nodeId) => {
       openedProcessRecord = { runId, nodeId };
       return { opened: true, path: `workflow/process-records/${runId}/${nodeId}.md` };
@@ -122,11 +153,12 @@ test("card-local server only transports view state and player input", async () =
     cancelWorkflowRun: async runId => ({ id: runId, status: "cancelled" }),
     skipWorkflowRun: async runId => ({ id: runId, status: "skipped" }),
     getImageGeneration: async () => ({ available: true, sessionId: "test-session", profiles: [{ id: "demo", title: "Demo" }], connections: [], preferences: null, requests: [], renders: [] }),
+    getComfyConnections: async () => ({ connections: [{ id: "saved", title: "Saved connection", baseUrl: "http://127.0.0.1:8188", hasToken: true }] }),
     saveImagePreferences: async preferences => ({ saved: true, preferences }),
     startImageGeneration: async () => ({ accepted: true, runId: "image-run-1" }),
     recoverImageGeneration: async requestId => ({ accepted: true, requestId }),
     saveComfyConnection: async value => ({ ...value, hasToken: Boolean(value.token), token: undefined }),
-    testComfyConnection: async () => ({ ok: true, elapsedMs: 2 }),
+    testComfyConnection: async (id,draft)=>({ok:true,elapsedMs:2,cacheConnectionId:id,draft}),
     saveComfyProfileOverride: async () => ({ saved: true }),
     openComfyProfileDocument: async () => ({ opened: true }),
     getComfyRenderImage: async () => ({ body: Buffer.from([1, 2, 3]), mimeType: "image/png" }),
@@ -195,16 +227,27 @@ test("card-local server only transports view state and player input", async () =
       return { openingId, playerName, messages, busy: false };
     },
   };
-  const server = createServer(createApplication({ cardStore: createCardStore(cardDirectory, renderCardText), bridge }));
+  const server = createServer(createApplication({
+    cardStore: createCardStore(cardDirectory, renderCardText),
+    bridge,
+    staticHost: createStaticHost({ root: fileURLToPath(new URL("../public/", import.meta.url)) }),
+  }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
+  const apiFetch = createApiFetch(base);
 
   try {
+    const connectionResponse = await apiFetch(`${base}/api/v1/connection`);
+    assert.equal(connectionResponse.status, 200);
+    const connection = connectionResponse.envelope.data;
+    assert.deepEqual(connection.apiVersion, { major: 1, minor: 0 });
+    assert.deepEqual(connection.hostVersion, { major: 1, minor: 0 });
+    assert.ok(connection.readContext?.serverInstanceId);
     const pageResponse = await fetch(`${base}/`);
     assert.equal(pageResponse.status, 200);
-    assert.equal(pageResponse.headers.get("cache-control"), "no-store");
+    assert.equal(pageResponse.headers.get("cache-control"), "no-cache");
     const page = await pageResponse.text();
     assert.match(page, /id="tab-profiles"/);
     assert.doesNotMatch(page, /id="tab-api"/);
@@ -212,123 +255,143 @@ test("card-local server only transports view state and player input", async () =
     assert.match(page, /id="panel-profiles"/);
     assert.match(page, /src="\/config\.js\?v=4"/);
 
-    // S6：旧配置入口已删除。命名配置方案是唯一入口，源码不再生成旧 URL，
-    // 服务器也不再提供兼容重定向——因此旧地址必须按"不存在"处理。
+    // Configuration has a dedicated static entry alongside the API.
     const legacyConfigResponse = await fetch(`${base}/config.html`);
-    assert.equal(legacyConfigResponse.status, 404);
-    assert.deepEqual(await legacyConfigResponse.json(), { error: "Not found." });
+    assert.equal(legacyConfigResponse.status, 200);
+    assert.match(await legacyConfigResponse.text(), /config-panel/);
 
-    const card = await fetch(`${base}/api/card`).then(response => response.json());
+    const card = await apiFetch(`${base}/api/v1/card`).then(response => response.json());
     assert.equal(card.name, "沈月");
     assert.equal(card.openings[0].content, "沈月看向{{user}}。");
 
-    const sessions = await fetch(`${base}/api/sessions`).then(response => response.json());
+    const sessions = await apiFetch(`${base}/api/v1/sessions`).then(response => response.json());
     assert.equal(sessions[0].id, "saved-01");
 
-    const initialSettings = await fetch(`${base}/api/settings`).then(response => response.json());
+    const initialSettings = await apiFetch(`${base}/api/v1/settings`).then(response => response.json());
     assert.equal(initialSettings.common.system.fontSize, 16);
     assert.deepEqual(initialSettings.card.settings.featureModules, { order: ["character-memory"], hidden: [] });
-    const configContext = await fetch(`${base}/api/config/context`).then(response => response.json());
+    const configContext = await apiFetch(`${base}/api/v1/config/context`).then(response => response.json());
     assert.equal(configContext.scope, "card");
-    const configCatalog = await fetch(`${base}/api/config/catalog`).then(response => response.json());
+    const configCatalog = await apiFetch(`${base}/api/v1/config/catalog`).then(response => response.json());
     assert.equal(configCatalog.runtimePolicy.maxConcurrency, 10);
-    assert.equal((await fetch(`${base}/api/config/profiles`).then(response => response.json())).activeProfileId, "test-profile");
-    const deniedConfigSave = await fetch(`${base}/api/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(configProfile) });
+    const deniedDirectoryBrowse=await apiFetch(`${base}/api/v1/config/reference-library/directories`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:"/library"})});
+    assert.equal(deniedDirectoryBrowse.status,403);
+    const browsed=await apiFetch(`${base}/api/v1/config/reference-library/directories`,{method:"POST",headers:{"content-type":"application/json","x-rp-config-token":"config-token"},body:JSON.stringify({path:"/library"})}).then(response=>response.json());
+    assert.equal(browsed.path,"/library");
+    const draftConnection={id:"draft",baseUrl:"http://127.0.0.1:12345",token:"synthetic-test-token"};
+    const independentConnections=await apiFetch(`${base}/api/v1/image-generation/connections`).then(response=>response.json());
+    assert.equal(independentConnections.connections[0].id,"saved");
+    assert.equal(independentConnections.connections[0].hasToken,true);
+    assert.equal(independentConnections.connections[0].token,undefined);
+    const testedConnection=await apiFetch(`${base}/api/v1/image-generation/connections/local/test`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(draftConnection)}).then(response=>response.json());
+    assert.equal(testedConnection.cacheConnectionId,"local");assert.deepEqual(testedConnection.draft,draftConnection);
+    assert.equal((await apiFetch(`${base}/api/v1/config/profiles`).then(response => response.json())).activeProfileId, "test-profile");
+    const deniedConfigSave = await apiFetch(`${base}/api/v1/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(configProfile) });
     assert.equal(deniedConfigSave.status, 403);
-    const configSave = await fetch(`${base}/api/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json", "x-rp-config-token": "config-token" }, body: JSON.stringify({ ...configProfile, name: "Saved" }) });
+    const deniedConfigError = await deniedConfigSave.json();
+    assert.equal(deniedConfigError.error.code, "forbidden");
+    assert.equal(deniedConfigError.error.retryable, false);
+    assert.ok(deniedConfigError.requestId);
+    const configSave = await apiFetch(`${base}/api/v1/config/profiles/test-profile`, { method: "PUT", headers: { "content-type": "application/json", "x-rp-config-token": "config-token" }, body: JSON.stringify({ ...configProfile, name: "Saved" }) });
     assert.equal(configSave.status, 200);
     assert.equal((await configSave.json()).name, "Saved");
 
-    const initialModules = await fetch(`${base}/api/modules`).then(response => response.json());
+    const initialModules = await apiFetch(`${base}/api/v1/modules`).then(response => response.json());
     assert.equal(initialModules.modules[0].id, "character-memory");
     assert.equal(initialModules.modules[0].available, false);
-    const impact = await fetch(`${base}/api/data-impact?messageId=message.one&revision=2&moduleId=character-memory`).then(response => response.json());
+    const impact = await apiFetch(`${base}/api/v1/data-impact?messageId=message.one&revision=2&moduleId=character-memory`).then(response => response.json());
     assert.deepEqual({ messageId: impact.messageId, revision: impact.revision, moduleId: impact.moduleId }, { messageId: "message.one", revision: 2, moduleId: "character-memory" });
-    const records = await fetch(`${base}/api/modules/character-memory/regions/entries/records?search=one&filter.kind=a`).then(response => response.json());
+    const records = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/entries/records?search=one&filter.kind=a`).then(response => response.json());
     assert.equal(records.items[0].id, "record.one");
     assert.deepEqual(records.value.filters, { kind: "a" });
-    const history = await fetch(`${base}/api/modules/character-memory/regions/entries/records/record.one/history`).then(response => response.json());
+    const history = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/entries/records/record.one/history`).then(response => response.json());
     assert.equal(history.recordId, "record.one");
-    const frontendSettings = await fetch(`${base}/api/modules/character-memory/regions/settings/settings`).then(response => response.json());
+    const frontendSettings = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/settings/settings`).then(response => response.json());
     assert.equal(frontendSettings.record.revision, 2);
-    const savedFrontendSettings = await fetch(`${base}/api/modules/character-memory/regions/settings/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: 2, values: { "/enabled": false } }) }).then(response => response.json());
+    const savedFrontendSettings = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/settings/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: 2, operationId: "settings-save-1", values: { "/enabled": false } }) }).then(response => response.json());
     assert.equal(savedFrontendSettings.saved, true);
-    const integrity = await fetch(`${base}/api/modules/character-memory/regions/integrity/integrity`).then(response => response.json());
+    const integrityResponse = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/integrity/integrity`);
+    const integrity = await integrityResponse.json();
     assert.deepEqual([integrity.moduleId, integrity.regionId, integrity.issues[0].startTurn], ["character-memory", "integrity", 3]);
-    const moduleRun = await fetch(`${base}/api/modules/character-memory/regions/tools/workflows/character-memory-maintain/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ payload: {} }) }).then(response => response.json());
+    const moduleRun = await apiFetch(`${base}/api/v1/modules/character-memory/bindings/tools/workflows/character-memory-maintain/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ payload: {} }) }).then(response => response.json());
     assert.equal(moduleRun.run.id, "run-module");
-    const openedDefinition = await fetch(`${base}/api/modules/character-memory/open`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target: "definition" }) }).then(response => response.json());
+    const openedDefinition = await apiFetch(`${base}/api/v1/modules/character-memory/open`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target: "definition" }) }).then(response => response.json());
     assert.equal(openedDefinition.opened, true);
     assert.deepEqual(openedModuleDocument, { moduleId: "character-memory", target: "definition" });
-    const imageGeneration = await fetch(`${base}/api/image-generation`).then(response => response.json());
+    const imageGeneration = await apiFetch(`${base}/api/v1/image-generation`).then(response => response.json());
     assert.equal(imageGeneration.profiles[0].id, "demo");
     const imagePreferences = { selectedProfileIds: ["demo"], quickMode: true, inputPolicy: { kind: "recent-turns", turnCount: 3, target: "latest" } };
-    const savedImagePreferences = await fetch(`${base}/api/image-generation/preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(imagePreferences) });
+    const savedImagePreferences = await apiFetch(`${base}/api/v1/image-generation/preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(imagePreferences) });
     assert.equal(savedImagePreferences.status, 200);
     assert.deepEqual((await savedImagePreferences.json()).preferences, imagePreferences);
-    const imageRun = await fetch(`${base}/api/image-generation/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profileIds: ["demo"] }) });
+    const imageRun = await apiFetch(`${base}/api/v1/image-generation/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profileIds: ["demo"] }) });
     assert.equal(imageRun.status, 202);
     assert.equal((await imageRun.json()).runId, "image-run-1");
 
-    const modelSaveResponse = await fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
+    const modelSaveResponse = await apiFetch(`${base}/api/v1/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, id: "test", provider: "custom", model: "test-model", apiKey: "secret" }) });
     assert.equal(modelSaveResponse.status, 404);
-    assert.deepEqual((await fetch(`${base}/api/models`).then(response => response.json())).profiles, []);
-    assert.deepEqual((await fetch(`${base}/api/models/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json())).models, ["test-model"]);
-    assert.equal((await fetch(`${base}/api/models/test`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelId: "test" }) }).then(response => response.json())).reply, "hello");
-    assert.equal((await fetch(`${base}/api/agents`).then(response => response.json())).agents[0].effective.id, "demo-module/writer");
-    assert.equal((await fetch(`${base}/api/workflows`).then(response => response.json())).activeWorkflowId, "demo-module/standard");
+    assert.deepEqual((await apiFetch(`${base}/api/v1/models`).then(response => response.json())).profiles, []);
+    assert.deepEqual((await apiFetch(`${base}/api/v1/models/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json())).models, ["test-model"]);
+    assert.equal((await apiFetch(`${base}/api/v1/models/test`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelId: "test" }) }).then(response => response.json())).reply, "hello");
+    assert.equal((await apiFetch(`${base}/api/v1/agents`).then(response => response.json())).agents[0].effective.id, "demo-module/writer");
+    assert.equal((await apiFetch(`${base}/api/v1/workflows`).then(response => response.json())).activeWorkflowId, "demo-module/standard");
     const fullAgentId = "demo-module/writer";
-    const savedAgent = await fetch(`${base}/api/agents/${encodeURIComponent(fullAgentId)}`, {
+    const savedAgent = await apiFetch(`${base}/api/v1/agents/${encodeURIComponent(fullAgentId)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: "ignored", name: "Writer" }),
     });
     assert.equal(savedAgent.status, 404);
-    const rejectedBareAgent = await fetch(`${base}/api/agents/writer`, {
+    const rejectedBareAgent = await apiFetch(`${base}/api/v1/agents/writer`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "Writer" }),
     });
     assert.equal(rejectedBareAgent.status, 404);
-    const restoredAgent = await fetch(`${base}/api/agents/${encodeURIComponent(fullAgentId)}/restore`, { method: "POST" });
+    const restoredAgent = await apiFetch(`${base}/api/v1/agents/${encodeURIComponent(fullAgentId)}/restore`, { method: "POST" });
     assert.equal(restoredAgent.status, 404);
     const fullWorkflowId = "demo-module/standard";
-    const activatedWorkflow = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const activatedWorkflow = await apiFetch(`${base}/api/v1/workflows/${encodeURIComponent(fullWorkflowId)}/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(activatedWorkflow.status, 202);
     assert.equal((await activatedWorkflow.json()).activated, fullWorkflowId);
-    const rejectedBareWorkflow = await fetch(`${base}/api/workflows/standard/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const rejectedBareWorkflow = await apiFetch(`${base}/api/v1/workflows/standard/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(rejectedBareWorkflow.status, 400);
-    const bindingResponse = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/nodes/story/binding`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: fullAgentId }) });
+    const bindingResponse = await apiFetch(`${base}/api/v1/workflows/${encodeURIComponent(fullWorkflowId)}/nodes/story/binding`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: fullAgentId }) });
     assert.equal(bindingResponse.status, 404);
-    const triggerResponse = await fetch(`${base}/api/workflows/${encodeURIComponent(fullWorkflowId)}/trigger`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "manual" }) });
+    const triggerResponse = await apiFetch(`${base}/api/v1/workflows/${encodeURIComponent(fullWorkflowId)}/trigger`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "manual" }) });
     assert.equal(triggerResponse.status, 404);
-    assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
-    const openedProcess = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
+    assert.equal((await apiFetch(`${base}/api/v1/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
+    const viewedProcess = await apiFetch(`${base}/api/v1/workflow-runs/run-1/nodes/story/process-record?callId=first`).then(response => response.json());
+    const removedConnection=await apiFetch(`${base}/api/v1/image-generation/connections/test-remove`,{method:"DELETE"}).then(response=>response.json());
+    assert.equal(removedConnection.removed,"test-remove");
+    assert.equal(viewedProcess.selectedCall.id,"first");
+    assert.equal(viewedProcess.nodeId,"story");
+    const openedProcess = await apiFetch(`${base}/api/v1/workflow-runs/run-1/nodes/story/process-record/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
     assert.equal(openedProcess.opened, true);
     assert.deepEqual(openedProcessRecord, { runId: "run-1", nodeId: "story" });
-    const openedTranscript = await fetch(`${base}/api/workflow-runs/run-1/nodes/meeting/team-transcript/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
+    const openedTranscript = await apiFetch(`${base}/api/v1/workflow-runs/run-1/nodes/meeting/team-transcript/open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json());
     assert.equal(openedTranscript.opened, true);
     assert.deepEqual(openedTeamTranscript, { runId: "run-1", nodeId: "meeting" });
-    const recoveredNodeResponse = await fetch(`${base}/api/workflow-runs/run-1/nodes/story/recover`, { method: "POST" });
+    const recoveredNodeResponse = await apiFetch(`${base}/api/v1/workflow-runs/run-1/nodes/story/recover`, { method: "POST" });
     assert.equal(recoveredNodeResponse.status, 202);
     const recoveredNode = await recoveredNodeResponse.json();
     assert.deepEqual(recoveredNode, { runId: "run-1", nodeId: "story", status: "running" });
-    const recoveredImageResponse = await fetch(`${base}/api/image-generation/requests/image-request-one/recover`, { method: "POST" });
+    const recoveredImageResponse = await apiFetch(`${base}/api/v1/image-generation/requests/image-request-one/recover`, { method: "POST" });
     assert.equal(recoveredImageResponse.status, 202);
     const recoveredImage = await recoveredImageResponse.json();
     assert.deepEqual(recoveredImage, { accepted: true, requestId: "image-request-one" });
-    const skippedRun = await fetch(`${base}/api/workflow-runs/run-1/skip`, { method: "POST" }).then(response => response.json());
+    const skippedRun = await apiFetch(`${base}/api/v1/workflow-runs/run-1/skip`, { method: "POST" }).then(response => response.json());
     assert.equal(skippedRun.status, "skipped");
-    const savedPolicy = await fetch(`${base}/api/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) });
+    const savedPolicy = await apiFetch(`${base}/api/v1/workflow-policy`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ schemaVersion: 1, maxConcurrency: 8, modelFailure: { silentFallback: false, defaultFallbackModelId: null } }) });
     assert.equal(savedPolicy.status, 404);
-    assert.equal((await fetch(`${base}/api/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
+    assert.equal((await apiFetch(`${base}/api/v1/workflow-policy`).then(response => response.json())).maxConcurrency, 10);
 
-    const cards = await fetch(`${base}/api/cards`).then(response => response.json());
+    const cards = await apiFetch(`${base}/api/v1/cards`).then(response => response.json());
     assert.equal(cards[0].name, "沈月");
-    const coverResponse = await fetch(`${base}/api/cards/test-card/cover`);
+    const coverResponse = await apiFetch(`${base}/api/v1/cards/test-card/cover`);
     assert.equal(coverResponse.headers.get("content-type"), "image/png");
 
-    const openingResponse = await fetch(`${base}/api/opening`, {
+    const openingResponse = await apiFetch(`${base}/api/v1/opening`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ openingId: "opening-00", playerName: "旅人" }),
@@ -336,22 +399,22 @@ test("card-local server only transports view state and player input", async () =
     assert.equal(openingResponse.status, 201);
     const opened = await openingResponse.json();
     assert.equal(opened.messages[0].content, "沈月看向旅人。");
-    const openedModules = await fetch(`${base}/api/modules`).then(response => response.json());
+    const openedModules = await apiFetch(`${base}/api/v1/modules`).then(response => response.json());
     assert.equal(openedModules.sessionId, "test-session");
     assert.equal(openedModules.modules[0].available, true);
 
-    const inputResponse = await fetch(`${base}/api/input`, {
+    const inputResponse = await apiFetch(`${base}/api/v1/input`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: "我向她点头。" }),
+      body: JSON.stringify({ content: "我向她点头。", operationId: "input-1" }),
     });
     assert.equal(inputResponse.status, 202);
     assert.equal(submitted, "我向她点头。");
 
-    const snapshot = await fetch(`${base}/api/state`).then(response => response.json());
+    const snapshot = await apiFetch(`${base}/api/v1/state`).then(response => response.json());
     assert.equal(snapshot.openingId, "opening-00");
 
-    const settingsResponse = await fetch(`${base}/api/user-settings`, {
+    const settingsResponse = await apiFetch(`${base}/api/v1/user-settings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ playerName: "远行者", description: "来自北境的旅人。" }),
@@ -361,33 +424,33 @@ test("card-local server only transports view state and player input", async () =
     assert.equal(settings.playerName, "远行者");
     assert.equal(playerDescription, "来自北境的旅人。");
 
-    const deleteProfileResponse = await fetch(`${base}/api/user-profile?playerName=${encodeURIComponent("旧用户")}`, { method: "DELETE" });
+    const deleteProfileResponse = await apiFetch(`${base}/api/v1/user-profile?playerName=${encodeURIComponent("旧用户")}`, { method: "DELETE" });
     assert.equal(deleteProfileResponse.status, 200);
     const deletedProfile = await deleteProfileResponse.json();
     assert.equal(deletedProfile.deletedPlayerName, "旧用户");
     assert.equal(deletedProfile.settings.user.savedProfiles.some(profile => profile.name === "旧用户"), false);
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const avatarUploadResponse = await fetch(`${base}/api/user-avatar?playerName=${encodeURIComponent("远行者")}`, {
+    const avatarUploadResponse = await apiFetch(`${base}/api/v1/user-avatar?playerName=${encodeURIComponent("远行者")}`, {
       method: "POST",
       headers: { "content-type": "image/png" },
       body: png,
     });
     assert.equal(avatarUploadResponse.status, 200);
     assert.deepEqual(avatarBody, png);
-    const avatarResponse = await fetch(`${base}/api/user-avatar?playerName=${encodeURIComponent("远行者")}`);
+    const avatarResponse = await apiFetch(`${base}/api/v1/user-avatar?playerName=${encodeURIComponent("远行者")}`);
     assert.equal(avatarResponse.status, 200);
     assert.equal(avatarResponse.headers.get("content-type"), "image/png");
     assert.deepEqual(Buffer.from(await avatarResponse.arrayBuffer()), png);
 
-    const invalidAvatarResponse = await fetch(`${base}/api/user-avatar?playerName=${encodeURIComponent("远行者")}`, {
+    const invalidAvatarResponse = await apiFetch(`${base}/api/v1/user-avatar?playerName=${encodeURIComponent("远行者")}`, {
       method: "POST",
       headers: { "content-type": "image/png" },
       body: Buffer.from("not an image"),
     });
     assert.equal(invalidAvatarResponse.status, 400);
 
-    const systemSettingsResponse = await fetch(`${base}/api/system-settings`, {
+    const systemSettingsResponse = await apiFetch(`${base}/api/v1/system-settings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ fontSize: 19 }),
@@ -396,7 +459,7 @@ test("card-local server only transports view state and player input", async () =
     const systemSettings = await systemSettingsResponse.json();
     assert.equal(systemSettings.common.system.fontSize, 19);
 
-    const moduleSettingsResponse = await fetch(`${base}/api/module-display-settings`, {
+    const moduleSettingsResponse = await apiFetch(`${base}/api/v1/module-display-settings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ order: ["character-memory"], hidden: ["character-memory"] }),
@@ -405,14 +468,14 @@ test("card-local server only transports view state and player input", async () =
     const moduleSettings = await moduleSettingsResponse.json();
     assert.deepEqual(moduleSettings.card.settings.featureModules.hidden, ["character-memory"]);
 
-    const invalidModuleSettingsResponse = await fetch(`${base}/api/module-display-settings`, {
+    const invalidModuleSettingsResponse = await apiFetch(`${base}/api/v1/module-display-settings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ order: ["character-memory", "character-memory"], hidden: [] }),
     });
     assert.equal(invalidModuleSettingsResponse.status, 400);
 
-    const resumeResponse = await fetch(`${base}/api/resume`, {
+    const resumeResponse = await apiFetch(`${base}/api/v1/resume`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: "saved-01" }),
@@ -420,22 +483,22 @@ test("card-local server only transports view state and player input", async () =
     assert.equal(resumeResponse.status, 200);
     assert.equal(resumed, "saved-01");
 
-    const switchResponse = await fetch(`${base}/api/card-switch`, {
+    const switchResponse = await apiFetch(`${base}/api/v1/card-switch`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardId: "another-card" }),
     });
     assert.equal(switchResponse.status, 202);
     assert.equal(switched, "another-card");
 
-    await fetch(`${base}/api/card-switch`, {
+    await apiFetch(`${base}/api/v1/card-switch`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cardId: "test-card", forceNew: true }),
     });
     assert.equal(switched, "test-card");
     assert.equal(switchForceNew, true);
 
-    const editMessageResponse = await fetch(`${base}/api/messages/0`, {
+    const editMessageResponse = await apiFetch(`${base}/api/v1/messages/0`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: "修改后的开场。" }),
+      body: JSON.stringify({ content: "修改后的开场。", expectedRevision: 1, operationId: "message-edit-1" }),
     });
     assert.equal(editMessageResponse.status, 200);
     assert.equal(messages[0].content, "修改后的开场。");
@@ -444,16 +507,16 @@ test("card-local server only transports view state and player input", async () =
       { sequence: 1, turn: 1, role: "user", kind: "message", content: "第一步。" },
       { sequence: 2, turn: 1, role: "assistant", kind: "message", content: "第一步的回应。" },
     );
-    const truncateMessageResponse = await fetch(`${base}/api/messages/1`, { method: "DELETE" });
+    const truncateMessageResponse = await apiFetch(`${base}/api/v1/messages/1`, { method: "DELETE" });
     assert.equal(truncateMessageResponse.status, 200);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].content, "修改后的开场。");
 
-    const deleteMessageResponse = await fetch(`${base}/api/messages/0`, { method: "DELETE" });
+    const deleteMessageResponse = await apiFetch(`${base}/api/v1/messages/0`, { method: "DELETE" });
     assert.equal(deleteMessageResponse.status, 200);
     assert.equal(messages.length, 0);
 
-    const deleteResponse = await fetch(`${base}/api/sessions/saved-01`, { method: "DELETE" });
+    const deleteResponse = await apiFetch(`${base}/api/v1/sessions/saved-01`, { method: "DELETE" });
     assert.equal(deleteResponse.status, 200);
     assert.equal(deleted, "saved-01");
   } finally {

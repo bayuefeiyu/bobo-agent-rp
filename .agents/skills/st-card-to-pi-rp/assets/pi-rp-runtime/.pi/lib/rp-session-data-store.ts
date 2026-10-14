@@ -8,6 +8,7 @@
 //   1. 哪些模块参与数据层（`dataModuleBindings`：只取声明了数据契约的模块）；
 //   2. 构造 store 时必须带上的会话与可选覆盖。
 import { RpDataStore } from "./rp-data-store.mjs";
+import { executionDataStore } from "./rp-executions.mjs";
 
 // 纯类型导入：编译后不产生运行期引用，因此不与宿主形成循环依赖。
 import type { FeatureModule } from "./rp-host-types.ts";
@@ -33,16 +34,18 @@ export function createSessionDataStore({
   featureModules,
   initialOverrides,
   playerName,
+  executionId,
 }: {
   sessionDirectory: string;
   featureModules: FeatureModule[];
   initialOverrides?: Record<string, any>;
   playerName?: string | null;
+  executionId?: string | null;
 }) {
-  return new RpDataStore({
+  return executionDataStore(new RpDataStore({
     sessionDirectory,
     modules: dataModuleBindings(featureModules),
     ...(initialOverrides === undefined ? {} : { initialOverrides }),
     ...(playerName === undefined ? {} : { playerName }),
-  });
+  }), executionId);
 }

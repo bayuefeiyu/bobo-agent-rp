@@ -3,11 +3,12 @@
 // 负责：模块列表与显示顺序设置、模块记录/故事/设置/创作要求/归档状态/工作流控制的区域渲染，
 // 以及区域分发中枢 `createModuleRegion`。
 //
+import { createSettingsAutosave } from "./module-autosave.js";
 import { renderMarkdown } from "./markdown.js?v=4";
 import { buildModuleJsonTree } from "./module-json.js?v=2";
-import { composePromptPreview, selectionsFromValues, valuesFromSelections } from "./prompt-controls.js?v=1";
+import { composePromptPreview, selectionsFromValues } from "./prompt-controls.js?v=1";
 import { renderImageGenerationRegion } from "./app-image.js?v=1";
-import { appendModuleEmpty, componentReference, elements, modelPresets, request, showError, state } from "./app-context.js";
+import { appendModuleEmpty, componentReference, elements, getClient, modelPresets, request, showError, state } from "./app-context.js";
 
 export function toggleCardModule(button) {
   const content = document.getElementById(button.getAttribute("aria-controls"));
@@ -15,6 +16,7 @@ export function toggleCardModule(button) {
   const expanded = button.getAttribute("aria-expanded") !== "true";
   button.setAttribute("aria-expanded", String(expanded));
   content.hidden = !expanded;
+  if (expanded) content.loadModuleTabs?.();
   const stateLabel = button.querySelector(".module-toggle-state");
   if (stateLabel) stateLabel.textContent = expanded ? "收起" : "展开";
   const moduleId = button.closest("[data-module-id]")?.dataset.moduleId;
@@ -99,7 +101,8 @@ export function inputForDeclaration(field, value) {
   else if (field.type === "select") {
     input = document.createElement("select");
     if (!field.required) input.append(new Option("—", ""));
-    for (const option of field.options || []) input.append(new Option(option, option));
+    const labels = { context: "跟随创作窗口", fixed: "固定轮数", update: "补建 / 恢复", rebuild: "重新编码", cancel: "取消索引任务", status: "查看状态" };
+    for (const option of field.options || []) input.append(new Option(labels[option] || option, option));
   } else {
     input = document.createElement("input");
     input.type = field.type === "boolean" ? "checkbox" : ["integer", "number"].includes(field.type) ? "number" : "text";
@@ -108,6 +111,7 @@ export function inputForDeclaration(field, value) {
     if (field.maximum != null) input.max = String(field.maximum);
   }
   input.dataset.fieldPath = field.path || `/${field.name}`;
+  input.className = field.type === "select" ? "setting-select" : field.type === "boolean" ? "" : "setting-input";
   input.required = field.required === true;
   if (field.type === "boolean") input.checked = value === true;
   else if (value !== undefined && value !== null) input.value = field.type === "json" ? JSON.stringify(value, null, 2) : String(value);
@@ -124,6 +128,7 @@ export function declaredInputValue(input, field) {
 export function createDeclaredField(field, value) {
   const label = document.createElement("label");
   label.className = "module-interactive-field";
+  if (field.type === "boolean") label.classList.add("module-interactive-boolean");
   const title = document.createElement("span"); title.textContent = field.label;
   const input = inputForDeclaration(field, value);
   label.append(title, input);
@@ -142,7 +147,7 @@ export async function renderRecordHistory(container, module, region, recordId) {
   async function load(cursor = null, reset = false) {
     try {
       const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records/${encodeURIComponent(recordId)}/history${suffix}`);
+      const payload = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/records/${encodeURIComponent(recordId)}/history${suffix}`);
       if (reset || cursor === null) container.replaceChildren();
       for (const item of payload.items || []) {
         const article = document.createElement("article"); article.className = "module-history-record";
@@ -175,14 +180,16 @@ export async function renderRecordBrowserRegion(section, module, region) {
   const next = document.createElement("button"); next.type = "button"; next.className = "secondary-button"; next.textContent = "下一页";
   const pageLabel = document.createElement("span"); paging.append(previous, pageLabel, next);
   section.append(controls, results, paging);
-  const cursors = [null]; let page = 0;
+  const cursors = [null]; let page = 0, generation = 0;
   async function loadPage(reset = false) {
+    const currentGeneration = ++generation;
     if (reset) { cursors.splice(0, cursors.length, null); page = 0; }
     results.replaceChildren(); appendModuleEmpty(results, "正在读取记录……"); previous.disabled = true; next.disabled = true;
     const params = new URLSearchParams(); if (cursors[page]) params.set("cursor", cursors[page]); if (search.value.trim()) params.set("search", search.value.trim());
     for (const { filter, input } of filterInputs) if (input.value !== "") params.set(`filter.${filter.id}`, input.value);
     try {
-      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records?${params}`);
+      const payload = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/records?${params}`);
+      if (currentGeneration !== generation) return;
       results.replaceChildren();
       for (const item of payload.items || []) {
         const article = document.createElement("article"); article.className = "module-record module-browser-record";
@@ -197,11 +204,13 @@ export async function renderRecordBrowserRegion(section, module, region) {
       if (!(payload.items || []).length) appendModuleEmpty(results, region.empty);
       if (payload.nextCursor) cursors[page + 1] = payload.nextCursor; else cursors.splice(page + 1);
       previous.disabled = page === 0; next.disabled = !payload.nextCursor; pageLabel.textContent = `第 ${page + 1} 页 · ${payload.returned || 0} 条`;
-    } catch (error) { results.replaceChildren(); appendModuleEmpty(results, error.message); pageLabel.textContent = "读取失败"; }
+    } catch (error) { if (currentGeneration !== generation) return; results.replaceChildren(); appendModuleEmpty(results, error.message); pageLabel.textContent = "读取失败"; }
   }
   controls.addEventListener("submit", event => { event.preventDefault(); void loadPage(true); });
   previous.addEventListener("click", () => { if (page > 0) { page -= 1; void loadPage(); } });
   next.addEventListener("click", () => { if (cursors[page + 1]) { page += 1; void loadPage(); } });
+  section.querySelector(".module-empty")?.remove();
+  section.refreshRegion = () => loadPage();
   await loadPage();
 }
 
@@ -213,18 +222,30 @@ export async function renderStoryBrowserRegion(section, module, region) {
   const results = document.createElement("div"); results.className = "module-story-list";
   const more = document.createElement("button"); more.type = "button"; more.className = "secondary-button"; more.textContent = "更多故事";
   section.append(controls, results, more);
-  let cursor = null; let items = [];
+  let cursor = null; let items = [], generation = 0;
+  const cards = new Map();
   const valueOf = (value, key) => value?.[key] ?? value?.[key.replace(/[A-Z]/g, letter => ` ${letter.toLowerCase()}`)] ?? null;
-  async function load(reset = false) {
+  async function load(reset = false, refresh = false) {
+    const currentGeneration = ++generation, keepCount = items.length;
     if (reset) { cursor = null; items = []; results.replaceChildren(); }
     more.disabled = true;
     try {
-      const suffix = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-      const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/records${suffix}`);
-      items.push(...(payload.items || [])); cursor = payload.nextCursor || null;
+      let nextCursor = refresh ? null : cursor;
+      const refreshed = [];
+      do {
+        const suffix = nextCursor ? `?cursor=${encodeURIComponent(nextCursor)}` : "";
+        const payload = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/records${suffix}`);
+        if (currentGeneration !== generation) return;
+        (refresh ? refreshed : items).push(...(payload.items || []));
+        nextCursor = payload.nextCursor || null;
+      } while (refresh && nextCursor && refreshed.length < keepCount);
+      if (refresh) items = refreshed;
+      cursor = nextCursor;
       const ordered = mode.value === "series" ? [...items].sort((a, b) => String(valueOf(a.value, "seriesId") || "").localeCompare(String(valueOf(b.value, "seriesId") || "")) || Number(valueOf(a.value, "sequence") || 0) - Number(valueOf(b.value, "sequence") || 0)) : [...items];
       results.replaceChildren();
       for (const item of ordered) {
+        const signature = JSON.stringify(item), cached = cards.get(item.id);
+        if (cached?.signature === signature) { results.append(cached.article); continue; }
         const value = item.value || {}; const article = document.createElement("article"); article.className = "module-story-card";
         const heading = document.createElement("strong");
         const time = valueOf(value, "timeRange") || "时间未标明"; const locations = valueOf(value, "locations") || [];
@@ -237,237 +258,179 @@ export async function renderStoryBrowserRegion(section, module, region) {
         read.addEventListener("click", async () => {
           if (!full.hidden) { full.hidden = true; read.textContent = "阅读全文"; return; }
           read.disabled = true;
-          try { const story = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/stories/${encodeURIComponent(item.id)}`); full.replaceChildren(); appendInteractiveValue(full, story.value); full.hidden = false; read.textContent = "收起全文"; }
+          try { const story = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/stories/${encodeURIComponent(item.id)}`); full.replaceChildren(); appendInteractiveValue(full, story.value); full.hidden = false; read.textContent = "收起全文"; }
           catch (error) { full.replaceChildren(); appendModuleEmpty(full, error.message); full.hidden = false; }
           finally { read.disabled = false; }
         });
         actions.append(read);
-        if (region.allowOpenAuthoritySource) { const source = document.createElement("button"); source.type = "button"; source.className = "module-file-button"; source.textContent = "打开源文件"; source.title = "高级 DIY：直接编辑将绕过版本、索引、归档和一致性保障"; source.addEventListener("click", async () => { source.disabled = true; try { await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/stories/${encodeURIComponent(item.id)}/open-source`, { method: "POST", body: "{}" }); } catch (error) { showError(error); } finally { source.disabled = false; } }); actions.append(source); }
+        if (region.allowOpenAuthoritySource) { const source = document.createElement("button"); source.type = "button"; source.className = "module-file-button"; source.textContent = "打开源文件"; source.title = "高级 DIY：直接编辑将绕过版本、索引、归档和一致性保障"; source.addEventListener("click", async () => { source.disabled = true; try { await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/stories/${encodeURIComponent(item.id)}/open-source`, { method: "POST", body: "{}" }); } catch (error) { showError(error); } finally { source.disabled = false; } }); actions.append(source); }
         article.append(heading, summary, cast, actions, full); results.append(article);
+        cards.set(item.id, { signature, article });
       }
       if (!items.length) appendModuleEmpty(results, region.empty || "暂无故事。");
       more.hidden = !cursor; more.disabled = !cursor;
-    } catch (error) { appendModuleEmpty(results, error.message); more.hidden = true; }
+    } catch (error) { if (currentGeneration !== generation) return; appendModuleEmpty(results, error.message); more.hidden = true; }
   }
   mode.addEventListener("change", () => { void load(true); }); more.addEventListener("click", () => { void load(false); });
+  section.refreshRegion = () => load(false, true);
   await load(true);
+}
+
+function attachAutosave(section, form, payload, endpoint) {
+  const sessionId = state.snapshot?.sessionId;
+  const sameSession = () => { if (state.snapshot?.sessionId !== sessionId) throw new Error("聊天已经切换，原聊天的修改已停止提交。"); };
+  const status = document.createElement("span"); status.className = "setting-status";
+  status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "重试"; retry.hidden = true;
+  const reload = document.createElement("button"); reload.type = "button"; reload.textContent = "重新读取"; reload.hidden = true;
+  const actions = document.createElement("div"); actions.className = "module-interactive-actions";
+  actions.append(status, retry, reload); form.append(actions);
+  const saver = createSettingsAutosave({
+    revision: payload.record.revision, values: payload.values,
+    read: async () => { sameSession(); const latest = await request(endpoint); sameSession(); return latest; },
+    readOutcome: operationId => request(`${endpoint.replace(/\/settings$/, "")}/operations/${encodeURIComponent(operationId)}`),
+    write: body => { sameSession(); return request(endpoint, { method: "PUT", body: JSON.stringify({ ...body, expectedSessionId: sessionId }) }); },
+    notify: result => {
+      section.dataset.unsaved = String(result.pending || result.saving || form.querySelector('[data-editing="true"]') != null);
+      status.textContent = result.saving ? "保存中……" : result.error || (result.pending ? "待保存" : "已保存");
+      retry.hidden = !result.error || result.conflict; reload.hidden = !result.conflict;
+    },
+  });
+  retry.addEventListener("click", () => saver.retry());
+  reload.addEventListener("click", () => {
+    // Conflict reload is explicit and is the only operation allowed to discard a local draft.
+    if (!window.confirm("重新读取会放弃此区域尚未保存的修改，继续吗？")) return;
+    section.dataset.unsaved = "false";
+    void section.reloadSettings();
+  });
+  form.addEventListener("submit", event => event.preventDefault());
+  return saver;
 }
 
 export async function renderSettingsFormRegion(section, module, region) {
   appendModuleEmpty(section, "正在读取设置……");
+  const endpoint = `/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/settings`;
   try {
-    const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/settings`);
+    const payload = await request(endpoint);
     section.replaceChildren();
     if (region.title) { const title = document.createElement("h4"); title.textContent = region.title; section.append(title); }
     if (region.description) { const description = document.createElement("p"); description.className = "module-description"; description.textContent = region.description; section.append(description); }
     const form = document.createElement("form"); form.className = "module-settings-form";
     const inputs = [];
-    for (const field of region.fields || []) { const built = createDeclaredField(field, payload.values?.[field.path]); inputs.push({ field, input: built.input }); form.append(built.label); }
-    const action = document.createElement("div"); action.className = "module-interactive-actions";
-    const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = region.submitLabel || "保存设置";
-    const status = document.createElement("span"); status.className = "setting-status"; action.append(submit, status); form.append(action); section.append(form);
-    form.addEventListener("submit", async event => {
-      event.preventDefault(); submit.disabled = true; status.textContent = "保存中……";
-      try {
-        const values = Object.fromEntries(inputs.map(({ field, input }) => [field.path, declaredInputValue(input, field)]));
-        await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/settings`, { method: "PUT", body: JSON.stringify({ expectedRevision: payload.record.revision, values }) });
-        status.textContent = "已保存"; await renderSettingsFormRegion(section, module, region);
-      } catch (error) { status.textContent = `保存失败：${error.message}`; submit.disabled = false; }
-    });
+    for (const field of region.fields || []) { const built = createDeclaredField(field, payload.values?.[field.path]); inputs.push({ field, input: built.input, label: built.label }); }
+    let groups = [];
+    if (module.id === "narrative-memory" && region.id === "memory-settings") groups = [
+      { id: "archive", title: "归档", matches: path => path.startsWith("/archive/") },
+      { id: "retrieval", title: "检索", matches: path => path.startsWith("/retrieval/") },
+      { id: "compression", title: "压缩", matches: path => path.startsWith("/compression/") },
+    ];
+    if (module.id === "narrative-controls" && region.id === "history-recall") groups = [
+      { id: "timing", title: "触发与保护", matches: path => ["/enabled", "/indexEveryTurns", "/protectionMode", "/protectRecentTurns"].includes(path) },
+      { id: "chunks", title: "原文切片", matches: path => ["/targetCharacters", "/maxCharacters", "/overlapCharacters", "/shortTailCharacters"].includes(path) },
+      { id: "retrieval", title: "召回", matches: path => ["/candidatesPerQuery", "/maxResults", "/maxOutputCharacters", "/maxPerTurn", "/deadlineMs"].includes(path) },
+    ];
+    if (groups.length) {
+      const pages = groups.map(group => ({ ...group, fields: inputs.filter(({ field }) => group.matches(field.path)) })).filter(page => page.fields.length);
+      for (const { field, label } of inputs) if (!groups.some(group => group.matches(field.path))) form.append(label);
+      const fieldTabs = document.createElement("div"); fieldTabs.className = "module-settings-tabs"; form.append(fieldTabs);
+      const key = `${state.featureModulePayload?.sessionId || "no-chat"}-${module.id}-${region.id}-fields`;
+      appendModuleTabs(fieldTabs, pages, key, (panel, page) => { panel.classList.add("module-settings-form"); for (const { label } of page.fields) panel.append(label); })();
+    } else for (const { label } of inputs) form.append(label);
+    section.reloadSettings = () => renderSettingsFormRegion(section, module, region);
+    const saver = attachAutosave(section, form, payload, endpoint);
+    for (const { field, input } of inputs) {
+      const save = () => {
+        try {
+          if (!input.checkValidity()) throw new Error("请填写有效值并遵守取值范围。");
+          input.dataset.editing = "false";
+          saver.commit({ [field.path]: declaredInputValue(input, field) });
+          input.removeAttribute("aria-invalid");
+          input.parentNode.querySelector(".field-error")?.remove();
+        } catch (error) {
+          input.dataset.editing = "true"; section.dataset.unsaved = "true";
+          input.setAttribute("aria-invalid", "true");
+          let message = input.parentNode.querySelector(".field-error");
+          if (!message) { message = document.createElement("span"); message.className = "field-error"; input.parentNode.append(message); }
+          message.textContent = error.message;
+        }
+      };
+      if (["boolean", "select"].includes(field.type)) input.addEventListener("change", save);
+      else {
+        input.addEventListener("input", () => { input.dataset.editing = "true"; section.dataset.unsaved = "true"; });
+        input.addEventListener("blur", () => { if (input.dataset.editing === "true") save(); });
+      }
+    }
+    section.append(form);
+    section.refreshRegion = async () => {
+      if (saver.dirty || section.dataset.unsaved === "true") return;
+      const latest = await request(endpoint);
+      if (JSON.stringify(latest.values) !== JSON.stringify(payload.values)) await renderSettingsFormRegion(section, module, region);
+    };
   } catch (error) { section.replaceChildren(); appendModuleEmpty(section, error.message); }
 }
 
 export async function renderPromptControlsRegion(section, module, region) {
   appendModuleEmpty(section, "正在读取创作要求……");
+  const endpoint = `/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/settings`;
   try {
-    const endpoint = `/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/settings`;
-    const payload = await request(endpoint);
-    const controls = payload.controls || { groups: [] };
-    const groups = Array.isArray(controls.groups) ? controls.groups : [];
-    const draftKey = JSON.stringify([state.featureModulePayload?.sessionId, module.id, region.id]);
-    let draft = state.promptControlDrafts.get(draftKey);
-    if (!draft?.dirty && !draft?.saving) {
-      draft = { selections: selectionsFromValues(controls, payload.values), revision: payload.record.revision, dirty: false, saving: false, error: "" };
-      state.promptControlDrafts.set(draftKey, draft);
-    }
-    const selections = draft.selections;
-
+    const payload = await request(endpoint), controls = payload.controls || { groups: [] };
+    const selections = selectionsFromValues(controls, payload.values);
     section.replaceChildren();
     if (region.title) { const title = document.createElement("h4"); title.textContent = region.title; section.append(title); }
     if (region.description) { const description = document.createElement("p"); description.className = "module-description"; description.textContent = region.description; section.append(description); }
-
-    const form = document.createElement("form");
-    form.className = "module-prompt-controls-form";
-    const groupViews = [];
-    const previewBody = document.createElement("div");
-    previewBody.className = "prompt-control-preview-body";
-
-    const renderPreview = () => {
-      previewBody.replaceChildren();
-      const preview = composePromptPreview(controls, selections);
-      if (!preview.length) {
-        appendModuleEmpty(previewBody, "暂未选择创作要求。");
-        return;
-      }
-      for (const item of preview) {
-        const article = document.createElement("article");
-        article.className = "prompt-control-preview-item";
-        const title = document.createElement("h6");
-        title.textContent = item.title;
-        article.append(title);
-        appendModuleValue(article, item.content, "markdown");
-        previewBody.append(article);
-      }
-    };
-
-    for (const group of groups) {
-      const fieldset = document.createElement("fieldset");
-      fieldset.className = "prompt-control-group";
-      const legend = document.createElement("legend");
-      legend.textContent = group.title || group.id;
-      fieldset.append(legend);
-      if (group.description) {
-        const description = document.createElement("p");
-        description.className = "prompt-control-description";
-        description.textContent = group.description;
-        fieldset.append(description);
-      }
-
-      const segmented = document.createElement("div");
-      segmented.className = "prompt-control-segmented";
-      segmented.setAttribute("role", "radiogroup");
-      segmented.setAttribute("aria-label", group.title || group.id);
-      const customLabel = document.createElement("label");
-      customLabel.className = "prompt-control-custom";
-      const customTitle = document.createElement("span");
-      customTitle.textContent = "自定义文本";
-      const customInput = document.createElement("textarea");
-      customInput.maxLength = 50000;
-      customInput.placeholder = "输入本组创作要求……";
-      customInput.value = selections[group.id]?.customText || "";
-      customLabel.append(customTitle, customInput);
+    const form = document.createElement("form"); form.className = "module-prompt-controls-form";
+    section.reloadSettings = () => renderPromptControlsRegion(section, module, region);
+    const saver = attachAutosave(section, form, payload, endpoint);
+    for (const group of controls.groups || []) {
+      const fieldset = document.createElement("fieldset"); fieldset.className = "prompt-control-group";
+      const legend = document.createElement("legend"); legend.textContent = group.title || group.id; fieldset.append(legend);
+      if (group.description) { const description = document.createElement("p"); description.className = "prompt-control-description"; description.textContent = group.description; fieldset.append(description); }
+      const segmented = document.createElement("div"); segmented.className = "prompt-control-segmented";
+      segmented.setAttribute("role", "radiogroup"); segmented.setAttribute("aria-label", group.title || group.id);
+      const customLabel = document.createElement("label"); customLabel.className = "prompt-control-custom";
+      const customTitle = document.createElement("span"); customTitle.textContent = "自定义文本";
+      const customInput = document.createElement("textarea"); customInput.maxLength = 50000; customInput.placeholder = "输入本组创作要求……";
+      customInput.value = selections[group.id]?.customText || ""; customLabel.append(customTitle, customInput);
+      const preview = document.createElement("div"); preview.className = "prompt-control-inline-preview";
       const options = [];
-
       const updateGroup = () => {
-        const selectedId = selections[group.id]?.optionId;
-        for (const { option, input, label } of options) {
-          const selected = option.id === selectedId;
-          input.checked = selected;
-          label.classList.toggle("is-selected", selected);
+        for (const { option, input, label } of options) { const selected = option.id === selections[group.id].optionId; input.checked = selected; label.classList.toggle("is-selected", selected); }
+        customLabel.hidden = selections[group.id].optionId !== "custom"; customInput.disabled = customLabel.hidden;
+        preview.hidden = !customLabel.hidden; preview.replaceChildren();
+        if (!preview.hidden) {
+          const content = composePromptPreview({ groups: [group] }, selections)[0]?.content;
+          if (content) appendModuleValue(preview, content, "markdown");
+          else appendModuleEmpty(preview, "此档位不附加提示词。");
         }
-        const customSelected = selectedId === "custom";
-        customLabel.hidden = !customSelected;
-        customInput.disabled = !customSelected;
-        customInput.setAttribute("aria-hidden", String(!customSelected));
-        renderPreview();
       };
-
-      for (const option of Array.isArray(group.options) ? group.options : []) {
-        const label = document.createElement("label");
-        label.className = "prompt-control-option";
-        const input = document.createElement("input");
-        input.type = "radio";
-        input.className = "sr-only";
-        input.name = `prompt-${module.id}-${region.id}-${group.id}`;
-        input.value = option.id;
-        input.checked = option.id === selections[group.id]?.optionId;
+      for (const option of group.options || []) {
+        const label = document.createElement("label"); label.className = "prompt-control-option";
+        const input = document.createElement("input"); input.type = "radio"; input.className = "sr-only";
+        input.name = `prompt-${module.id}-${region.id}-${group.id}`; input.value = option.id;
         input.addEventListener("change", () => {
-          selections[group.id].optionId = input.value;
-          draft.dirty = true;
-          draft.error = "";
-          updateGroup();
+          selections[group.id].optionId = input.value; updateGroup();
+          saver.commit({ [`/selections/${group.id}/optionId`]: input.value });
         });
-        const copy = document.createElement("span");
-        copy.textContent = option.label || option.id;
-        label.append(input, copy);
-        segmented.append(label);
-        options.push({ option, input, label });
+        const copy = document.createElement("span"); copy.textContent = option.label || option.id; label.append(input, copy); segmented.append(label); options.push({ option, input, label });
       }
-      customInput.addEventListener("input", () => {
-        selections[group.id].customText = customInput.value;
-        draft.dirty = true;
-        draft.error = "";
-        renderPreview();
-      });
-      customLabel.hidden = selections[group.id]?.optionId !== "custom";
-      customInput.disabled = customLabel.hidden;
-      customInput.setAttribute("aria-hidden", String(customLabel.hidden));
-      fieldset.append(segmented, customLabel);
-      form.append(fieldset);
-      groupViews.push({ updateGroup, fieldset });
+      customInput.addEventListener("input", () => { selections[group.id].customText = customInput.value; customInput.dataset.editing = "true"; section.dataset.unsaved = "true"; });
+      customInput.addEventListener("blur", () => { if (customInput.dataset.editing !== "true") return; customInput.dataset.editing = "false"; saver.commit({ [`/selections/${group.id}/customText`]: customInput.value }); });
+      fieldset.append(segmented, preview, customLabel); form.insertBefore(fieldset, form.lastChild);
+      updateGroup();
     }
-
-    const preview = document.createElement("section");
-    preview.className = "prompt-control-preview";
-    preview.setAttribute("aria-live", "polite");
-    const previewTitle = document.createElement("h5");
-    previewTitle.className = "prompt-control-preview-title";
-    previewTitle.textContent = controls.title || "创作要求";
-    preview.append(previewTitle, previewBody);
-    form.append(preview);
-
-    const action = document.createElement("div");
-    action.className = "module-interactive-actions";
-    const submit = document.createElement("button");
-    submit.type = "submit";
-    submit.textContent = `保存${controls.title || "创作要求"}`;
-    const reload = document.createElement("button");
-    reload.type = "button";
-    reload.className = "secondary-button";
-    reload.textContent = "重新读取";
-    reload.hidden = true;
-    const status = document.createElement("span");
-    status.className = "setting-status";
-    action.append(submit, reload, status);
-    form.append(action);
     section.append(form);
-    for (const view of groupViews) view.updateGroup();
-
-    const updateSaving = () => {
-      submit.disabled = draft.saving;
-      for (const view of groupViews) view.fieldset.disabled = draft.saving;
-      status.textContent = draft.saving ? "保存中……" : draft.error;
-      reload.hidden = !draft.error;
+    section.refreshRegion = async () => {
+      if (saver.dirty || section.dataset.unsaved === "true") return;
+      const latest = await request(endpoint);
+      if (JSON.stringify(latest.values) !== JSON.stringify(payload.values)) await renderPromptControlsRegion(section, module, region);
     };
-    updateSaving();
-
-    reload.addEventListener("click", () => {
-      reload.disabled = true;
-      state.promptControlDrafts.delete(draftKey);
-      void renderPromptControlsRegion(section, module, region);
-    });
-    form.addEventListener("submit", async event => {
-      event.preventDefault();
-      if (draft.saving) return;
-      draft.saving = true;
-      draft.error = "";
-      updateSaving();
-      try {
-        await request(endpoint, {
-          method: "PUT",
-          body: JSON.stringify({ expectedRevision: draft.revision, values: valuesFromSelections(controls, selections) }),
-        });
-        state.promptControlDrafts.delete(draftKey);
-        await renderPromptControlsRegion(section, module, region);
-      } catch (error) {
-        const conflict = error.status === 409 || /revision|conflict/i.test(error.message || "");
-        draft.error = conflict
-          ? "保存冲突：当前聊天设置已经更新，草稿仍保留。点击“重新读取”会放弃草稿。"
-          : `保存失败：${error.message}`;
-        draft.saving = false;
-        updateSaving();
-      }
-    });
-  } catch (error) {
-    section.replaceChildren();
-    appendModuleEmpty(section, error.message);
-  }
+  } catch (error) { section.replaceChildren(); appendModuleEmpty(section, error.message); }
 }
 
 export async function renderIntegrityAlertsRegion(section, module, region) {
   appendModuleEmpty(section, "正在检查归档状态……");
   try {
-    const payload = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/integrity`);
+    const payload = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/integrity`);
     section.querySelector(".module-empty")?.remove();
     const issues = payload.issues || [];
     for (const issue of issues) {
@@ -486,7 +449,7 @@ export async function renderIntegrityAlertsRegion(section, module, region) {
           const action = payload.action;
           const workflowPayload = { [action.startTurnParameter]: issue.startTurn, [action.endTurnParameter]: issue.endTurn };
           if (action.operationParameter) workflowPayload[action.operationParameter] = action.operationValue;
-          const result = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(action.workflowRegionId)}/workflows/${encodeURIComponent(action.workflowId)}/run`, { method: "POST", body: JSON.stringify({ payload: workflowPayload }) });
+          const result = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(action.workflowBindingId)}/workflows/${encodeURIComponent(action.workflowId)}/run`, { method: "POST", body: JSON.stringify({ payload: workflowPayload }) });
           detail.textContent = `已启动限定修复：${result.run?.id || action.workflowId}。`;
         } catch (error) { detail.textContent = `启动失败：${error.message}`; repair.disabled = false; }
       });
@@ -505,7 +468,7 @@ export async function renderWorkflowControlsRegion(section, module, region) {
   const status = document.createElement("div"); status.className = "module-workflow-status";
   async function refreshStatus() {
     try {
-      const payload = await request("/api/workflow-runs");
+      const payload = await request("/api/v1/workflow-runs");
       const allowed = new Set((region.workflows || []).map(item => componentReference(module.id, item.id)));
       const runs = (payload.runs || []).filter(run => allowed.has(runWorkflowReference(run))).slice(-8).reverse();
       const fragment = document.createDocumentFragment();
@@ -514,7 +477,7 @@ export async function renderWorkflowControlsRegion(section, module, region) {
         const label = document.createElement("span"); label.textContent = `${run.workflowTitle || run.workflowId} · ${run.status}`; row.append(label);
         if (!["completed", "skipped", "failed", "cancelled"].includes(run.status) && run.live !== false) {
           const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "module-file-button"; cancel.textContent = "取消";
-          cancel.addEventListener("click", async () => { cancel.disabled = true; try { await request(`/api/workflow-runs/${encodeURIComponent(run.id)}/cancel`, { method: "POST" }); await refreshStatus(); } catch (error) { showError(error); cancel.disabled = false; } });
+          cancel.addEventListener("click", async () => { cancel.disabled = true; try { await request(`/api/v1/workflow-runs/${encodeURIComponent(run.id)}/cancel`, { method: "POST" }); await refreshStatus(); } catch (error) { showError(error); cancel.disabled = false; } });
           row.append(cancel);
         }
         fragment.append(row);
@@ -534,7 +497,7 @@ export async function renderWorkflowControlsRegion(section, module, region) {
       event.preventDefault(); if (workflow.confirm && !window.confirm(workflow.confirm)) return; button.disabled = true; status.textContent = "正在启动……";
       try {
         const payload = Object.fromEntries(inputs.map(({ field, input }) => [field.name, declaredInputValue(input, field)]));
-        const result = await request(`/api/modules/${encodeURIComponent(module.id)}/regions/${encodeURIComponent(region.id)}/workflows/${encodeURIComponent(workflow.id)}/run`, { method: "POST", body: JSON.stringify({ payload }) });
+        const result = await request(`/api/v1/modules/${encodeURIComponent(module.id)}/bindings/${encodeURIComponent(region.bindingId)}/workflows/${encodeURIComponent(workflow.id)}/run`, { method: "POST", body: JSON.stringify({ payload }) });
         status.textContent = `已启动：${result.run?.id || workflow.id}（${result.run?.status || "pending"}）`; await refreshStatus();
       } catch (error) { status.textContent = `启动失败：${error.message}`; }
       finally { button.disabled = false; }
@@ -545,145 +508,29 @@ export async function renderWorkflowControlsRegion(section, module, region) {
   await refreshStatus();
 }
 
-export function createModuleRegion(region, data, module = null) {
+const moduleRenderers = new Map([
+  ["record-browser", renderRecordBrowserRegion], ["story-browser", renderStoryBrowserRegion],
+  ["settings-form", renderSettingsFormRegion], ["prompt-controls", renderPromptControlsRegion],
+  ["integrity-alerts", renderIntegrityAlertsRegion], ["workflow-controls", renderWorkflowControlsRegion],
+  ["image-generation", (section, module, region) => renderImageGenerationRegion(section, region.imageMode)],
+]);
+export function registerModuleRenderer(type, renderer) {
+  if (typeof type !== "string" || typeof renderer !== "function") throw new Error("A renderer type and function are required.");
+  const previous = moduleRenderers.get(type); moduleRenderers.set(type, renderer);
+  return () => { if (moduleRenderers.get(type) === renderer) { if (previous) moduleRenderers.set(type, previous); else moduleRenderers.delete(type); } };
+}
+export function createModuleRegion(region, _data, module = null) {
   const section = document.createElement("section");
-  section.className = `module-region module-region-${region.type || "text"}`;
-  if (region.title) {
-    const title = document.createElement("h4");
-    title.textContent = region.title;
-    section.append(title);
-  }
-  const value = valueAtPath(data, region.path);
-
+  section.className = `module-region module-region-${region.type}`;
   if (region.spoiler) section.classList.add("module-region-spoiler");
-  if (region.type === "record-browser") { appendModuleEmpty(section, "正在载入分页档案……"); void renderRecordBrowserRegion(section, module, region); return section; }
-  if (region.type === "story-browser") { appendModuleEmpty(section, "正在载入故事目录……"); section.querySelector(".module-empty")?.remove(); void renderStoryBrowserRegion(section, module, region); return section; }
-  if (region.type === "settings-form") { void renderSettingsFormRegion(section, module, region); return section; }
-  if (region.type === "prompt-controls") { void renderPromptControlsRegion(section, module, region); return section; }
-  if (region.type === "integrity-alerts") { void renderIntegrityAlertsRegion(section, module, region); return section; }
-  if (region.type === "workflow-controls") { void renderWorkflowControlsRegion(section, module, region); return section; }
-
-  if (region.type === "image-generation") {
-    appendModuleEmpty(section, "正在读取生图配置……");
-    void renderImageGenerationRegion(section);
-    return section;
-  }
-
-  if (region.type === "json") {
-    if (value === undefined) {
-      appendModuleEmpty(section, region.empty);
-      return section;
-    }
-    const tree = buildModuleJsonTree(value);
-    if (tree.kind !== "value" && tree.entries.length === 0) {
-      appendModuleEmpty(section, region.empty || tree.emptyLabel);
-      return section;
-    }
-    const wrapper = document.createElement("div");
-    wrapper.className = "module-json-fields";
-    appendModuleJsonNode(wrapper, tree, true);
-    section.append(wrapper);
-    return section;
-  }
-
-  if (region.type === "key-value") {
-    const fields = Array.isArray(region.fields) ? region.fields : [];
-    const list = document.createElement("dl");
-    list.className = "module-key-values";
-    for (const field of fields) {
-      const fieldValue = valueAtPath(value, field.path);
-      if ((fieldValue == null || fieldValue === "") && field.hideWhenEmpty) continue;
-      const term = document.createElement("dt");
-      term.textContent = field.label || field.path || "字段";
-      const description = document.createElement("dd");
-      if (field.format === "markdown") renderMarkdown(description, fieldValue == null ? "" : String(fieldValue));
-      else description.textContent = fieldValue == null || fieldValue === "" ? (field.empty || "—") : String(fieldValue);
-      list.append(term, description);
-    }
-    if (list.children.length) section.append(list);
-    else appendModuleEmpty(section, region.empty);
-    return section;
-  }
-
-  if (region.type === "list") {
-    const items = Array.isArray(value) ? value : [];
-    if (!items.length) {
-      appendModuleEmpty(section, region.empty);
-      return section;
-    }
-    const list = document.createElement("div");
-    list.className = "module-record-list";
-    for (const item of items) {
-      const article = document.createElement("article");
-      article.className = "module-record";
-      const titleValue = valueAtPath(item, region.item?.titlePath);
-      if (titleValue) {
-        const title = document.createElement("h5");
-        title.textContent = String(titleValue);
-        article.append(title);
-      }
-      const bodyValue = valueAtPath(item, region.item?.bodyPath);
-      if (bodyValue != null && bodyValue !== "") appendModuleValue(article, bodyValue, region.item?.bodyFormat || "text");
-      const metadata = Array.isArray(region.item?.meta) ? region.item.meta : [];
-      if (metadata.length) {
-        const meta = document.createElement("dl");
-        meta.className = "module-record-meta";
-        for (const field of metadata) {
-          const fieldValue = valueAtPath(item, field.path);
-          if (fieldValue == null || fieldValue === "") continue;
-          const term = document.createElement("dt");
-          term.textContent = field.label || field.path;
-          const description = document.createElement("dd");
-          description.textContent = String(fieldValue);
-          meta.append(term, description);
-        }
-        if (meta.children.length) article.append(meta);
-      }
-      list.append(article);
-    }
-    section.append(list);
-    return section;
-  }
-
-  if (region.type === "table") {
-    const rows = Array.isArray(value) ? value : [];
-    const columns = Array.isArray(region.columns) ? region.columns : [];
-    if (!rows.length || !columns.length) {
-      appendModuleEmpty(section, region.empty);
-      return section;
-    }
-    const wrapper = document.createElement("div");
-    wrapper.className = "module-table-wrap";
-    const table = document.createElement("table");
-    table.className = "module-table";
-    const headRow = document.createElement("tr");
-    for (const column of columns) {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      cell.textContent = column.label || column.path;
-      headRow.append(cell);
-    }
-    const head = document.createElement("thead");
-    head.append(headRow);
-    const body = document.createElement("tbody");
-    for (const row of rows) {
-      const rowElement = document.createElement("tr");
-      for (const column of columns) {
-        const cell = document.createElement("td");
-        const cellValue = valueAtPath(row, column.path);
-        cell.textContent = cellValue == null ? "" : String(cellValue);
-        rowElement.append(cell);
-      }
-      body.append(rowElement);
-    }
-    table.append(head, body);
-    wrapper.append(table);
-    section.append(wrapper);
-    return section;
-  }
-
-  if (value == null || value === "") appendModuleEmpty(section, region.empty);
-  else appendModuleValue(section, value, region.type === "markdown" ? "markdown" : "text");
+  const renderer = moduleRenderers.get(region.type);
+  if (!renderer) { appendModuleEmpty(section, "此界面暂不支持该模块的可选展示方式。"); return section; }
+  const binding = module?.view?.bindings?.find(item => item.id === region.bindingId);
+  if (!binding) { appendModuleEmpty(section, "模块展示缺少能力绑定。"); return section; }
+  const declaration = { ...binding, ...region };
+  const run = () => Promise.resolve(renderer(section, module, declaration)).catch(error => { section.replaceChildren(); appendModuleEmpty(section, error.message); });
+  if (["integrity-alerts", "image-generation"].includes(region.type)) section.refreshRegion = run;
+  void run();
   return section;
 }
 
@@ -717,7 +564,7 @@ export async function openFeatureModuleDocument(module, target, button) {
   const originalText = button.textContent;
   button.disabled = true;
   try {
-    await request(`/api/modules/${encodeURIComponent(module.id)}/open`, {
+    await request(`/api/v1/modules/${encodeURIComponent(module.id)}/open`, {
       method: "POST",
       body: JSON.stringify({ target }),
     });
@@ -730,14 +577,118 @@ export async function openFeatureModuleDocument(module, target, button) {
   }
 }
 
+function modulePages(module) {
+  const regions = (module.view?.regions || []).map(region => ({ ...module.view.bindings?.find(binding => binding.id === region.bindingId), ...region }));
+  const find = (...ids) => regions.filter(region => ids.includes(region.id));
+  if (module.id === "narrative-memory") return [
+    { id: "overview", title: "运行概况", regions: find("memory-integrity", "memory-compression-state") },
+    { id: "settings", title: "模块设置", regions: find("memory-settings") },
+    { id: "records", title: "记忆档案", regions: find("entities", "relationships", "events", "cognitions", "knower-groups", "support", "source-captures"), subtabs: true },
+    { id: "maintenance", title: "维护", regions: find("memory-workflows") },
+    ...regions.filter(region => !["memory-integrity", "memory-compression-state", "memory-settings", "entities", "relationships", "events", "cognitions", "knower-groups", "support", "source-captures", "memory-workflows"].includes(region.id)).map(region => ({ id: region.id, title: region.title, regions: [region] })),
+  ].filter(page => page.regions.length);
+  if (module.id === "world-narrative-coordinator") return [
+    ...find("director-prompt-controls", "director-status", "director-references", "director-settings").map(region => ({ id: region.id, title: region.title, regions: [region] })),
+    { id: "maintenance", title: "统计与维护", regions: find("director-health", "director-workflows") },
+    ...regions.filter(region => !["director-prompt-controls", "director-status", "director-references", "director-settings", "director-health", "director-workflows"].includes(region.id)).map(region => ({ id: region.id, title: region.title, regions: [region] })),
+  ].filter(page => page.regions.length);
+  if (module.id === "comfy-image-generation") return regions.flatMap(region => region.type === "image-generation" ? [
+    { id: "generate", title: "生成图片", regions: [{ ...region, imageMode: "controls" }] },
+    { id: "gallery", title: "生成记录", regions: [{ ...region, imageMode: "gallery" }] },
+  ] : [{ id: region.id, title: region.title, regions: [region] }]);
+  return regions.map((region, index) => ({ id: region.id || String(index), title: region.title || "内容", regions: [region] }));
+}
+
+function refreshModuleRegions(container) {
+  for (const region of container.querySelectorAll(".module-region")) {
+    const editing = region.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+    if (region.closest("[hidden]") || editing || !region.refreshRegion || region.refreshPending) continue;
+    region.refreshPending = true;
+    const scrollParent = container.closest(".module-rail"), scrollTop = scrollParent?.scrollTop;
+    Promise.resolve(region.refreshRegion()).catch(() => {}).finally(() => { region.refreshPending = false; if (scrollParent) scrollParent.scrollTop = scrollTop; });
+  }
+}
+
+function appendModuleTabs(container, pages, key, loadPage) {
+  if (!pages.length) return () => {};
+  const bar = document.createElement("div"); bar.className = "module-tabs"; bar.setAttribute("role", "tablist"); bar.setAttribute("aria-label", "模块内容");
+  const entries = pages.map(page => {
+    const button = document.createElement("button"); button.type = "button"; button.className = "module-tab"; button.textContent = page.title;
+    button.id = `${key}-${page.id}-tab`; button.setAttribute("role", "tab");
+    const panel = document.createElement("div"); panel.className = "module-tab-panel"; panel.id = `${key}-${page.id}-panel`;
+    panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-labelledby", button.id); button.setAttribute("aria-controls", panel.id);
+    return { page, button, panel, loaded: false };
+  });
+  const select = id => {
+    state.moduleTabSelections.set(key, id);
+    for (const entry of entries) {
+      const active = entry.page.id === id;
+      entry.button.setAttribute("aria-selected", String(active)); entry.button.tabIndex = active ? 0 : -1;
+      entry.panel.hidden = !active;
+      if (active && !entry.loaded) { entry.loaded = true; loadPage(entry.panel, entry.page); }
+      else if (active) refreshModuleRegions(entry.panel);
+    }
+  };
+  for (const [index, entry] of entries.entries()) {
+    entry.button.addEventListener("click", () => select(entry.page.id));
+    entry.button.addEventListener("keydown", event => {
+      const target = event.key === "ArrowRight" ? (index + 1) % entries.length : event.key === "ArrowLeft" ? (index + entries.length - 1) % entries.length : event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : -1;
+      if (target >= 0) { event.preventDefault(); select(entries[target].page.id); entries[target].button.focus(); }
+    });
+    bar.append(entry.button);
+  }
+  container.append(bar, ...entries.map(entry => entry.panel));
+  return () => select(pages.some(page => page.id === state.moduleTabSelections.get(key)) ? state.moduleTabSelections.get(key) : pages[0].id);
+}
+
+function moduleTabbedContent(module, scopeKey) {
+  const key = `${scopeKey}-${module.id}`, signature = JSON.stringify(module.view);
+  let cached = state.moduleRegionViews.get(key);
+  const dataSignature = JSON.stringify([module.revision, getClient().cacheKey]);
+  if (cached?.signature === signature) {
+    Object.assign(cached.module, module);
+    if (cached.dataSignature !== dataSignature) {
+      cached.dataSignature = dataSignature;
+      refreshModuleRegions(cached.content);
+    }
+    return cached.content;
+  }
+  const content = document.createElement("div"); content.id = `module-${module.id}`; content.className = "module-content";
+  cached = { signature, dataSignature, module, content }; state.moduleRegionViews.set(key, cached);
+  if (module.description) { const description = document.createElement("p"); description.className = "module-description"; description.textContent = module.description; content.append(description); }
+  const pages = modulePages(module);
+  const load = (panel, page) => {
+    if (page.subtabs) {
+      const children = page.regions.map(region => ({ id: region.id, title: region.title.replace(/^全部/, ""), regions: [region] }));
+      appendModuleTabs(panel, children, `${key}-${page.id}`, load)();
+    } else for (const region of page.regions) panel.append(createModuleRegion(region, cached.module.data, cached.module));
+  };
+  if (!pages.length) appendModuleEmpty(content, "此模块没有可显示区域。");
+  else if (pages.length === 1) {
+    let loaded = false;
+    content.loadModuleTabs = () => { if (!loaded) { loaded = true; load(content, pages[0]); } else refreshModuleRegions(content); };
+  } else content.loadModuleTabs = appendModuleTabs(content, pages, key, load);
+  return content;
+}
+
 export function renderFeatureModules(payload) {
   const availableModules = Array.isArray(payload?.modules)
     ? [...payload.modules].sort((left, right) => (left.displayOrder ?? 0) - (right.displayOrder ?? 0) || String(left.id).localeCompare(String(right.id)))
     : [];
   state.featureModulePayload = payload;
   state.featureModules = availableModules;
+  const scopeKey = payload?.sessionId || "no-chat";
+  if (state.moduleViewScope !== scopeKey) { state.moduleRegionViews.clear(); state.moduleTabSelections.clear(); state.moduleLayoutSignature = ""; state.moduleViewScope = scopeKey; }
+  const layoutSignature = JSON.stringify({ scopeKey, display: savedModuleDisplaySettings(), modules: availableModules.map(({ data, ...module }) => module) });
+  if (layoutSignature === state.moduleLayoutSignature) {
+    for (const module of availableModules) if (module.available && !module.error) moduleTabbedContent(module, scopeKey);
+    return;
+  }
+  // Moving an active form would lose focus; leave its DOM and unsaved draft in place.
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) && document.activeElement.closest?.(".card-module")) return;
   const signature = JSON.stringify({ payload, display: savedModuleDisplaySettings() });
   if (signature === state.featureModuleSignature) return;
+  state.moduleLayoutSignature = layoutSignature;
   state.featureModuleSignature = signature;
   const modules = orderedVisibleModules(availableModules);
   const fragment = document.createDocumentFragment();
@@ -788,11 +739,11 @@ export function renderFeatureModules(payload) {
     openDefinition.addEventListener("click", () => openFeatureModuleDocument(module, "definition", openDefinition));
     actions.append(openData, openDefinition);
     heading.append(toggle, actions);
-    const content = document.createElement("div");
+    const content = module.available && !module.error ? moduleTabbedContent(module, scopeKey) : document.createElement("div");
     content.id = contentId;
     content.className = "module-content";
     content.hidden = !expanded;
-    if (module.description) {
+    if (module.description && (!module.available || module.error)) {
       const description = document.createElement("p");
       description.className = "module-description";
       description.textContent = module.description;
@@ -803,9 +754,7 @@ export function renderFeatureModules(payload) {
     } else if (!module.available) {
       appendModuleEmpty(content, "选择开场白或聊天记录后，此模块会建立当前聊天专属的数据文件。");
     } else {
-      const regions = Array.isArray(module.view?.regions) ? module.view.regions : [];
-      if (!regions.length) appendModuleEmpty(content, "此模块没有可显示区域。");
-      for (const region of regions) content.append(createModuleRegion(region, module.data, module));
+      if (expanded) content.loadModuleTabs?.();
     }
     section.append(heading, content);
     fragment.append(section);
@@ -822,7 +771,8 @@ export function syncModuleDisplayDraft() {
 }
 
 export function markModuleDisplayDirty() {
-  elements.moduleSettingsStatus.textContent = "尚未保存；这些调整只影响前端功能区。";
+  state.moduleDisplayVersion = (state.moduleDisplayVersion || 0) + 1;
+  void saveModuleDisplaySettings();
 }
 
 export function moveModuleDisplay(moduleId, offset) {
@@ -894,39 +844,45 @@ export function renderModuleSettings() {
   });
   elements.moduleSettingsList.replaceChildren(fragment);
   const disabled = state.moduleDisplayDraft.order.length === 0;
-  elements.saveModuleSettings.disabled = disabled;
   elements.resetModuleSettings.disabled = disabled;
 }
 
 export async function saveModuleDisplaySettings(event) {
-  event.preventDefault();
+  event?.preventDefault();
+  if (state.moduleDisplaySaving) return;
   syncModuleDisplayDraft();
-  elements.saveModuleSettings.disabled = true;
+  state.moduleDisplaySaving = true;
+  const retry = document.querySelector("#retry-module-settings");
+  retry.hidden = true;
   elements.moduleSettingsStatus.textContent = "保存中……";
   try {
-    const result = await request("/api/module-display-settings", {
+    let savedVersion;
+    do {
+      savedVersion = state.moduleDisplayVersion;
+    const result = await request("/api/v1/module-display-settings", {
       method: "POST",
       body: JSON.stringify({
         order: state.moduleDisplayDraft.order,
         hidden: [...state.moduleDisplayDraft.hidden],
       }),
     });
+    state.settings ||= {};
     state.settings.card = result.card;
-    state.moduleDisplayDraft = normalizeModuleDisplaySettings(result.card?.settings?.featureModules);
+    if (savedVersion === state.moduleDisplayVersion) state.moduleDisplayDraft = normalizeModuleDisplaySettings(result.card?.settings?.featureModules);
+    } while (savedVersion !== state.moduleDisplayVersion);
     state.featureModuleSignature = "";
     renderFeatureModules(state.featureModulePayload || { modules: state.featureModules });
     elements.moduleSettingsStatus.textContent = "已保存到当前角色卡设置；Agent 上下文未改变。";
   } catch (error) {
-    elements.moduleSettingsStatus.textContent = "保存失败";
-    showError(error);
+    elements.moduleSettingsStatus.textContent = `保存失败：${error.message}；修改已保留。`;
+    retry.hidden = false;
   } finally {
-    elements.saveModuleSettings.disabled = state.featureModules.length === 0;
+    state.moduleDisplaySaving = false;
   }
 }
 
 export function resetModuleDisplaySettings() {
   state.moduleDisplayDraft = normalizeModuleDisplaySettings({ order: [], hidden: [] });
   markModuleDisplayDirty();
-  elements.moduleSettingsStatus.textContent = "已恢复卡片默认显示，保存后生效。";
   renderModuleSettings();
 }

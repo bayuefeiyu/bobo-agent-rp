@@ -1,3 +1,4 @@
+import { frontendBinding } from "./rp-module-frontend.mjs";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -138,7 +139,8 @@ export function filterDirectorPrompt(text, agentId, agents, source = "director p
 export async function snapshotAgentPromptControls(modules, getRecord) {
   const snapshots = [];
   for (const module of modules || []) {
-    for (const region of module.view?.regions || []) {
+    for (const binding of module.view?.bindings || []) {
+      const region = frontendBinding(module, binding.id);
       if (region.type !== "prompt-controls") continue;
       const controls = await loadPromptControls(module.moduleDirectory, module.resourceCatalog, region.controlsFile);
       if (!controls.delivery) continue;

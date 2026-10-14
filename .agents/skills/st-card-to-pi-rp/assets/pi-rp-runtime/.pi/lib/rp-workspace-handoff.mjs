@@ -78,7 +78,7 @@ export async function stageWorkspaceHandoffs({ sessionDirectory, workflow, run, 
   if (!sourceNodeIds.length) return [];
   const artifacts = await readVisibleArtifacts({
     sessionDirectory,
-    target: { workflowRunId: run.id, nodeId: node.id, turn: run.turn },
+    target: { workflowRunId: run.id, nodeId: node.id, turn: run.turn, attemptId: run.narrativeAttemptId || null },
     fromNodeIds: sourceNodeIds,
     sourceWorkflowRunId: run.id,
     handoffOnly: true,

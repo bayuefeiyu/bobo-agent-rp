@@ -84,7 +84,7 @@ class ValidateCardPackTests(unittest.TestCase):
         })
         write_json(module / "collections" / "scenes" / "initial" / "records.json", [])
         if surface == "frontend":
-            write_json(module / "frontend-view.json", {"schemaVersion": 1, "regions": [{"type": "json", "path": "collections.scenes.records"}]})
+            write_json(module / "frontend-view.json", {"schemaVersion": 3, "bindings": [{"id": "scenes", "kind": "records", "collectionId": "scenes", "recordTypes": ["scene.entry"], "view": "rp", "readCapability": "scene.query"}], "regions": [{"id": "scenes", "type": "record-browser", "title": "场外事件", "bindingId": "scenes"}]})
         skill = module / "skill" / "SKILL.md"
         skill.parent.mkdir(parents=True, exist_ok=True)
         skill.write_text("---\nname: meanwhile\ndescription: Generate the authored meanwhile output when triggered.\n---\n\n# Meanwhile\n", encoding="utf-8")
@@ -113,6 +113,122 @@ class ValidateCardPackTests(unittest.TestCase):
             errors: list[str] = []
             VALIDATOR.validate_feature_modules(root, [path], errors)
             self.assertEqual(errors, [])
+
+    def _write_transcript_provider_module(self, root: Path, *, view_format: str = "object") -> str:
+        path = self.make_output_module(root, surface="background")
+        module = root / "features" / "meanwhile"
+        write_json(module / "data-contract.json", {
+            "schemaVersion": 1,
+            "moduleId": "meanwhile",
+            "collections": {
+                "conversation": {
+                    "storage": {"kind": "record-log", "partition": {"mode": "single"}},
+                    "recordTypes": {
+                        "narrative.message": {
+                            "dataSchemaVersion": 1,
+                            "indexes": {},
+                            "views": {"rp": {"format": view_format, "fields": [{"path": f"/data/{field}"} for field in ("role", "kind", "content", "narrativeSource")]}},
+                            "actions": ["create", "update", "delete"],
+                        }
+                    },
+                }
+            },
+            "capabilities": {},
+        })
+        return path
+
+    def test_accepts_explicit_transcript_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_transcript_provider_module(root)
+            errors: list[str] = []
+            VALIDATOR.validate_manifest(root, {
+                "schema_version": 2,
+                "id": "test-card",
+                "name": "Test Card",
+                "feature_modules": [module_path],
+                "transcript_provider": {
+                    "schemaVersion": 1,
+                    "moduleId": "meanwhile",
+                    "collectionId": "conversation",
+                    "recordType": "narrative.message",
+                    "view": "rp",
+                },
+            }, errors, [])
+            self.assertFalse(any("transcript_provider" in error for error in errors), errors)
+
+    def test_rejects_transcript_view_missing_canonical_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_transcript_provider_module(root)
+            contract_path = root / "features" / "meanwhile" / "data-contract.json"
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            contract["collections"]["conversation"]["recordTypes"]["narrative.message"]["views"]["rp"]["fields"] = [{"path": "/data/content"}]
+            write_json(contract_path, contract)
+            errors: list[str] = []
+            VALIDATOR.validate_manifest(root, {
+                "schema_version": 2, "id": "test-card", "name": "Test Card", "feature_modules": [module_path],
+                "transcript_provider": {"schemaVersion": 1, "moduleId": "meanwhile", "collectionId": "conversation", "recordType": "narrative.message", "view": "rp"},
+            }, errors, [])
+            self.assertTrue(any("must expose role, kind, content, and narrativeSource" in error for error in errors), errors)
+
+    def test_rejects_transcript_provider_unknown_module_and_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_transcript_provider_module(root)
+            unknown_module_errors: list[str] = []
+            VALIDATOR.validate_manifest(root, {
+                "schema_version": 2,
+                "id": "test-card",
+                "name": "Test Card",
+                "feature_modules": [module_path],
+                "transcript_provider": {
+                    "schemaVersion": 1,
+                    "moduleId": "missing",
+                    "collectionId": "conversation",
+                    "recordType": "narrative.message",
+                    "view": "rp",
+                },
+            }, unknown_module_errors, [])
+            self.assertTrue(any("unknown installed module" in error for error in unknown_module_errors))
+
+            unknown_view_errors: list[str] = []
+            VALIDATOR.validate_manifest(root, {
+                "schema_version": 2,
+                "id": "test-card",
+                "name": "Test Card",
+                "feature_modules": [module_path],
+                "transcript_provider": {
+                    "schemaVersion": 1,
+                    "moduleId": "meanwhile",
+                    "collectionId": "conversation",
+                    "recordType": "narrative.message",
+                    "view": "missing",
+                },
+            }, unknown_view_errors, [])
+            self.assertTrue(any("unknown view" in error for error in unknown_view_errors))
+
+    def test_rejects_transcript_provider_illegal_fields_and_view_format(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_transcript_provider_module(root, view_format="text")
+            errors: list[str] = []
+            VALIDATOR.validate_manifest(root, {
+                "schema_version": 2,
+                "id": "test-card",
+                "name": "Test Card",
+                "feature_modules": [module_path],
+                "transcript_provider": {
+                    "schemaVersion": 1,
+                    "moduleId": "meanwhile",
+                    "collectionId": "conversation",
+                    "recordType": "narrative.message",
+                    "view": "rp",
+                    "extra": True,
+                },
+            }, errors, [])
+            self.assertTrue(any("must contain exactly" in error for error in errors))
+            self.assertTrue(any("object-format view" in error for error in errors))
 
     def test_accepts_a_structurally_valid_public_team_node(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +290,42 @@ class ValidateCardPackTests(unittest.TestCase):
             self.assertTrue(any("inputAdapter is unsupported" in error for error in errors))
             self.assertTrue(any("adapter is unsupported" in error for error in errors))
 
+    def test_module_workflow_accepts_collaboration_team_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self.make_output_module(root, surface="background")
+            module = root / "features" / "meanwhile"
+            definition = json.loads((module / "module.json").read_text(encoding="utf-8"))
+            for agent_id in ("writer-agent", "co-creator-agent"):
+                agent_path = f"agents/{agent_id}/agent.json"
+                definition["agentFiles"].append(agent_path)
+                write_json(module / agent_path, {"schemaVersion": 1, "id": agent_id, "ownerModuleId": "meanwhile"})
+            write_json(module / "module.json", definition)
+            workflow_path = module / "workflows" / "query-scenes" / "workflow.json"
+            workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            workflow["nodes"].insert(0, {
+                "id": "write-narrative",
+                "type": "team",
+                "team": {
+                    "schemaVersion": 2,
+                    "protocol": "collaboration",
+                    "initialMemberId": "writer",
+                    "stageOwnerId": "writer",
+                    "completionMemberId": "writer",
+                    "members": [
+                        {"id": "writer", "agentId": "meanwhile/writer-agent", "tools": ["read", "write"]},
+                        {"id": "co-creator", "agentId": "meanwhile/co-creator-agent", "tools": ["read", "write", "rp_call"]},
+                    ],
+                    "outputOwners": {"narrative": "writer"},
+                    "limits": {"maxActivations": 1},
+                },
+                "outputs": {"narrative": {"path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run"}},
+            })
+            write_json(workflow_path, workflow)
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [path], errors)
+            self.assertEqual(errors, [])
+
     def test_rejects_duplicate_team_members_and_unknown_ability_kinds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -197,6 +349,171 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_workflows(root, errors)
             self.assertTrue(any("member IDs must be unique" in error for error in errors))
             self.assertTrue(any("kind is invalid" in error for error in errors))
+
+    def _register_test_agents(self, root: Path, *agent_ids: str) -> None:
+        module = root / "features" / "test"
+        definition = json.loads((module / "module.json").read_text(encoding="utf-8"))
+        for agent_id in agent_ids:
+            path = f"agents/{agent_id}/agent.json"
+            if path not in definition["agentFiles"]:
+                definition["agentFiles"].append(path)
+            write_json(module / path, {"schemaVersion": 1, "id": agent_id, "ownerModuleId": "test"})
+        write_json(module / "module.json", definition)
+
+    def _collaboration_team(self, *, output_owners: dict[str, str] | None = None) -> dict:
+        return {
+            "schemaVersion": 2,
+            "protocol": "collaboration",
+            "initialMemberId": "writer",
+            "stageOwnerId": "writer",
+            "completionMemberId": "writer",
+            "members": [
+                {"id": "writer", "agentId": "test/writer-agent", "tools": ["read", "write", "edit", "rp_files"]},
+                {"id": "co-creator", "agentId": "test/co-creator-agent", "tools": ["read", "write", "edit", "rp_files", "rp_call"]},
+            ],
+            "outputOwners": output_owners if output_owners is not None else {"narrative": "writer"},
+            "limits": {"maxActivations": 32, "maxToolCalls": 128, "maxProtocolReminders": 2},
+        }
+
+    def test_accepts_collaboration_team_delivery_and_generated_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_workflow(root, "collaboration-check", {
+                "schemaVersion": 4,
+                "id": "collaboration-check",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "write-narrative",
+                    "type": "team",
+                    "team": self._collaboration_team(),
+                    "outputs": {
+                        "narrative": {"path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run"},
+                        "post-turn-context": {"path": "post-turn-context", "format": "document-workspace-snapshot", "kind": "directory", "scope": "turn", "retain": "turn"},
+                    },
+                    "delivery": {"primaryOutput": "narrative"},
+                    "metadata": {"documentWorkspaceSnapshot": {"output": "post-turn-context"}},
+                }],
+            })
+            self._register_test_agents(root, "writer-agent", "co-creator-agent")
+            errors: list[str] = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertEqual(errors, [])
+
+    def test_collaboration_schema_differences_are_checked(self) -> None:
+        cases = (
+            ("one-member", lambda team: team.update({"members": team["members"][:1]}), "at least two members"),
+            ("duplicate-id", lambda team: team["members"][1].update({"id": "writer"}), "member IDs must be unique"),
+            ("bad-tool", lambda team: team["members"][0]["tools"].append("shell"), "unsupported collaboration tool"),
+            ("meeting-field", lambda team: team.update({"agenda": {"normalRounds": 1}}), "meeting field agenda"),
+            ("bad-limit", lambda team: team["limits"].update({"maxToolCalls": 10001}), "integer from 1 to 10000"),
+            ("missing-owner", lambda team: team["outputOwners"].clear(), "assign an owner for output narrative"),
+            ("required-call-without-permission", lambda team: team["members"][1]["tools"].clear(), "required calls need an authorized member"),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                team = self._collaboration_team()
+                mutate(team)
+                write_workflow(root, "collaboration-check", {
+                    "schemaVersion": 4,
+                    "id": "collaboration-check",
+                    "kind": "global-background",
+                    "nodes": [{
+                        "id": "write-narrative",
+                        "type": "team",
+                        "team": team,
+                        "requiredCalls": ["test/lookup"],
+                        "outputs": {"narrative": {"path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run"}},
+                    }],
+                })
+                self._register_test_agents(root, "writer-agent", "co-creator-agent")
+                errors: list[str] = []
+                VALIDATOR.validate_workflows(root, errors)
+                self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_collaboration_requires_registered_agents_and_rejects_meeting_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            team = self._collaboration_team()
+            team["members"][1]["agentId"] = "test/missing-agent"
+            write_workflow(root, "collaboration-check", {
+                "schemaVersion": 4,
+                "id": "collaboration-check",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "write-narrative",
+                    "type": "team",
+                    "team": team,
+                    "outputs": {"narrative": {"path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run"}},
+                    "delivery": {"primaryOutput": "narrative"},
+                }],
+            })
+            self._register_test_agents(root, "writer-agent")
+            errors: list[str] = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertTrue(any("registered module Agent" in error and "missing-agent" in error for error in errors), errors)
+
+            # A schema-1 meeting team keeps its historical shape but cannot use Agent delivery.
+            meeting = {
+                "schemaVersion": 1,
+                "leader": {"id": "leader", "agentId": "test/writer-agent"},
+                "secretary": {"id": "secretary", "agentId": "test/writer-agent"},
+                "experts": [],
+                "assistants": [],
+            }
+            write_workflow(root, "meeting-delivery", {
+                "schemaVersion": 4,
+                "id": "meeting-delivery",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "meeting",
+                    "type": "team",
+                    "team": meeting,
+                    "outputs": {"report": {"path": "report.md", "scope": "workflow", "retain": "run"}},
+                    "delivery": {"primaryOutput": "report"},
+                }],
+            })
+            errors = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertTrue(any("Agent or collaboration team declaration" in error for error in errors), errors)
+
+    def test_collaboration_preset_resource_is_schema_checked_and_target_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            team = self._collaboration_team()
+            del team["outputOwners"]  # Presets need not know the target node's complete output set.
+            write_workflow(root, "collaboration-check", {
+                "schemaVersion": 4,
+                "id": "collaboration-check",
+                "kind": "global-background",
+                "nodes": [{
+                    "id": "write-narrative",
+                    "type": "team",
+                    "team": self._collaboration_team(),
+                    "outputs": {"narrative": {"path": "narrative.md", "format": "narrative", "scope": "workflow", "retain": "run"}},
+                    "metadata": {"collaborationPreset": "presets/collaboration.json"},
+                }],
+            })
+            self._register_test_agents(root, "writer-agent", "co-creator-agent")
+            module = root / "features" / "test"
+            (module / "prompts" / "workflows").mkdir(parents=True)
+            (module / "prompts" / "workflows" / "write-narrative-team.md").write_text("Team task\n", encoding="utf-8")
+            write_json(module / "presets" / "collaboration.json", {
+                "schemaVersion": 1,
+                "nodeId": "write-narrative",
+                "promptFile": "prompts/workflows/write-narrative-team.md",
+                "team": team,
+            })
+            errors: list[str] = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertEqual(errors, [])
+
+            preset = json.loads((module / "presets" / "collaboration.json").read_text(encoding="utf-8"))
+            preset["nodeId"] = "other-node"
+            write_json(module / "presets" / "collaboration.json", preset)
+            errors = []
+            VALIDATOR.validate_workflows(root, errors)
+            self.assertTrue(any("nodeId must match target node" in error for error in errors), errors)
 
     def test_module_internal_write_access_must_be_covered_by_collection_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -265,6 +582,155 @@ class ValidateCardPackTests(unittest.TestCase):
             VALIDATOR.validate_workflows(root, errors)
             self.assertTrue(any("only for code nodes" in error for error in errors))
             self.assertTrue(any("unsupported services" in error for error in errors))
+
+    def _write_external_resource_module(
+        self,
+        root: Path,
+        *,
+        module_id: str = "creative-reference-library",
+        external_resource: str | None = "creative-reference-library/v1",
+        schema_version: int = 8,
+        resource_catalog_file: str | None = None,
+        workflow_owner: str | None = None,
+        nodes: list[dict] | None = None,
+    ) -> str:
+        module_root = root / "features" / module_id
+        module = {
+            "schemaVersion": schema_version,
+            "id": module_id,
+            "moduleKind": "resource",
+            "basedOn": None,
+            "title": "参考资料库",
+            "description": "测试资源模块",
+            "surface": "background",
+            "contextOrder": 0,
+            "displayOrder": 0,
+            "dataContractFile": None,
+            "resourceCatalogFile": resource_catalog_file,
+            "frontendViewFile": None,
+            "skillFile": "skill/SKILL.md",
+            "agentFiles": [],
+            "workflowFiles": ["workflows/lookup/workflow.json"],
+        }
+        if schema_version == 8:
+            module["externalResource"] = external_resource
+        write_json(module_root / "module.json", module)
+        if resource_catalog_file:
+            write_json(
+                module_root / "catalog.json",
+                {
+                    "schemaVersion": 1,
+                    "moduleId": module_id,
+                    "categories": {"world": {"title": "World", "description": "World references"}},
+                    "selectionGroups": {},
+                    "documents": [],
+                },
+            )
+        skill = module_root / "skill" / "SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("---\nname: reference-library\ndescription: test\n---\n", encoding="utf-8")
+        workflow_path = module_root / "workflows" / "lookup" / "workflow.json"
+        owner = workflow_owner or module_id
+        workflow_nodes = nodes or [{"id": "return", "type": "workflow-return", "exports": {}}]
+        write_json(
+            workflow_path,
+            {
+                "schemaVersion": 4,
+                "id": f"{module_id}/lookup",
+                "ownerModuleId": owner,
+                "kind": "module-external",
+                "agentCallable": True,
+                "interface": {"inputs": {}, "exports": {}},
+                "nodes": workflow_nodes,
+            },
+        )
+        return f"features/{module_id}/module.json"
+
+    def test_accepts_v8_external_reference_without_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_external_resource_module(root)
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertEqual(errors, [])
+
+    def test_v8_null_external_reference_keeps_resource_catalog_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_external_resource_module(
+                root,
+                external_resource=None,
+                resource_catalog_file="catalog.json",
+            )
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertEqual(errors, [])
+
+            missing_catalog_root = root / "missing-catalog"
+            missing_catalog_path = self._write_external_resource_module(missing_catalog_root, external_resource=None)
+            errors = []
+            VALIDATOR.validate_feature_modules(missing_catalog_root, [missing_catalog_path], errors)
+            self.assertTrue(any("resourceCatalogFile must match moduleKind resource" in error for error in errors))
+
+    def test_external_reference_rejects_a_declared_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_external_resource_module(root, resource_catalog_file="catalog.json")
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertTrue(any("resourceCatalogFile must match moduleKind resource" in error for error in errors))
+
+    def test_rejects_unsupported_external_resource_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_path = self._write_external_resource_module(
+                root,
+                module_id="other-resource",
+                external_resource="creative-reference-library/v1",
+            )
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertTrue(any("unsupported external resource binding" in error for error in errors))
+
+    def test_reference_library_runtime_service_allows_owned_agent_or_code(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            code_node = {"id": "lookup", "type": "code", "runtimeServices": ["referenceLibrary"]}
+            code_return = {"id": "return", "type": "workflow-return", "dependsOn": ["lookup"], "exports": {}}
+            module_path = self._write_external_resource_module(root, nodes=[code_node, code_return])
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertEqual(errors, [])
+            write_json(root / "manifest.json", {"feature_modules": [module_path]})
+            workflow_errors: list[str] = []
+            VALIDATOR.validate_workflows(root, workflow_errors)
+            self.assertEqual(workflow_errors, [])
+
+            agent_node = {"id": "lookup", "type": "agent", "runtimeServices": ["referenceLibrary"]}
+            agent_return = {"id": "return", "type": "workflow-return", "dependsOn": ["lookup"], "exports": {}}
+            agent_root = root / "agent-case"
+            agent_module_path = self._write_external_resource_module(agent_root, nodes=[agent_node, agent_return])
+            errors = []
+            VALIDATOR.validate_feature_modules(agent_root, [agent_module_path], errors)
+            self.assertEqual(errors, [])
+
+    def test_reference_library_runtime_service_rejects_wrong_owner_and_random_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ref_node = {"id": "lookup", "type": "agent", "runtimeServices": ["referenceLibrary"]}
+            ref_return = {"id": "return", "type": "workflow-return", "dependsOn": ["lookup"], "exports": {}}
+            module_path = self._write_external_resource_module(root, workflow_owner="other-resource", nodes=[ref_node, ref_return])
+            errors: list[str] = []
+            VALIDATOR.validate_feature_modules(root, [module_path], errors)
+            self.assertTrue(any("must be a module workflow owned" in error for error in errors))
+
+            random_node = {"id": "lookup", "type": "agent", "runtimeServices": ["random"]}
+            random_return = {"id": "return", "type": "workflow-return", "dependsOn": ["lookup"], "exports": {}}
+            random_root = root / "random-case"
+            random_module_path = self._write_external_resource_module(random_root, nodes=[random_node, random_return])
+            errors = []
+            VALIDATOR.validate_feature_modules(random_root, [random_module_path], errors)
+            self.assertTrue(any("only for code nodes" in error for error in errors))
 
     def test_accepts_module_v7_resource_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

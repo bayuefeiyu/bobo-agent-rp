@@ -4,7 +4,7 @@
   "moduleKind": "hybrid",
   "basedOn": null,
   "title": "正文",
-  "description": "管理正文创作 Agent、前台工作流和可切换创作要求，只交付当前选中的提示词。",
+  "description": "管理正文创作 Agent、前台工作流和可切换创作要求，只交付当前选中的提示词。；可选自动检索历史原文。",
   "surface": "frontend",
   "contextOrder": 100,
   "displayOrder": -1000,
@@ -15,9 +15,15 @@
   "workflowFiles": [
     "workflows/advanced-memory-rp/workflow.json",
     "workflows/compose-context/workflow.json",
-    "workflows/standard-rp/workflow.json"
+    "workflows/standard-rp/workflow.json",
+    "workflows/prepare-history-recall/workflow.json",
+    "workflows/index-history-after-standard/workflow.json",
+    "workflows/index-history-after-advanced/workflow.json",
+    "workflows/maintain-history-index/workflow.json"
   ],
   "agentFiles": [
-    "agents/narrative-writer/agent.json"
+    "agents/narrative-writer/agent.json",
+    "agents/narrative-team-writer/agent.json",
+    "agents/narrative-co-creator/agent.json"
   ]
 }

@@ -33,10 +33,9 @@
     },
     "exports": {}
   },
-  "revision": "2",
+  "revision": "3",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-deep-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -213,21 +212,139 @@
                 "type": "string"
               },
               "coverage": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "assumptions": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "invalidatingSignals": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "worldNarrativeTopics": {
-                "type": "array"
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "topicId",
+                    "title",
+                    "status",
+                    "premise",
+                    "conditions",
+                    "boundaries",
+                    "suggestedAngles",
+                    "invalidatingSignals"
+                  ],
+                  "properties": {
+                    "topicId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "enum": [
+                        "active",
+                        "backup"
+                      ]
+                    },
+                    "premise": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "conditions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "boundaries": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "suggestedAngles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "invalidatingSignals": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
               },
               "nextReviewTriggers": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "referenceUpdates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "referenceId",
+                    "title",
+                    "summary",
+                    "change"
+                  ],
+                  "properties": {
+                    "referenceId": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "summary": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "change": {
+                      "enum": [
+                        "created",
+                        "updated"
+                      ]
+                    }
+                  }
+                }
+              },
+              "basisTurn": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "basisWorldTime": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "schemaVersion": {
+                "const": 1
               }
-            }
+            },
+            "additionalProperties": false
           }
         }
       },
@@ -236,6 +353,13 @@
       },
       "moduleAccess": [],
       "workflowCalls": [
+        {
+          "target": "creative-reference-library/search-units",
+          "fixedArguments": {
+            "includeSemanticCandidates": false
+          },
+          "maxCalls": 1
+        },
         {
           "target": "narrative-memory/narrative-memory-retrieve",
           "fixedArguments": {
@@ -261,7 +385,12 @@
         ],
         "callInputs": [
           "story-context"
-        ]
+        ],
+        "softBudget": {
+          "modelRequests": 24,
+          "outputTokens": 18000,
+          "elapsedSeconds": 180
+        }
       }
     },
     {
@@ -346,5 +475,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

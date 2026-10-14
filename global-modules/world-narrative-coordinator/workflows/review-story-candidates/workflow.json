@@ -47,7 +47,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-story-reviewer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -198,5 +197,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- Generated from official management sections; no gameplay entry. -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工作流监控 · Pi RP</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/config.css"></head><body><main class="app-layout"><section class="shell"><header><h1 id="card-title">工作流监控</h1><p id="connection-status" role="status"></p><a href="/">返回游玩</a></header><section id="panel-workflows" class="panel settings-page" role="tabpanel" aria-labelledby="tab-workflows">
+          <div class="settings-heading"><p class="step">WORKFLOW RUNTIME</p><h2>工作流运行</h2><p>查看工作流定义、节点和运行实例；运行策略、触发方式与节点配置统一在“配置方案”中修改。</p></div>
+          <div class="config-toolbar"><label>可用工作流<select id="workflow-select" class="setting-select"></select></label><button id="show-active-workflow" type="button" class="secondary-button">当前前台</button><button id="show-running-workflow" type="button" class="secondary-button">正在运行</button><button id="activate-workflow" type="button">设为下轮前台</button><button id="refresh-workflows" type="button" class="secondary-button">立即刷新</button></div>
+          <section id="workflow-summary" class="workflow-summary"></section>
+          <div id="workflow-node-list" class="workflow-node-list"></div>
+          <div class="settings-heading run-heading"><p class="step">LIVE RUNS</p><h3>正在执行与最近实例</h3></div>
+          <div id="workflow-run-list" class="workflow-run-list"></div>
+          <p id="workflow-status" class="setting-status"></p>
+        </section><section id="panel-tokens" class="panel settings-page" role="tabpanel" aria-labelledby="tab-tokens">
+          <div class="settings-heading"><p class="step">TOKEN USAGE</p><h2>Token 统计</h2><p>统计当前聊天中每个成功工作流节点的模型消耗；代码节点等未调用模型的节点记为 0。</p></div>
+          <div class="config-toolbar"><button id="refresh-tokens" type="button" class="secondary-button">立即刷新</button></div>
+          <section class="token-summary" aria-label="Token 消耗汇总">
+            <article><span>总计</span><strong id="token-total">0</strong></article>
+            <article><span>输入</span><strong id="token-input">0</strong></article>
+            <article><span>输出</span><strong id="token-output">0</strong></article>
+            <article><span>缓存读取</span><strong id="token-cache-read">0</strong></article>
+            <article><span>缓存写入</span><strong id="token-cache-write">0</strong></article>
+          </section>
+          <div class="settings-heading token-section-heading"><p class="step">WORKFLOW TOTALS</p><h3>已完成工作流</h3></div>
+          <div id="token-workflow-list" class="token-workflow-list" aria-live="polite"></div>
+          <div class="settings-heading token-section-heading"><p class="step">NODE DETAILS</p><h3>成功节点明细</h3></div>
+          <div id="token-node-list" class="token-node-list" aria-live="polite"></div>
+          <p id="token-status" class="setting-status"></p>
+        </section><p id="error-banner" role="alert" hidden></p></section></main><div id="handoff-overlay" hidden tabindex="-1"><h2 id="handoff-title"></h2><p id="handoff-description"></p><a href="/">重新打开</a></div><script type="module" src="/monitor.js"></script></body></html>

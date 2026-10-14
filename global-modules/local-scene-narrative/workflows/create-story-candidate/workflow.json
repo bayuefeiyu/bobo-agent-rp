@@ -44,7 +44,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "local-scene-narrative/local-narrative-writer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }

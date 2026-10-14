@@ -14,7 +14,9 @@
   "skillFile": "skill/SKILL.md",
   "workflowFiles": [
     "workflows/agent-image-generation/workflow.json",
-    "workflows/agent-image-generation-entry/workflow.json"
+    "workflows/agent-image-generation-entry/workflow.json",
+    "workflows/image-render-regeneration/workflow.json",
+    "workflows/image-render-recovery/workflow.json"
   ],
   "agentFiles": [
     "agents/image-prompt-writer/agent.json"

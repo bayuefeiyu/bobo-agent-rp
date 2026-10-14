@@ -1,0 +1,11 @@
+.story-stage { max-width: 62rem; margin: auto; padding: 2rem; color: #e6e6ec; background: #252636; border-radius: 1rem; font: 1rem/1.8 system-ui; }
+.story-stage header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.story-stage h2 { margin: 0; color: #ffe1ab; }
+.story-stage article { white-space: pre-wrap; min-height: 15rem; padding: 2rem 0; font-size: 1.15rem; }
+.story-stage nav, .story-stage aside { display: flex; gap: .6rem; flex-wrap: wrap; }
+.story-stage button { border: 1px solid #797384; border-radius: .7rem; padding: .6rem 1rem; color: #ffe1ab; background: transparent; cursor: pointer; }
+.story-stage button:disabled { opacity: .5; cursor: default; }
+.story-stage label, .story-stage textarea { display: block; width: 100%; box-sizing: border-box; }
+.story-stage textarea { min-height: 5rem; background: #171927; color: white; border: 1px solid #797384; border-radius: .6rem; padding: .8rem; }
+.story-stage form { display: grid; gap: .7rem; }
+@media (max-width: 600px) { .story-stage { padding: 1rem; } .story-stage header { flex-wrap: wrap; } }

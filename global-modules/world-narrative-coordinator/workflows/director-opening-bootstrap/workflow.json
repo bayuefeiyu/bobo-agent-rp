@@ -2,12 +2,11 @@
   "schemaVersion": 4,
   "id": "director-opening-bootstrap",
   "title": "开场导演初始化",
-  "description": "开场展示后初始化相关导演状态，并阻塞首次输入。",
+  "description": "开场展示后用代码准备基础导演状态；规划与本轮指导在实际输入后按需处理。",
   "kind": "turn-background",
-  "revision": "1",
+  "revision": "2",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-daily-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -23,29 +22,36 @@
   "nodes": [
     {
       "id": "bootstrap",
-      "type": "call",
-      "target": "world-narrative-coordinator/post-director-update",
-      "arguments": {
-        "phase": "opening"
-      },
-      "documents": {},
-      "outputPaths": {
-        "delegations": "delegations"
-      },
-      "outputs": {
-        "delegations": {
-          "path": "delegations",
-          "format": "director-delegation-plan",
-          "kind": "directory",
-          "scope": "workflow",
-          "retain": "run"
+      "title": "准备开场基础状态",
+      "type": "code",
+      "outputs": {},
+      "moduleAccess": [
+        {
+          "moduleId": "world-narrative-coordinator",
+          "collectionId": "private-state",
+          "capabilities": [
+            "director.private.write"
+          ],
+          "views": [
+            "director"
+          ],
+          "queryBudget": {
+            "maxRecords": 2,
+            "maxCharacters": 10000
+          }
         }
-      },
-      "moduleAccess": [],
+      ],
       "dataCommit": {
         "onNodeEnd": []
+      },
+      "metadata": {
+        "entryFile": "runtime/workflow/initialize-opening.mjs"
       }
     }
   ],
-  "ownerModuleId": "world-narrative-coordinator"
+  "ownerModuleId": "world-narrative-coordinator",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

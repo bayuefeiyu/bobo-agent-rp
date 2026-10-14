@@ -102,7 +102,7 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
     ]);
     const contract = rawContract ? normalizeDataContract(rawContract, record.id) : null;
     const resourceCatalog = rawResourceCatalog ? normalizeResourceCatalog(rawResourceCatalog, record.id) : null;
-    const normalizedView = view && contract ? normalizeModuleFrontendView(view, contract) : { schemaVersion: 1, regions: [] };
+    const normalizedView = view && contract ? normalizeModuleFrontendView(view, contract) : { schemaVersion: 3, bindings: [], regions: [] };
     const workflows = components.workflows;
     for (const workflow of workflows) {
       if (workflow.ownerModuleId !== record.id) {
@@ -123,6 +123,7 @@ async function readFeatureModules(cardDirectory: string, paths: unknown): Promis
       basedOn: record.basedOn,
       contract,
       resourceCatalog,
+      externalResource: record.externalResource ?? null,
       resourceCatalogPath,
       view: normalizedView,
       viewPath,

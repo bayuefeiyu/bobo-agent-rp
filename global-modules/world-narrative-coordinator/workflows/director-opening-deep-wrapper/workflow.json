@@ -2,12 +2,11 @@
   "schemaVersion": 4,
   "id": "director-opening-deep-wrapper",
   "title": "开场后按需启动深度导演",
-  "description": "开场导演初始化完成后读取其启动建议；需要时在后台运行深度推演。",
+  "description": "仅在用户明确开启开场深度推演时运行；默认关闭，不阻塞首次输入。",
   "kind": "global-background",
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-deep-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -81,9 +80,14 @@
       "metadata": {
         "entryFile": "runtime/run-deep-if-needed.mjs",
         "storyContextSource": "history",
-        "historyCompleteTurns": 20
+        "historyCompleteTurns": 20,
+        "openingTrigger": true
       }
     }
   ],
-  "ownerModuleId": "world-narrative-coordinator"
+  "ownerModuleId": "world-narrative-coordinator",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

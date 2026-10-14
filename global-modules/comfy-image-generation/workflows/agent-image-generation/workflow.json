@@ -7,7 +7,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "comfy-image-generation/image-prompt-writer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -110,7 +109,6 @@
       "description": "按每个不同模型指导，仅生成随剧情变化的画面内容片段。",
       "type": "agent",
       "agentId": "comfy-image-generation/image-prompt-writer",
-      "modelId": "pi:current",
       "dependsOn": [
         "resolve-input"
       ],
@@ -246,5 +244,9 @@
       }
     },
     "exports": {}
+  },
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
   }
 }

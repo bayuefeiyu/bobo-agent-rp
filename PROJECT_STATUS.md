@@ -1,6 +1,59 @@
 # PROJECT STATUS
 
-**当前快照，日期 2026-10-09。** 本文件只描述**当前**能力、限制、验证结果和接手规则。
+## 前后端分离（2026-10-14）
+
+Pi 版本与项目已验证版本不同时仅提示，不阻断启动或综合验证；已验证版本记录保持原值。验证汇总和 results.json 保留差异 warning，实际测试/转译/包校验失败仍正常报告失败。此规则取代下文历史验证记录中将版本差异视为阻断的旧策略。
+
+调整后的全量验证通过：127 个文件、798 项用例全部通过，无失败/跳过；生成、发布与离线集成检查通过。本机 Pi 1.1.0 与已验证 0.86.0 的差异为一条非阻断提示。
+
+新 API1.0、无 DOM SDK、共享服务/可选静态托管、请求级预览、v3 模块 bindings/regions、独立配置/监控入口和可替换整区游玩宿主已实现。新包采用 lock schema2/packageFormat3、launch schema2；前端安装支持备份、兼容回退与崩溃恢复，严格校验资产与受保护文件。独立故事舞台样例已在真实浏览器完成开场/输入/正文/管理返回/默认恢复；官方双页面预览隔离、候选采用和独立管理页验收通过。完整记录与最后验证结果见[实施记录](FRONTEND-SEPARATION-IMPLEMENTATION.md)。
+
+用户确认本次破坏性更新，旧卡、旧 API/模块声明/启动格式不受支持；没有自动更新真实 play/、卡或 session。main 允许整个游玩区域自定义，复用官方管理；更深定制采用 main 派生分支。创作者指南和视觉中立功能交接已交付。
+
+## 创作资料库默认接入（2026-10-12）
+
+转卡选用正文创作或深度导演时，默认配套 `creative-reference-library`，在方案中展示并允许明确排除。正文标准/高级记忆节点在导演指导后、具体情节设计前调用一次 b；深度导演单人/会议在现状与记忆检索后、长期推演前调用一次 b。团队共享节点总额度与返回资料，默认仅授权 `search-units`，固定关闭语义粗筛；日常导演、近场/广域叙事和其他模块暂不增加调用。
+
+阶段提示词、调用次数、会议助理、转卡默认规则及接线验收已更新。未绑定或未就绪时跳过，恢复会议也重新检查可用性；返回资料保持参考级别，普通节点后置文档快照不将其标成剧情事实。复制进卡的是模块代码，不包含私有资料或配置。使用与排除规则见[默认导入说明](global-modules/creative-reference-library/IMPORT.md)。
+
+全量回归执行110个文件、703项用例，全部通过且无跳过；生成一致性、发布清单、打包与Pi离线转译通过。收尾相关18项定向回归、严格类型检查与Skill校验通过。统一验收仍因既有本机Pi 1.1.0与声明0.86.0不一致而返回未通过，未改版本声明。验证使用合成资料、模型替身和隔离卡包；仅更新根目录源，已有卡与session未自动升级。
+
+## 前端美化（浅色纸感精修）
+
+按 [FRONTEND-REDESIGN-PLAN.md](FRONTEND-REDESIGN-PLAN.md) 完成 P1–P6 全部六期实施，后端逻辑与 DOM 契约不变。
+
+- **P1 设计系统底座**：`styles.css` 全部颜色/圆角/阴影/动效归并到 `:root` design token（纸面色板、墨色阶梯、赤陶强调、语义色、圆角阴影动效阶梯），新增全局 `:focus-visible` 回退、细滚动条、选区色与通用过渡；`config.css` 去除独立灰绿体系，改引用全局 token（仅保留配置域专用青 `#3f7268` 作域识别）。
+- **P2 启动器**：`pi-rp-launcher/index.html` 从深色改版为与卡内同源的纸感浅色——品牌区（π 标 + 衬线字标）、Pill 搜索、卡封面 hover 放大/抬升、"未打包"角标、最近游玩时间线（相对时间）、启动状态三点动画。API 与 token 机制不变。
+- **P3 骨架与正文页**：侧边栏 190→216px、active 态左缘指示条 + 实心图标盒；连接状态改为圆点胶囊；工作区超宽屏收敛 1440px 居中、聊天列最大 860px；开场白改为横向滚动场景卡（渐变横幅 + 首字衬线）；消息间距加大、操作按钮 hover 浮现、`text-wrap: pretty`；Pi 回复中显示骨架屏消息；输入框自动增高（≤220px）；清理了侧边栏两个残留的空导航标签（既有畸形 markup）。
+- **P4 设置/配置/工作流/Token**：设置卡 hover 反馈、头像预览圆形、模块排序行 hover；配置方案工具条改单行弹性布局、分类页签改胶囊分段控件、卡片 hover；Token 汇总改"总计大数字 + 四小格"（tabular-nums）；运行中工作流卡片顶部流动进度条；字号滑杆新增 A−/A＋ 快选。
+- **P5 弹窗与模块 rail**：弹窗 header 分隔 + 圆形关闭按钮、统一更亮的遮罩；图片查看器控制条改悬浮暗色胶囊；错误横幅/交接浮层入场动画；模块卡圆角升档、表格字号统一、画廊缩略图 hover"查看"遮罩。
+- **P6 验证**：`--suite=web` 32/32 通过；typecheck 通过；全量 `--mode=all` 中前端相关全部通过，其余失败 16 项均为本沙箱环境限制（spawn EPERM、符号链接/联接点限制、无 Python 3），与本次改动无关。launcher 测试同为 spawn 受限，已静态核对其 HTML 断言（"所有卡"/"最近游玩"）兼容。
+
+缓存破坏版本号已递增：styles.css v27、config.css v7、app.js v28。只改动根目录模板源；`play/` 中已安装卡不会自动更新。
+
+## 正文团队协作实现（2026-10-11）
+
+公共运行时新增 `team.schemaVersion: 2` / `protocol: "collaboration"`，保留原 v1 meeting。成员共享初始资料、公开发言及完整可见工具结果，独立绑定模型、提示词和权限；显式 `rp_team_handoff` 交接，专属输出按归属限制写入与交付。默认主笔与共创者平等合作，以提示词约定“主笔发言—共创补充与调用—主笔总结并进入下一阶段”。两者都有基础文件工具，默认仅共创者调用模块工作流，正文由主笔文件交付并原样保存。持久记录支持阶段、当前成员、文件操作、交付与子工作流接续；模型槽位在嵌套调用期间释放，避免单并发死锁。
+
+`standard-rp` 与 `advanced-memory-rp` 提供协作预设，配置页可切换正文节点的“执行方式”、设置各成员模型与自定义阶段任务，保留原工作流/节点 ID、输出、后置快照和回合发布关系。模式配置可保存、恢复、导出和导入。使用与协议边界见[正文团队协作](global-modules/narrative-controls/TEAM-COLLABORATION.md)。
+
+全量验证执行110个测试文件、698项用例，全部通过且无跳过；生成一致性、发布清单、打包契约与Pi离线转译通过。最后修改相关的31项定向测试及严格类型检查通过。统一验收唯一未满足项仍是本机Pi 1.1.0与声明基线0.86.0不一致，未修改版本声明。使用安装的Pi执行确定性离线模型流及隔离卡包夹具，未验证真实模型的协作与创作效果，未升级已安装卡或修改 `play/`、真实模型配置及真实session。
+
+## 工作流新执行与正文尝试（2026-10-10）
+
+两阶段已实现于公共源码。第一阶段以完整工作流为最小新执行单位，分配独立身份和空工作区，冻结授权资料与因果批次；子调用去重包含父执行，统一集合保存各版本贡献，采用时原子替换，冲突保留原状态。默认最新回合边界；历史维护用显式 `allowHistoricalWrites`，独立偏好用 collection `executionScope: "session"`，生命周期/审核发布步骤禁止独立新执行。内部档案、关联成果和归档游标等统一受管，无需模块各自重写候选存储；外部副作用仍不能撤回。
+
+第二阶段包含首次生成的正文尝试、再次生成按钮、版本预览/采用、候选修订历史和对应模块/图片视图。再生成复用玩家输入，不新增回合；预览不改变 `messages.jsonl` 或下一轮输入。采用切换对应成果，缺失成果不借用其他尝试。手改即时保留修订与真实来源，不强制补算。进入下一轮锁定候选；删除后续回合回溯包括后来修改过的旧档案，并重新开放剩余最新回合。恢复聊天后最新轮可继续新执行。详细协议见[工作流执行与正文尝试](.agents/skills/design-pi-rp-data/references/workflow-executions.md)。
+
+全量验证102个测试文件、643项用例全部通过，无跳过；生成一致性、发布清单、打包契约与Pi离线转译通过。收尾相关81项定向回归及类型检查通过，另复测生命周期清理与迟到结果隔离。统一验收的唯一未满足项仍是本机Pi 1.1.0与开发基线0.86.0不一致，未改版本声明。正文采用/恢复由离线卡包真实HTTP链路验证，前端使用真实脚本与DOM替身，生图使用模拟服务；未验证真实模型/GPU，也未修改安装卡、`play/` 或真实session。旧会话不自动迁移。
+
+## 正文模块文档管理（2026-10-10）
+
+根目录正文模块新增 `conversation/narrative.message` 权威集合，玩家输入、第0轮开场和发布正文采用统一变更事务，编辑保留修订。`messages.jsonl` 为可重建投影，`transcript.json` 固定会话provider并校验权威一致性；删除楼层清除后缀文档所有修订及原有绑定数据。提供有预算的回合范围和修订历史接口，替代模块仅预留manifest provider接入。开场及最近完整回合截取语义保持既有设计。旧JSONL聊天不会隐式迁移；未改动已安装卡或真实session。规范及迁移边界见[正文模块说明](global-modules/narrative-controls/IMPORT.md)。
+
+该基础阶段曾验证100个测试文件、625项用例全部通过；当前总体验证结果以本文件顶部工作流新执行与正文尝试条目为准。
+
+**当前快照，日期 2026-10-10。** 本文件只描述**当前**能力、限制、验证结果和接手规则。
 长篇实施历史（逐批次修复清单、历史验证计数与实机取证记录）已移到
 [DEVELOPMENT-HISTORY.md](DEVELOPMENT-HISTORY.md)；那里的版本号与计数属于该条目当时的状态。
 
@@ -15,7 +68,19 @@
 - [PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md](PI-RP-INFRASTRUCTURE-UPGRADE-BACKLOG.md)：公共基础设施升级台账，没有未经用户确认的候选项。
 - [.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md](.agents/skills/st-card-to-pi-rp/references/architecture-implementation-plan.md)：本轮工程架构优化的实施方案与实施状态表。
 
-## 工作区边界
+## 用户私有创作资料库（当前能力）
+
+新增 `creative-reference-library`：独立UTF-8资料包、审核清单入库、不可变发布、SQLite worker及中文文本索引、增量指纹更新、独立CLI、通用转换Skill。项目适配提供a自主检索、b普通LLM评分与c独立的`module-external`代码向量工作流；c执行向量召回和rerank，不调用普通LLM。a可调用c；b的`includeSemanticCandidates`默认是`false`，显式启用后可额外召回c。用户级目录绑定位于配置面板“资料库”；b可在普通Agent/模型设置中选非思考模型。a/b/c嵌套与重试共用持久预算及固定版本，无候选的b不调用模型。
+
+模块v8仅为外部用户资源增加明确绑定，旧v7不变；不创建会话占位collection或空资源目录。来源/维护记录不进入检索，正文与索引不复制进Git或卡包。普通文件、目录工具与shell受私有库边界约束。只更新公共源码，未安装到已有卡、未转换真实社区资料。
+
+向量能力默认关闭。用户在资料库配置页保存embedding与rerank服务参数，显式测试后手动构建/更新索引，也可以取消或恢复构建；保存配置和查询不会自动向量化，关闭配置后停止新的semantic查询。embedding使用完整`embeddings` HTTP端点，rerank使用完整Cohere-compatible `/rerank`端点，模型和密钥分开配置，并支持query/document prefix与`spaceRevision`；修改空间或切片参数后必须手动更新。精确Float32扫描内置上限为100000个片段及512MiB原始向量文件，实际取内置与配置限制中较小的一项。旧索引可以搜索当前资料中未修改、未删除的子集，覆盖不足标记`partial`，失效资料在top-k前排除。独立核心可携带正式资料及派生索引运行，不依赖源文件。使用与运行要求见[独立核心说明](packages/creative-reference-library/README.md)。
+
+合成向量扫描基准只扫描索引，不包含embedding、rerank或完整c工作流；环境为Node 24.14.0、Windows，384维、top60、每组10轮。1000/10000/100000片段的`open`分别为4.92/29.39/286.33ms，首次top60分别为13.57/49.61/412.21ms，P50分别为7.57/42.66/383.30ms，P95分别为13.57/49.61/417.09ms；原始向量分别为1.536/15.36/153.6MB，进程RSS分别为83.8/106.9/190.5MB。真实模型质量尚未验证，当前未实现ANN、自动GC、自动来源抓取或完整维护UI。
+
+2026-10-09验证：`node scripts/verify.mjs --mode=all`执行99个测试文件、610项用例，全部通过且无跳过；生成资产、发布清单、Pi离线转译与打包验收通过。TypeScript检查及`git diff --check`通过。c 使用 localhost 合成 HTTP 服务验证编码、rerank、取消/恢复及共享预算；前端使用真实脚本与 DOM 替身验证独立配置和显式构建。安装的Pi引擎配合确定性离线流验证了模型预算耗尽后供应商请求不会发出，未调用真实模型或外部供应商。
+
+## 安装与会话修改边界
 
 - 本阶段只修改仓库根目录的 Skill、规范、全局模块源、运行时/Web 模板、测试和文档。
 - `play/` 被 Git 忽略，本阶段没有读取、修改或同步其中的卡、共享运行时、设置与 session。根目录修改不会自动传播到那里。
@@ -29,7 +94,7 @@
 
 ### 公共协议、运行时与工作流
 
-- 模块协议版本为 Module v7，区分 data/resource/hybrid；数据部分继续使用 Data Contract v1、Record Envelope v2、Change Batch v1，工作流使用 Workflow v4（`schemaVersion: 4`）。权威规范位于 `.agents/skills/design-pi-rp-data/references/protocol.md`。
+- 一般模块使用 Module v7，区分 data/resource/hybrid；用户私有资料库使用专用的 Module v8 外部资源绑定。数据部分继续使用 Data Contract v1、Record Envelope v2、Change Batch v1，工作流使用 Workflow v4（`schemaVersion: 4`）。权威规范位于 `.agents/skills/design-pi-rp-data/references/protocol.md`。
 - Module v7 的 manifest 显式登记 `agentFiles` 与 `workflowFiles`，每个工作流都声明 `ownerModuleId`；`promptFile`/`entryFile` 是模块相对路径，运行时引用统一为 `module-id/local-id`，配置方案使用精确的模块归属键。
 - 一个模块可以拥有多个 collection 和 record type。索引、目录及创作文档属于可重建派生数据；Agent 只通过命名 view 和节点授权读取数据。
 - 持久修改统一通过带幂等 ID、`expectedRevision`、提交策略和事务回执的变更批次完成。公共运行时负责 envelope、历史、索引、provenance、回滚与恢复。

@@ -42,7 +42,7 @@ from validation.manifest import (  # noqa: E402
 # 前端/资源/时间适配器等规则已拆分到 validation/frontend.py（方案 §13）。
 # 按名重新导出以保持本模块公开接口不变。
 from validation.frontend import (  # noqa: E402
-    validate_frontend_view_v2,
+    validate_frontend_view_v3,
     validate_prompt_controls_resources,
     validate_resource_catalog,
     validate_time_adapter,

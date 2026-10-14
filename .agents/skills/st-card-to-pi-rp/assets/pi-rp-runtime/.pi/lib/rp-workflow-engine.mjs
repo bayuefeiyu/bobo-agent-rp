@@ -118,7 +118,12 @@ export class RpWorkflowEngine {
   blockingTurnRuns() {
     const blocking = [];
     for (const entry of this.runs.values()) {
-      if (entry.workflow.kind !== "turn-background" || TERMINAL_RUN_STATUSES.has(entry.run.status)) continue;
+      if (entry.workflow.kind !== "turn-background") continue;
+      if (["skipped", "cancelled"].includes(entry.run.status)) continue;
+      // Completion includes authority adoption and dispatching dependent turn work.
+      // Failures require an explicit retry/skip/cancel; they are not a completed turn.
+      if (entry.run.status === "completed" && entry.run.terminalFinalization?.status === "completed"
+        && !entry.pendingChanges && !entry.changeHookFailed) continue;
       if (entry.workflow.trigger?.blockNextTurnUntilReady !== true) continue;
       const nodes = entry.workflow.nodes.filter(node => !TERMINAL_NODE_STATUSES.has(entry.run.nodes[node.id]?.status));
       blocking.push({
@@ -167,7 +172,7 @@ export class RpWorkflowEngine {
     if (workflow.kind.startsWith("module-") && !options.callContext) throw new Error("Module workflows may start only through a parent workflow call.");
     if (!workflow.kind.startsWith("module-") && options.callContext) throw new Error("Top-level workflows cannot start as child calls.");
     const instanceInput = resolveWorkflowInstanceInput(workflow, options);
-    const key = resolveInstanceKey(workflow, instanceInput, options.id);
+    const key = resolveInstanceKey(workflow, instanceInput, options.id) + (options.executionParentId ? `:execution:${options.executionParentId}` : "");
     const invocationIdentity = options.invocationIdentity && typeof options.invocationIdentity === "object"
       ? structuredClone(options.invocationIdentity)
       : instanceInput;
@@ -243,7 +248,8 @@ export class RpWorkflowEngine {
     const persistedSuffix = typeof run.instanceKey === "string" && run.instanceKey.startsWith(`${identity}:`)
       ? run.instanceKey.slice(identity.length + 1)
       : null;
-    const expectedKey = resolveInstanceKey(workflow, instanceInput, persistedSuffix || run.id);
+    const unscopedSuffix = run.executionParentId && persistedSuffix?.endsWith(`:execution:${run.executionParentId}`) ? persistedSuffix.slice(0, -(`:execution:${run.executionParentId}`.length)) : persistedSuffix;
+    const expectedKey = resolveInstanceKey(workflow, instanceInput, unscopedSuffix || run.id) + (run.executionParentId ? `:execution:${run.executionParentId}` : "");
     const expectedFingerprint = workflowInvocationFingerprint(run.invocationIdentity || instanceInput);
     if (run.instanceKey && run.instanceKey !== expectedKey) throw new Error(`Restored workflow instance key does not match its persisted input: ${run.instanceKey}.`);
     if (run.invocationFingerprint && run.invocationFingerprint !== expectedFingerprint) throw new Error("Restored workflow invocation fingerprint does not match its persisted input.");
@@ -271,7 +277,7 @@ export class RpWorkflowEngine {
   async wait(runId) {
     const entry = this.runs.get(runId);
     if (!entry) throw new Error(`Unknown workflow run: ${runId}`);
-    while ((!TERMINAL_RUN_STATUSES.has(entry.run.status) || !entry.terminalFinalized || ["pending", "running"].includes(entry.run.terminalFinalization?.status)) && !["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(entry.run.status)) {
+    while ((!TERMINAL_RUN_STATUSES.has(entry.run.status) || !entry.terminalFinalized || entry.pendingChanges > 0 || ["pending", "running"].includes(entry.run.terminalFinalization?.status)) && !["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(entry.run.status)) {
       const current = entry.wake;
       await current.promise;
     }
@@ -284,6 +290,7 @@ export class RpWorkflowEngine {
     if (entry.workflow.kind === "foreground" && TERMINAL_RUN_STATUSES.has(entry.run.status)) {
       throw Object.assign(new Error("A terminal foreground turn cannot be retried in place; submit a new player turn."), { code: "foreground_turn_terminal" });
     }
+    const wasTerminal = TERMINAL_RUN_STATUSES.has(entry.run.status);
     const retryNode = entry.workflow.nodes.find(item => item.id === nodeId);
     if (retryNode?.type === "team") {
       const freezeKey = typeof memberId === "string" && memberId ? memberId : null;
@@ -294,13 +301,49 @@ export class RpWorkflowEngine {
     } else if (typeof modelId === "string" && modelId.trim()) entry.modelOverrides[nodeId] = modelId.trim();
     entry.exhaustionOverrides.add(nodeId);
     prepareWorkflowNodeRetry(entry.run, nodeId);
-    if (saveOverride) {
-      const node = entry.workflow.nodes.find(item => item.id === nodeId);
-      if (node.type !== "team") node.modelId = modelId;
+    // Persistent assignment changes are saved to the Agent by the configuration bridge.
+    // A retry only overrides this run, including when the caller also saved the Agent.
+    if (wasTerminal) {
+      entry.terminalFinalized = false;
+      entry.run.terminalFinalization = null;
+      await this.#acquireWriteLocks(entry);
     }
     await this.onChange(entry.run, entry.workflow);
     this.#dispatch(entry, "pump", () => this.#pump(entry));
     return structuredClone(entry.run);
+  }
+
+  /** @param {string} runId @param {{id?:string,currentTurn?:number,candidate?:boolean,narrativeAttemptId?:string|null,payload?:object}} options */
+  async reexecute(runId, { id, currentTurn, candidate = false, narrativeAttemptId = null, payload } = {}) {
+    const entry = this.runs.get(runId);
+    if (!entry) throw new Error(`Unknown workflow run: ${runId}`);
+    if (id && this.runs.has(id)) {
+      const replay = this.runs.get(id).run;
+      if (replay.previousExecutionId !== (entry.run.executionId || entry.run.id) || replay.turn !== currentTurn || replay.executionCandidate !== candidate || JSON.stringify(replay.payload) !== JSON.stringify(payload || entry.run.payload)) throw Object.assign(new Error("Execution ID was reused with a different request."), { code: "execution_identity_conflict", status: 409 });
+      return structuredClone(replay);
+    }
+    if (!TERMINAL_RUN_STATUSES.has(entry.run.status)) throw Object.assign(new Error("Wait for or cancel the current execution before starting another."), { code: "execution_busy", status: 409 });
+    if (entry.run.turn !== currentTurn) throw Object.assign(new Error("Only the current turn can be re-executed."), { code: "execution_turn_locked", status: 409 });
+    if (entry.workflow.executionPolicy.enabled === false) throw Object.assign(new Error("This workflow does not permit re-execution."), { code: "execution_not_allowed", status: 409 });
+    const prior = entry.run;
+    return this.start(entry.workflow, {
+      id,
+      cardId: prior.cardId, chatId: prior.chatId, turn: prior.turn,
+      visibleThroughTurn: prior.visibleThroughTurn,
+      trigger: prior.trigger, payload: payload || prior.payload,
+      arguments: prior.arguments, textInput: prior.textInput,
+      documents: prior.documents, outputPaths: prior.outputPaths,
+      invocationIdentity: prior.invocationIdentity,
+      callContext: prior.callContext,
+      effectiveSchedulingKind: prior.effectiveSchedulingKind,
+      sourceReferences: [],
+      executionParentId: prior.executionParentId,
+      previousExecutionId: prior.executionId || prior.id,
+      logicalCallId: prior.logicalCallId || prior.id,
+      narrativeAttemptId: narrativeAttemptId || prior.narrativeAttemptId,
+      executionCandidate: candidate,
+      reexecutionRoot: true,
+    });
   }
 
   async recover(runId, nodeId = /** @type {string | null} */ (null)) {
@@ -396,17 +439,22 @@ export class RpWorkflowEngine {
 
   async #executeWhenAvailable(entry, node) {
     const isTeam = node.type === "team";
+    const isAgent = node.type === "agent";
     const schedulingKind = entry.run.effectiveSchedulingKind || entry.workflow.kind;
     let agent = null;
     let binding = { agentId: null, modelId: null };
     let model = null;
     try {
-      const agentId = node.agentId || entry.workflow.defaults.agentId || null;
-      agent = isTeam || !agentId ? null : await this.resolveAgent(agentId);
-      binding = isTeam
-        ? binding
-        : resolveNodeProfiles({ node: { ...node, modelId: entry.modelOverrides[node.id] || node.modelId }, workflow: entry.workflow, agent });
-      model = isTeam || binding.modelId === "pi:current" ? null : await this.resolveModel(binding.modelId);
+      if(isAgent){
+        const agentId = node.agentId || entry.workflow.defaults.agentId || null;
+        binding.agentId=agentId;
+        if(!agentId)throw Object.assign(new Error(`Agent 节点 ${node.id} 未指定 Agent。`),{code:"workflow_configuration_invalid"});
+        agent=await this.resolveAgent(agentId);
+        if(!agent)throw Object.assign(new Error(`Agent ${agentId} 不存在。`),{code:"workflow_configuration_invalid"});
+        binding=resolveNodeProfiles({node,workflow:entry.workflow,agent,modelOverride:entry.modelOverrides[node.id]||null});
+        const selected=await this.#selectAgentModel(entry,node,binding);
+        binding=selected.binding;model=selected.model;
+      }
       if (!isTeam) await this.#acquire(schedulingKind, binding.modelId, model, entry);
     } catch (error) {
       if (entry.stopped || entry.run.status === "cancelled" || error?.code === "workflow_cancelled") return;
@@ -416,6 +464,7 @@ export class RpWorkflowEngine {
       startWorkflowNode(entry.workflow, entry.run, node.id, {
         agentId: binding.agentId,
         modelId: binding.modelId,
+        modelFallback: binding.modelFallback || null,
         resolvedModel: model ? { provider: model.provider, model: model.model } : null,
         allowAfterExhaustion: entry.exhaustionOverrides.delete(node.id),
       });
@@ -475,13 +524,14 @@ export class RpWorkflowEngine {
       startWorkflowNode(entry.workflow, entry.run, node.id, {
         agentId: binding.agentId,
         modelId: binding.modelId,
+        modelFallback: binding.modelFallback || null,
         resolvedModel: model ? { provider: model.provider, model: model.model } : null,
         allowAfterExhaustion: entry.exhaustionOverrides.delete(node.id),
       });
       await this.#changed(entry);
       try {
         if (isTeam) await this.#preflightTeam(entry, node);
-        const task = { workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, node.id), isCancelled: () => entry.stopped || entry.run.status === "cancelled" };
+        const task = { workflow: entry.workflow, run: entry.run, node, agent, model, binding, invokeWorkflow, invokeAgent, dataReadBatchIds: nodeState.dataReadBatchIds, markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, node.id), isForegroundWaiting: () => entry.run.effectiveSchedulingKind === "global-background" && this.waitingForeground > 0, isCancelled: () => entry.stopped || entry.run.status === "cancelled" };
         let result = await this.executor(task);
         if (entry.stopped || entry.run.status === "cancelled") return;
         try {
@@ -542,25 +592,66 @@ export class RpWorkflowEngine {
         // there was stopped by the runtime, and that verdict is recorded on the team node.
         const modelDispatched = MODEL_INVOKING_NODE_TYPES.has(node.type) && nodeState.attempts?.at(-1)?.modelDispatched === true;
         const deterministic = !modelDispatched || DETERMINISTIC_FAILURE_CODES.has(error?.code);
+        const switched=this.#fallbackAfterFailure(entry,node,binding,error,modelDispatched);
         const failure = { nodeEndCommit: error?.nodeEndCommit === true, failureCode: error?.code || null };
         const state = failWorkflowNode(entry.workflow, entry.run, node.id, error, deterministic
           ? { ...failure, retryable: false, awaitModelChoice: false, deterministic: true, output: error.output || null }
           : failure);
-        if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
-        if (state.status === "awaiting-retry") prepareWorkflowNodeRetry(entry.run, node.id);
-        else if (state.status === "awaiting-model-choice" && this.policy.modelFailure.silentFallback) {
-          const fallback = this.policy.modelFailure.defaultFallbackModelId;
-          if (fallback && fallback !== binding.modelId) {
-            entry.modelOverrides[node.id] = fallback;
-            entry.exhaustionOverrides.add(node.id);
-            prepareWorkflowNodeRetry(entry.run, node.id);
-          }
-        }
+        if(switched){entry.exhaustionOverrides.add(node.id);prepareWorkflowNodeRetry(entry.run,node.id);}
+        else if (state.status === "awaiting-retry") prepareWorkflowNodeRetry(entry.run, node.id);
+        else if (deterministic) maybeFinalizeWorkflow(entry.workflow, entry.run);
       }
       await this.#changed(entry);
     } finally {
       if (slotHeld) this.#release(schedulingKind, binding.modelId);
     }
+  }
+
+  #recordModelFallback(entry,node,binding,toModelId,reason,memberId=null) {
+    const record={nodeId:node.id,agentId:binding.agentId,memberId,fromModelId:binding.modelId||null,toModelId,reason,at:new Date().toISOString()};
+    entry.run.modelFallbacks||=[];entry.run.modelFallbacks.push(record);
+    return record;
+  }
+
+  async #selectAgentModel(entry,node,binding,{memberId=null,frozenModel=null}={}) {
+    const load=async id=>{
+      if(!id)throw Object.assign(new Error(`Agent ${binding.agentId} 未指定模型。请在模型指定页设置模型。`),{code:"model_configuration_invalid"});
+      const model=frozenModel||await this.resolveModel(id);
+      // Pi's current model is resolved by the host. Engine-only hosts may supply null.
+      if(!model&&id!=="pi:current")throw Object.assign(new Error(`Agent ${binding.agentId} 指定的模型 ${id} 不存在或配置无效。`),{code:"model_configuration_invalid"});
+      return model;
+    };
+    try{
+      const model=await load(binding.modelId);
+      const modelFallback=entry.run.modelFallbacks?.findLast(record=>record.nodeId===node.id&&record.memberId===memberId&&record.toModelId===binding.modelId)||null;
+      return {binding:modelFallback?{...binding,modelFallback}:binding,model};
+    }
+    catch(error){
+      const fallback=this.policy.modelFailure.silentFallback?this.policy.modelFailure.defaultFallbackModelId:null;
+      if(!fallback||fallback===binding.modelId||error?.code&&error.code!=="model_configuration_invalid")throw error;
+      const model=await this.resolveModel(fallback);
+      if(!model&&fallback!=="pi:current")throw Object.assign(new Error(`${error.message} 兜底模型 ${fallback} 也不存在或配置无效。`),{code:"model_configuration_invalid"});
+      const modelFallback=this.#recordModelFallback(entry,node,binding,fallback,error.message,memberId);
+      if(memberId){entry.teamModelOverrides[node.id]||={};entry.teamModelOverrides[node.id][memberId]=fallback;}
+      else entry.modelOverrides[node.id]=fallback;
+      return {binding:{...binding,modelId:fallback,modelFallback},model};
+    }
+  }
+
+  #fallbackAfterFailure(entry,node,binding,error,modelDispatched) {
+    const failure=this.policy.modelFailure;
+    if(!failure.silentFallback||!failure.defaultFallbackModelId||error?.nodeEndCommit||DETERMINISTIC_FAILURE_CODES.has(error?.code))return false;
+    if(!modelDispatched&&error?.code!=="model_configuration_invalid")return false;
+    const memberId=node.type==="team"?error?.teamMemberFreezeKey:null;
+    if(node.type==="team"&&!memberId)return false;
+    const fromModelId=memberId?error.teamMemberModelId:binding.modelId;
+    if(fromModelId===failure.defaultFallbackModelId)return false;
+    // Honor the authored primary-model retry budget before switching on provider failures.
+    if(error?.code!=="model_configuration_invalid"&&entry.run.nodes[node.id].attempts.length<node.retry.maxAttempts)return false;
+    this.#recordModelFallback(entry,node,{agentId:error?.teamMemberAgentId||binding.agentId,modelId:fromModelId},failure.defaultFallbackModelId,error.message,memberId);
+    if(memberId){entry.teamModelOverrides[node.id]||={};entry.teamModelOverrides[node.id][memberId]=failure.defaultFallbackModelId;entry.teamMembers.delete(memberId);}
+    else entry.modelOverrides[node.id]=failure.defaultFallbackModelId;
+    return true;
   }
 
   async #invokeTeamMember(entry, parentNode, request) {
@@ -572,17 +663,15 @@ export class RpWorkflowEngine {
     const frozen = entry.run.teamPreflights?.[parentNode.id]?.bindings?.[freezeKey] || null;
     const agentId = request.agentId || request.member?.agentId;
     const persistedBinding = entry.run.teamMemberBindings?.[freezeKey] || frozen;
-    const explicitModelOverride = entry.modelOverrides[parentNode.id]
-      || entry.teamModelOverrides[parentNode.id]?.[freezeKey]
+    const explicitModelOverride = entry.teamModelOverrides[parentNode.id]?.[freezeKey]
       || null;
     const requestedModelId = explicitModelOverride
       || persistedBinding?.resolvedModelId
-      || request.modelId
-      || request.member?.modelId
       || null;
     const cached = entry.teamMembers.get(freezeKey);
     if (cached && (cached.agentId !== agentId || cached.requestedModelId !== requestedModelId)) throw Object.assign(new Error(`Team member ${memberId} was invoked with configuration different from its frozen binding.`), { code: "team_configuration_invalid" });
-    const agent = cached?.agent || persistedBinding?.agentSnapshot || await this.resolveAgent(agentId);
+    const selectedAgent = cached?.agent || persistedBinding?.agentSnapshot || await this.resolveAgent(agentId);
+    const agent = selectedAgent ? { ...selectedAgent, ownerModuleId: selectedAgent.ownerModuleId || agentId.split("/")[0] } : null;
     if (!agent) throw Object.assign(new Error(`Unknown team Agent profile: ${agentId}`), { code: "team_configuration_invalid" });
     const pseudoNode = {
       id: `${parentNode.id}-${String(request.executionId || "member").replace(/[^a-zA-Z0-9._-]/g, "-")}`,
@@ -614,17 +703,20 @@ export class RpWorkflowEngine {
       dataCommit: null,
       metadata: {
         teamMember: true,
+        recordNodeId: parentNode.id,
         teamRole: request.role || request.member?.role || "member",
         teamExecutionId: request.executionId || null,
         teamMemberWorkspace: request.workspace || null,
         teamSharedRoot: request.sharedRoot || null,
       },
     };
-    const binding = resolveNodeProfiles({ node: pseudoNode, workflow: entry.workflow, agent });
+    let binding = resolveNodeProfiles({ node: pseudoNode, workflow: entry.workflow, agent,modelOverride:requestedModelId });
     const persistedModel = !explicitModelOverride && persistedBinding?.resolvedModelId === binding.modelId
       ? persistedBinding.modelSnapshot || null
       : null;
-    const model = cached ? cached.model : persistedModel || await this.resolveModel(binding.modelId);
+    const selected=await this.#selectAgentModel(entry,parentNode,binding,{memberId:freezeKey,frozenModel:cached?.model||persistedModel});
+    binding=selected.binding;
+    const model=selected.model;
     if (!cached) {
       entry.teamMembers.set(freezeKey, { agentId, requestedModelId, agent, model });
       entry.run.teamMemberBindings ||= {};
@@ -634,7 +726,7 @@ export class RpWorkflowEngine {
         resolvedAgentId: agent.id || agentId,
         resolvedModelId: binding.modelId,
         modelSnapshot: frozenModelSnapshot(model),
-        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
+        agentSnapshot: Object.fromEntries(["id", "ownerModuleId", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
       };
@@ -642,37 +734,49 @@ export class RpWorkflowEngine {
     }
     const schedulingKind = entry.run.effectiveSchedulingKind || entry.workflow.kind;
     await this.#acquire(schedulingKind, binding.modelId, model, entry);
+    let memberSlotHeld = true;
+    const memberWorkflowCall = async (callRequest, options = {}) => {
+      if (!request.collaboration || !request.member?.tools?.includes("rp_call") || !agent.tools?.includes("rp_call")) throw new Error("This member cannot call workflows directly.");
+      this.#release(schedulingKind, binding.modelId);
+      memberSlotHeld = false;
+      try { return await this.#invokeAndWait(entry, parentNode, callRequest, { ...options, agent: true }); }
+      finally { if (!entry.stopped) { await this.#acquire(schedulingKind, binding.modelId, model, entry); memberSlotHeld = true; } }
+    };
     try {
-      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: async () => { throw new Error("Team members cannot call workflows directly; ask an advertised assistant in natural language."); }, invokeAgent: null, teamMember: request, dataReadBatchIds: entry.run.nodes[parentNode.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [], markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, parentNode.id), isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
+      const result = await this.executor({ workflow: entry.workflow, run: entry.run, node: pseudoNode, agent, model, binding, invokeWorkflow: memberWorkflowCall, invokeAgent: null, teamMember: request, dataReadBatchIds: entry.run.nodes[parentNode.id]?.dataReadBatchIds || entry.run.inheritedDataReadBatchIds || [], markModelDispatched: () => markWorkflowNodeModelDispatched(entry.run, parentNode.id), isForegroundWaiting: () => entry.run.effectiveSchedulingKind === "global-background" && this.waitingForeground > 0, isCancelled: () => entry.stopped || entry.run.status === "cancelled" });
       if (entry.stopped || entry.run.status === "cancelled") throw Object.assign(new Error("The team workflow was cancelled before this member result could be published."), { code: "workflow_cancelled" });
       return result;
+    } catch(error){
+      throw Object.assign(error instanceof Error?error:new Error(String(error)),{teamMemberFreezeKey:freezeKey,teamMemberAgentId:agentId,teamMemberModelId:binding.modelId});
     } finally {
-      this.#release(schedulingKind, binding.modelId);
+      if (memberSlotHeld) this.#release(schedulingKind, binding.modelId);
     }
   }
 
   async #preflightTeam(entry, node) {
     if (entry.run.teamPreflights?.[node.id]) return;
     const specs = [
-      ...node.team.members.map(member => ({ key: `member:${member.id}`, agentId: member.agentId, modelId: member.modelId })),
-      ...node.team.assistants.filter(ability => ability.enabled && ability.kind === "agent").map(ability => ({ key: `assistant:${ability.id}`, agentId: ability.agentId, modelId: ability.modelId })),
+      ...node.team.members.map(member => ({ key: node.team.protocol === "collaboration" ? `${node.id}:member:${member.id}` : `member:${member.id}`, agentId: member.agentId })),
+      ...node.team.assistants.filter(ability => ability.enabled && ability.kind === "agent").map(ability => ({ key: `assistant:${ability.id}`, agentId: ability.agentId })),
     ];
     const bindings = {};
     for (const spec of specs) {
       const agent = await this.resolveAgent(spec.agentId);
       if (!agent) throw Object.assign(new Error(`Unknown team Agent profile: ${spec.agentId}`), { code: "team_configuration_invalid" });
-      const resolved = resolveNodeProfiles({ node: { id: node.id, type: "agent", agentId: spec.agentId, modelId: spec.modelId }, workflow: entry.workflow, agent });
-      const resolvedModel = await this.resolveModel(resolved.modelId);
-      if (resolved.modelId !== "pi:current" && !resolvedModel) {
-        throw Object.assign(new Error(`Unknown team model profile: ${resolved.modelId}`), { code: "team_configuration_invalid" });
+      if (node.team.protocol === "collaboration") {
+        const member = node.team.members.find(member => `${node.id}:member:${member.id}` === spec.key);
+        const missing = member.tools.filter(tool => !agent.tools?.includes(tool));
+        if (missing.length) throw Object.assign(new Error(`Collaboration member ${member.id} Agent lacks declared tools: ${missing.join(", ")}.`), { code: "team_configuration_invalid" });
       }
+      const selected=await this.#selectAgentModel(entry,node,resolveNodeProfiles({ node: { id: node.id, type: "agent", agentId: spec.agentId }, workflow: entry.workflow, agent }),{memberId:spec.key});
+      const resolved=selected.binding,resolvedModel=selected.model;
       bindings[spec.key] = {
         agentId: spec.agentId,
-        requestedModelId: spec.modelId,
+        requestedModelId: resolved.modelId,
         resolvedAgentId: agent.id || spec.agentId,
         resolvedModelId: resolved.modelId,
         modelSnapshot: frozenModelSnapshot(resolvedModel),
-        agentSnapshot: Object.fromEntries(["id", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
+        agentSnapshot: Object.fromEntries(["id", "ownerModuleId", "name", "description", "prompt", "promptFile", "tools", "contextPermissions", "outputMode", "defaultModelId"]
           .filter(key => agent[key] !== undefined)
           .map(key => [key, structuredClone(agent[key])])),
       };
@@ -741,7 +845,18 @@ export class RpWorkflowEngine {
       documents: normalizedRequest.documents,
     };
     const invocationFingerprint = workflowInvocationFingerprint(invocationIdentity);
-    const childInstanceKey = resolveInstanceKey(normalizedTarget, normalizedRequest.arguments);
+    const childInstanceKey = resolveInstanceKey(normalizedTarget, normalizedRequest.arguments) + (parentEntry.run.executionId ? `:execution:${parentEntry.run.executionId}` : "");
+    const operationId = typeof options.operationId === "string" ? options.operationId : null;
+    if (operationId) {
+      const existing = [...this.runs.values()].find(candidate => candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id && candidate.run.callContext?.operationId === operationId);
+      if (existing) {
+        if (existing.run.invocationFingerprint !== invocationFingerprint || canonicalWorkflowRef(existing.workflow) !== targetReference || workflowInvocationFingerprint(existing.run.outputPaths) !== workflowInvocationFingerprint(normalizedRequest.outputPaths)) throw Object.assign(new Error("A recovered team call changed its inputs or output paths."), { code: "workflow_recovery_required" });
+        const completed = TERMINAL_RUN_STATUSES.has(existing.run.status) ? existing.run : await this.wait(existing.run.id);
+        if (["awaiting-model-choice", "awaiting-recovery", "awaiting-child"].includes(completed.status)) throw this.#childWaitingError(completed, targetReference, invocationFingerprint);
+        if (completed.status !== "completed") throw Object.assign(new Error(`Team call ended with ${completed.status}.`), { code: "workflow_child_failed", childRunId: completed.id });
+        return this.#completedChildResult(parentEntry, parentNode, normalizedTarget, targetReference, completed);
+      }
+    }
     const linkedWait = parentEntry.run.nodes[parentNode.id]?.waitingOn;
     if (linkedWait?.childRunId && linkedWait.workflow === targetReference && linkedWait.invocationFingerprint === invocationFingerprint) {
       const linkedChild = this.runs.get(linkedWait.childRunId);
@@ -768,6 +883,7 @@ export class RpWorkflowEngine {
           ? candidate.run.instanceKey === childInstanceKey
           : candidate.run.callContext?.parentRunId === parentEntry.run.id && candidate.run.callContext?.parentNodeId === parentNode.id;
         return sameCall
+          && (!parentEntry.run.executionId || candidate.run.executionParentId === parentEntry.run.executionId)
           && candidate.run.status === "completed"
           && candidate.run.invocationFingerprint === invocationFingerprint
           && canonicalWorkflowRef(candidate.workflow) === targetReference;
@@ -787,6 +903,10 @@ export class RpWorkflowEngine {
       }
     }
     const child = await this.start(normalizedTarget, {
+      executionParentId: parentEntry.run.executionId,
+      executionLifecycle: options.lifecycle === true,
+      newExecutionRootId: parentEntry.run.newExecutionRootId,
+      narrativeAttemptId: parentEntry.run.narrativeAttemptId,
       cardId: parentEntry.run.cardId,
       chatId: parentEntry.run.chatId,
       turn: parentEntry.run.turn,
@@ -810,6 +930,7 @@ export class RpWorkflowEngine {
       },
       invocationIdentity,
       callContext: {
+        ...(operationId ? { operationId } : {}),
         rootRunId: parentEntry.run.callContext?.rootRunId || parentEntry.run.id,
         parentRunId: parentEntry.run.id,
         parentNodeId: parentNode.id,
@@ -876,8 +997,14 @@ export class RpWorkflowEngine {
     const nodeMerged = [...new Set([...(nodeState?.dataReadBatchIds || []), ...(childRun.dataReadBatchIds || [])])];
     const runMerged = [...new Set([...(parentEntry.run.dataReadBatchIds || []), ...(childRun.dataReadBatchIds || [])])];
     if (nodeMerged.length === (nodeState?.dataReadBatchIds || []).length && runMerged.length === (parentEntry.run.dataReadBatchIds || []).length) return;
-    if (nodeState) nodeState.dataReadBatchIds = nodeMerged;
-    parentEntry.run.dataReadBatchIds = runMerged;
+    // Running executors hold this array as their authorized read overlay. Keep its identity so
+    // subsequent reads in the same code/Agent node see successful child commits, too.
+    if (nodeState) {
+      nodeState.dataReadBatchIds ||= [];
+      nodeState.dataReadBatchIds.splice(0, nodeState.dataReadBatchIds.length, ...nodeMerged);
+    }
+    parentEntry.run.dataReadBatchIds ||= [];
+    parentEntry.run.dataReadBatchIds.splice(0, parentEntry.run.dataReadBatchIds.length, ...runMerged);
     parentEntry.run.updatedAt = new Date().toISOString();
     await this.#changed(parentEntry);
   }
@@ -977,11 +1104,23 @@ export class RpWorkflowEngine {
    * change persists it and the UI can surface it.
    */
   #noteChangeFailure(entry, hook, error) {
+    entry.changeHookFailed = true;
     const message = error instanceof Error ? error.message : String(error);
     entry.run.changeFailures = [...(entry.run.changeFailures || []), { at: new Date().toISOString(), hook, message }].slice(-5);
   }
 
   async #changed(entry) {
+    entry.pendingChanges = (entry.pendingChanges || 0) + 1;
+    try {
+      await this.#applyChange(entry);
+    } finally {
+      entry.pendingChanges -= 1;
+      entry.wake.resolve();
+      entry.wake = deferred();
+    }
+  }
+
+  async #applyChange(entry) {
     if (TERMINAL_RUN_STATUSES.has(entry.run.status) && !entry.terminalFinalized) {
       entry.terminalFinalized = true;
       entry.run.terminalFinalization = { status: "running", startedAt: new Date().toISOString(), error: null };
@@ -1018,6 +1157,7 @@ export class RpWorkflowEngine {
     }
     try {
       await this.onChange(entry.run, entry.workflow);
+      entry.changeHookFailed = false;
     } catch (error) {
       this.#noteChangeFailure(entry, "onChange", error);
     } finally {

@@ -22,7 +22,7 @@ ALLOWED_TRANSFORMS = {
     "generated-runtime",
 }
 
-RUNTIME_SERVICES = {"random"}
+RUNTIME_SERVICES = {"random", "referenceLibrary", "narrativeHistory"}
 
 CHARACTER_MACROS = ("{{char}}", "<char>", "<bot>")
 

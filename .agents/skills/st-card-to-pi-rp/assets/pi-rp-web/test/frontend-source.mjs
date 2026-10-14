@@ -21,7 +21,7 @@ const PUBLIC = new URL("../public/", import.meta.url);
 export async function readFrontendSource() {
   const entries = await readdir(PUBLIC);
   const modules = entries
-    .filter((name) => /^app(-[a-z]+)?\.js$/.test(name))
+    .filter((name) => /^app(?:-[a-z0-9]+)*\.js$/.test(name))
     .sort();
   const parts = await Promise.all(modules.map((name) => readFile(new URL(name, PUBLIC), "utf8")));
   return { source: parts.join("\n"), modules };

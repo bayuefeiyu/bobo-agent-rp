@@ -1,6 +1,7 @@
 
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { cancelNarrativeHistory, validateNarrativeHistorySettings } from "./rp-narrative-history.mjs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
@@ -12,10 +13,10 @@ import { createSessionDataStore } from "./rp-session-data-store.ts";
 import { getDataRecord, getDataRecordHistory, queryDataStable } from "./rp-data-query.mjs";
 
 import { executeDataBatch } from "./rp-data-changes.mjs";
-import { inspectDataImpact, inspectDataIntegrity } from "./rp-data-transactions.mjs";
+import { inspectDataImpact, inspectDataIntegrity, readDataReceipt, readDataTransaction } from "./rp-data-transactions.mjs";
 import { dataValueAt } from "./rp-data-index.mjs";
 
-import { applyFrontendSettingsValues, frontendRegion } from "./rp-module-frontend.mjs";
+import { applyFrontendSettingsValues, frontendBinding } from "./rp-module-frontend.mjs";
 import { frontendPromptControls, loadPromptControls, promptSettingsFields, validatePromptSelections } from "./rp-prompt-controls.mjs";
 
 import { normalizeModuleDisplaySettings, httpError, openLocalDocument } from "./rp-host-utils.ts";
@@ -28,8 +29,9 @@ type Dependencies = {
   activeDataStore: () => RpDataStore;
   requireFrontendModule: (moduleId: string) => FeatureModule;
   cardSettingsPath: string;
+  startManualBackgroundWorkflow?: (workflowId: string, payload: any) => Promise<any>;
 };
-export function createModulesWebBridge({ scope, ensureFeatureModuleRecords, activeDataStore, requireFrontendModule, cardSettingsPath }: Dependencies) {
+export function createModulesWebBridge({ scope, ensureFeatureModuleRecords, activeDataStore, requireFrontendModule, cardSettingsPath, startManualBackgroundWorkflow }: Dependencies) {
 return {
 listFeatureModules: async () => {
             if (!scope.requireCurrent()) throw httpError(409, "This Web page belongs to a closed Pi session. Use the newest Web RP page.");
@@ -39,18 +41,18 @@ listFeatureModules: async () => {
               .filter(module => module.surface === "frontend")
               .sort((left, right) => left.displayOrder - right.displayOrder || left.id.localeCompare(right.id));
             for (const module of frontendModules) {
-              let data = null;
+              let revision = "unavailable";
               let available = false;
               let dataError = "";
-              if (scope.requireChat().sessionDirectory) {
+              if (scope.requireCurrent().sessionDirectory) {
                 try {
-                  if (module.view.schemaVersion === 1) {
-                    const store = activeDataStore();
-                    const collections: Record<string, unknown> = {};
-                    for (const collectionId of Object.keys(module.contract.collections)) collections[collectionId] = await store.readCollection(module.id, collectionId);
-                    data = { collections };
-                  }
                   available = true;
+                  const signatures = [];
+                  for (const collectionId of new Set(module.view.bindings.map((binding: any) => binding.collectionId).filter(Boolean))) {
+                    const collection = await activeDataStore().readCollection(module.id, collectionId as string);
+                    signatures.push([collectionId, collection.records.map((item: any) => [item.id, item.revision, item.status])]);
+                  }
+                  revision = createHash("sha256").update(JSON.stringify(signatures)).digest("hex");
                 } catch (error) {
                   if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
                     dataError = "模块记录暂时无法解析；完成写入后页面会自动重试。";
@@ -63,9 +65,10 @@ listFeatureModules: async () => {
                 description: renderCardText(module.description, scope.requireCurrent().playerName, `${module.id} description`),
                 displayOrder: module.displayOrder,
                 available,
+                revision,
                 error: dataError,
                 view: renderCardTextValues(module.view, scope.requireCurrent().playerName, `${module.id} frontend view`),
-                data,
+
               });
             }
             return { sessionId: scope.requireCurrent().recordId, modules };
@@ -73,7 +76,7 @@ listFeatureModules: async () => {
 queryModuleFrontendRegion: async (moduleId: string, regionId: string, value: any) => {
             const module = requireFrontendModule(moduleId);
             let region;
-            try { region = frontendRegion(module, regionId); if (!["record-browser", "story-browser"].includes(region.type)) throw new Error(`Frontend region ${regionId} is not a record or story browser.`); }
+            try { region = frontendBinding(module, regionId); if (!["record-browser", "story-browser"].includes(region.type)) throw new Error(`Frontend region ${regionId} is not a record or story browser.`); }
             catch (error) { throw httpError(400, (error as Error).message); }
             const where: Record<string, unknown> = {};
             for (const filter of region.filters || []) {
@@ -95,7 +98,7 @@ queryModuleFrontendRegion: async (moduleId: string, regionId: string, value: any
 getModuleFrontendStory: async (moduleId: string, regionId: string, recordId: string) => {
             const module = requireFrontendModule(moduleId);
             let region;
-            try { region = frontendRegion(module, regionId, "story-browser"); }
+            try { region = frontendBinding(module, regionId, "story-browser"); }
             catch (error) { throw httpError(400, (error as Error).message); }
             const record = await getDataRecord(activeDataStore(), { moduleId, collectionId: region.collectionId, id: recordId, view: region.fullView }, { capabilities: [region.readCapability], views: [region.fullView] });
             if (!record) throw httpError(404, `Story ${recordId} was not found.`);
@@ -104,7 +107,7 @@ getModuleFrontendStory: async (moduleId: string, regionId: string, recordId: str
 openModuleAuthoritySource: async (moduleId: string, regionId: string, recordId: string) => {
             const module = requireFrontendModule(moduleId);
             let region;
-            try { region = frontendRegion(module, regionId, "story-browser"); }
+            try { region = frontendBinding(module, regionId, "story-browser"); }
             catch (error) { throw httpError(400, (error as Error).message); }
             if (!region.allowOpenAuthoritySource) throw httpError(403, "This story browser does not expose its authority source.");
             const path = await activeDataStore().authorityFileForRecord(moduleId, region.collectionId, recordId);
@@ -114,7 +117,7 @@ openModuleAuthoritySource: async (moduleId: string, regionId: string, recordId: 
 getModuleFrontendHistory: async (moduleId: string, regionId: string, recordId: string, cursor: string | null) => {
             const module = requireFrontendModule(moduleId);
             let region;
-            try { region = frontendRegion(module, regionId, "record-browser"); }
+            try { region = frontendBinding(module, regionId, "record-browser"); }
             catch (error) { throw httpError(400, (error as Error).message); }
             return getDataRecordHistory(activeDataStore(), { moduleId, collectionId: region.collectionId, id: recordId, view: region.view, cursor, limit: 20 }, { capabilities: [region.readCapability], views: [region.view], runtimeLimit: 20 });
           },
@@ -123,7 +126,7 @@ getModuleFrontendSettings: async (moduleId: string, regionId: string) => {
             let region;
             let controls: any = null;
             try {
-              region = frontendRegion(module, regionId);
+              region = frontendBinding(module, regionId);
               if (!["settings-form", "prompt-controls"].includes(region.type)) throw new Error("Region does not expose settings.");
               if (region.type === "prompt-controls") {
                 controls = await loadPromptControls(module.moduleDirectory, module.resourceCatalog, region.controlsFile);
@@ -140,11 +143,12 @@ getModuleFrontendSettings: async (moduleId: string, regionId: string) => {
             return { record: rendered, values: Object.fromEntries(region.fields.map((field: any) => [field.path, dataValueAt(raw, `/data${field.path}`)])), ...(controls ? { controls: await frontendPromptControls(module.moduleDirectory, controls, (text: string) => renderCardText(text, scope.requireCurrent()!.playerName, "frontend prompt option")) } : {}) };
           },
 updateModuleFrontendSettings: async (moduleId: string, regionId: string, value: any) => {
+            if (typeof value?.expectedSessionId === "string" && value.expectedSessionId !== scope.requireCurrent()?.recordId) throw httpError(409, "The chat has changed; reopen settings before submitting edits.");
             const module = requireFrontendModule(moduleId);
             let region;
             let controls: any = null;
             try {
-              region = frontendRegion(module, regionId);
+              region = frontendBinding(module, regionId);
               if (!["settings-form", "prompt-controls"].includes(region.type)) throw new Error("Region does not expose settings.");
               if (region.type === "prompt-controls") {
                 controls = await loadPromptControls(module.moduleDirectory, module.resourceCatalog, region.controlsFile);
@@ -153,24 +157,46 @@ updateModuleFrontendSettings: async (moduleId: string, regionId: string, value: 
             }
             catch (error) { throw httpError(400, (error as Error).message); }
             if (!Number.isSafeInteger(value?.expectedRevision) || value.expectedRevision < 1) throw httpError(400, "expectedRevision must be a positive integer.");
+            if (typeof value.operationId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value.operationId)) throw httpError(400, "A safe operationId is required.");
             const store = activeDataStore();
             const state = await store.readCollection(moduleId, region.collectionId);
             const current = state.records.find((item: any) => item.id === region.recordId && item.recordType === region.recordType);
             if (!current) throw httpError(404, `Settings record ${region.recordId} was not found.`);
+            const baseline = current.revision === value.expectedRevision ? current : state.history.find((item: any) => item.id === current.id && item.revision === value.expectedRevision);
+            if (!baseline) throw Object.assign(httpError(409, "The original settings revision is unavailable."), { code: "revision_conflict" });
             let next;
             try {
-              next = applyFrontendSettingsValues(region, current.data, value.values || {});
+              next = applyFrontendSettingsValues(region, baseline.data, value.values || {});
+              if (moduleId === "narrative-controls" && region.recordId === "narrative-history-settings") await validateNarrativeHistorySettings(next);
               if (controls) validatePromptSelections(controls, next);
             }
             catch (error) { throw httpError(400, (error as Error).message); }
-            const receipt = await executeDataBatch(store, { protocolVersion: 1, batchId: `frontend-${moduleId}-${regionId}-${randomUUID()}`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: `update-${randomUUID()}`, moduleId, collectionId: region.collectionId, recordType: region.recordType, action: "update", targetId: region.recordId, expectedRevision: value.expectedRevision, data: next }] }, { access: [{ moduleId, collectionId: region.collectionId, capabilities: [region.updateCapability], views: [region.view] }], context: { initiatorKind: "user", initiatorId: "web-module-frontend", binding: { turn: controls ? 0 : scope.requireCurrent()?.turn || 0, messageId: null }, sourceReferences: [] } });
-            if (receipt.status !== "committed") throw httpError(receipt.results?.some((item: any) => item.code === "revision_conflict") ? 409 : 400, `Settings update failed: ${receipt.results?.[0]?.error || receipt.status}`);
+            const receipt = await executeDataBatch(store, { protocolVersion: 1, batchId: `frontend-${moduleId}-${regionId}-${value.operationId}`, status: "pending", commitPolicy: "atomic", operations: [{ operationId: value.operationId, moduleId, collectionId: region.collectionId, recordType: region.recordType, action: "update", targetId: region.recordId, expectedRevision: value.expectedRevision, data: next }] }, { access: [{ moduleId, collectionId: region.collectionId, capabilities: [region.updateCapability], views: [region.view] }], context: { initiatorKind: "user", initiatorId: "web-module-frontend", binding: { turn: controls ? 0 : scope.requireCurrent()?.turn || 0, messageId: null }, sourceReferences: [] } });
+            if (receipt.status !== "committed") throw Object.assign(httpError(receipt.results?.some((item: any) => item.code === "revision_conflict") ? 409 : 400, `Settings update failed: ${receipt.results?.[0]?.error || receipt.status}`), { code: receipt.results?.[0]?.code || "invalid_request" });
+            if (receipt.idempotentReplay) return { saved: true, receipt };
+            if (moduleId === "narrative-controls" && region.recordId === "narrative-history-settings") {
+              if (!next.enabled) await cancelNarrativeHistory(store.sessionDirectory);
+              else if (!current.data.enabled && startManualBackgroundWorkflow) {
+                try { await startManualBackgroundWorkflow("narrative-controls/maintain-history-index", { operation: "update" }); }
+                catch (error) { return { saved: true, receipt, indexStartError: (error as Error).message }; }
+              }
+            }
             return { saved: true, receipt };
+          },
+getModuleFrontendOperation: async (moduleId: string, bindingId: string, operationId: string) => {
+            const module = requireFrontendModule(moduleId);
+            const binding = frontendBinding(module, bindingId);
+            if (!["settings-form", "prompt-controls"].includes(binding.type)) throw httpError(400, "Binding has no settings operations.");
+            const batchId = `frontend-${moduleId}-${bindingId}-${operationId}`;
+            const directory = scope.requireChat().sessionDirectory;
+            const receipt = await readDataReceipt(directory, batchId);
+            const transaction = await readDataTransaction(directory, batchId);
+            return { operationId, status: receipt?.status || (transaction ? "unknown" : "not_found"), saved: receipt?.status === "committed", results: receipt?.results?.map((item: any) => ({ status: item.status, code: item.code || null })) || [] };
           },
 inspectModuleFrontendIntegrity: async (moduleId: string, regionId: string) => {
             const module = requireFrontendModule(moduleId);
             let region;
-            try { region = frontendRegion(module, regionId, "integrity-alerts"); }
+            try { region = frontendBinding(module, regionId, "integrity-alerts"); }
             catch (error) { throw httpError(400, (error as Error).message); }
             if (!scope.requireCurrent()?.sessionDirectory) throw httpError(409, "Start or resume a chat before inspecting module integrity.");
             const result = await inspectDataIntegrity(scope.requireChat().sessionDirectory, {

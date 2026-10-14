@@ -1,5 +1,7 @@
 
 import { moduleFile } from "./rp-module-registry.mjs";
+import { createReferenceService, referenceStatus } from "./rp-reference-library.mjs";
+import { createNarrativeHistoryService } from "./rp-narrative-history.mjs";
 import * as promptControlsService from "./rp-prompt-controls.mjs";
 
 import { randomUUID } from "node:crypto";
@@ -24,6 +26,8 @@ import { parseTaskStages } from "./rp-task-stages.mjs";
 
 
 import { resolveWorkflowIdentity, workflowDataReadAccess } from "./rp-node-data-access.ts";
+import { projectTranscript } from "./rp-transcript-projection.mjs";
+import { executionBatchId } from "./rp-executions.mjs";
 
 import { copyDocumentSet, copyWorkspaceEntry, writeCollisionSafeFile } from "./rp-document-sets.mjs";
 
@@ -54,7 +58,7 @@ import type { HostSessionScope } from "./rp-host-session-scope.ts";
 type Dependencies = {
   scope: HostSessionScope<ActiveBridge>;
   turn: { current: RpRun | null };
-  appendMessage: (message: WebMessage) => Promise<RecordEnvelope | undefined>;
+  appendMessage: (message: WebMessage, run?: any, nodeId?: string) => Promise<RecordEnvelope | undefined>;
   updateMetadata: () => Promise<void>;
   buildDynamicProcessorContext: (target: ActiveBridge, run: RpRun) => Promise<string>;
   rememberDataReceipt: (run: any, nodeId: string, receipt: any) => any;
@@ -64,6 +68,9 @@ type Dependencies = {
 export function createControlNodeExecutor({ scope, turn, appendMessage, updateMetadata, buildDynamicProcessorContext, rememberDataReceipt, promptControlsService }: Omit<Dependencies, "resolveConfiguredModel">) {
 return async function executeControlNode(task: any, prepared: { callInputs: any[]; upstreamHandoffs: any[]; dataReadBatchIds: string[] }) {
     const { workflow, run, node } = task;
+    const scopedStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules, executionId: run.executionId });
+    const provider = scope.requireCurrent().transcriptProvider;
+    const workflowMessages: RecordEnvelope[] = run.executionId ? projectTranscript((await scopedStore.readCollection(provider.moduleId, provider.collectionId)).records, scopedStore.module(provider.moduleId).contract, provider) : scope.requireCurrent().messages;
     const { callInputs, upstreamHandoffs, dataReadBatchIds } = prepared;
     if (node.type === "team") {
       const nodeWorkspace = workflowNodeWorkspace(scope.requireChat().sessionDirectory, workflow.id, run.id, node.id);
@@ -102,6 +109,8 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
         return { output: { adapter: request.adapter, request: String(request.text || ""), documents }, usage: null };
       };
       const teamConfig = renderTeamAuthorText(node.team, scope.requireCurrent().playerName, `team ${node.id}`);
+      const referenceAvailability = teamConfig.assistants.some((ability: any) => ability.target?.startsWith("creative-reference-library/")) && scope.requireCurrent().featureModules.some(module => module.externalResource)
+        ? await referenceStatus() : { ready: false, semanticReady: false };
       const deliverables = await runTeamMeeting({
         config: teamConfig,
         workspace: nodeWorkspace,
@@ -112,6 +121,7 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
         startWorkflow: (request: any, options: any) => task.invokeWorkflow(request, { ...options, parallel: true }),
         invokeTool: invokeTeamTool,
         isCancelled: task.isCancelled,
+        isWorkflowAvailable: (target: string) => !target.startsWith("creative-reference-library/") || (target === "creative-reference-library/search-passages" ? referenceAvailability.semanticReady === true : referenceAvailability.ready === true),
       });
       const teamState = await readFile(resolve(nodeWorkspace, "team", "state.json"), "utf8").then(JSON.parse);
       return {
@@ -140,17 +150,18 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
       })).trim();
       if (!content) throw new Error("The selected narrative output is empty.");
       const narrativeSource = normalizeNarrativeSource(run.nodes[sourceNode.id]?.narrativeSource, { producerKind: "agent", layer: "story" });
-      const existing = scope.requireCurrent().messages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
+      const existing = workflowMessages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
       if (existing && existing.data.content !== content) throw new Error("This turn already has a different persisted narrative.");
       const assistantRecord = existing || await appendMessage({
-          sequence: scope.requireCurrent().messages.length,
+          sequence: workflowMessages.length,
           turn: run.turn,
           role: "assistant",
           kind: "message",
           content,
           createdAt: new Date().toISOString(),
           narrativeSource,
-        });
+          operationId: `publish:${run.id}`,
+        }, run, node.id);
       if (!assistantRecord) throw new Error("The narrative message could not be persisted.");
       turn.current.assistantContent = content;
       turn.current.assistantMessageId = assistantRecord.id;
@@ -189,7 +200,7 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
       const parentRunId = run.callContext?.parentRunId;
       const parentNodeId = run.callContext?.parentNodeId;
       if (!parentWorkflowId || !parentRunId || !parentNodeId) throw new Error("Module workflow return is missing its parent call context.");
-      const parentWorkspace = workflowNodeWorkspace(scope.requireChat().sessionDirectory, parentWorkflowId, parentRunId, parentNodeId);
+      const parentWorkspace = run.reexecutionRoot ? resolve(scope.requireChat().sessionDirectory, "workflow", "execution-exports", run.id) : workflowNodeWorkspace(scope.requireChat().sessionDirectory, parentWorkflowId, parentRunId, parentNodeId);
       const outputs: Record<string, string> = {};
       for (const [exportId, source] of Object.entries(node.exports) as any[]) {
         const requested = outputPaths[exportId];
@@ -285,14 +296,14 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
       }
       const nodeWorkspace = workflowNodeWorkspace(scope.requireChat().sessionDirectory, workflow.id, run.id, node.id);
       await mkdir(nodeWorkspace, { recursive: true });
-      const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+      const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules, executionId: run.executionId });
       const accessFor = (moduleId: string, collectionId: string) => {
         const access = node.moduleAccess?.find((item: any) => item.moduleId === moduleId && item.collectionId === collectionId);
         if (!access) throw new Error(`Code node ${node.id} has no access to ${moduleId}/${collectionId}.`);
         return access;
       };
       const data = Object.freeze({
-        receipt: (batchId: string) => readDataReceipt(scope.requireChat().sessionDirectory, batchId),
+        receipt: (batchId: string) => readDataReceipt(scope.requireChat().sessionDirectory, executionBatchId(run.executionId, batchId)),
         query: (request: any) => {
           const access = accessFor(request.moduleId, request.collectionId);
           const budget = resolveNodeQueryBudget(access, run.payload);
@@ -330,12 +341,12 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
             workflowRunId: run.id,
             nodeId: node.id,
             binding: resolveCodeSubmissionBinding(options.binding, {
-              messages: scope.requireCurrent().messages,
+              messages: workflowMessages,
               visibleThroughTurn: run.visibleThroughTurn ?? run.turn,
               fallback: { turn: run.turn || 0, messageId: node.metadata?.unboundData === true ? null : turn.current?.assistantMessageId || null },
             }),
             sourceReferences: resolveCodeSubmissionSourceReferences(options.sourceMessageIds, {
-              messages: scope.requireCurrent().messages,
+              messages: workflowMessages,
               visibleThroughTurn: run.visibleThroughTurn ?? run.turn,
               fallback: run.sourceReferences || [],
               expectedRevisions: options.sourceMessageRevisions ?? null,
@@ -348,6 +359,32 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
         promptControls: promptControlsService,
         cardText: Object.freeze({ render: (value: string, source: string) => renderCardText(value, scope.requireCurrent()!.playerName, source) }),
       };
+      if (node.runtimeServices?.includes("referenceLibrary")) services.referenceLibrary = createReferenceService(scope.requireCurrent(), workflow, run, node, scope.requireChat().sessionDirectory);
+      if (node.runtimeServices?.includes("narrativeHistory")) {
+        const historyModules = scope.requireCurrent().featureModules;
+        const settingsRecord = await data.get({ moduleId: "narrative-controls", collectionId: "settings", id: "narrative-history-settings", view: "processor" });
+        if (!settingsRecord) throw new Error("History settings record is missing.");
+        let historySettings = settingsRecord.value.settings;
+        let historyMessages = workflowMessages;
+        if (workflow.kind === "turn-background") {
+          // Derived-index jobs use adopted session prose and the current session controls.
+          // A manual catch-up must see the toggle saved after the preceding foreground snapshot.
+          const authoritative = createSessionDataStore({ sessionDirectory: store.sessionDirectory, featureModules: historyModules });
+          historySettings = (await authoritative.readCollection("narrative-controls", "settings")).records.find((record: any) => record.id === "narrative-history-settings")?.data;
+          historyMessages = projectTranscript((await authoritative.readCollection(provider.moduleId, provider.collectionId)).records, authoritative.module(provider.moduleId).contract, provider);
+          if (!historySettings) throw new Error("History settings record is missing.");
+        }
+        let foreground = workflow;
+        let parentRun = run;
+        while (parentRun.callContext?.parentRunId) { const parent = scope.requireCurrent().workflowEngine.runs.get(parentRun.callContext.parentRunId); if (!parent) break; foreground = parent.workflow; parentRun = parent.run; }
+        if (!foreground.turnContext) {
+          const sourceWorkflowId = run.trigger?.workflowId || scope.requireCurrent().activeWorkflowId;
+          foreground = await scope.requireCurrent().configStore.getWorkflow(sourceWorkflowId) || foreground;
+        }
+        services.narrativeHistory = await createNarrativeHistoryService({ workflow, node, run, messages: historyMessages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn)), settings: historySettings, sessionDirectory: scope.requireChat().sessionDirectory, recentCompleteTurns: foreground.turnContext?.recentCompleteTurns ?? 5, isCancelled: () => task.isCancelled?.() === true,
+          isEnabled: async () => { if (task.isCancelled?.()) return false; const current = await createSessionDataStore({ sessionDirectory: store.sessionDirectory, featureModules: historyModules }).readCollection("narrative-controls", "settings"); return current.records.find((record: any) => record.id === "narrative-history-settings")?.data.enabled === true; }
+        });
+      }
       if (node.runtimeServices?.includes("random")) {
         services.random = createRpRandomService({
           sessionDirectory: scope.requireChat().sessionDirectory,
@@ -369,7 +406,7 @@ return async function executeControlNode(task: any, prepared: { callInputs: any[
           return Object.freeze({ id: owner.id, moduleKind: owner.moduleKind, directory: owner.moduleDirectory, resourceCatalog: structuredClone(owner.resourceCatalog) });
         })() : null,
         conversation: {
-          messages: structuredClone(scope.requireCurrent().messages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? scope.requireCurrent()!.turn))),
+          messages: structuredClone(workflowMessages.filter(message => message.binding.turn <= (run.visibleThroughTurn ?? run.turn ?? scope.requireCurrent()!.turn))),
           player: { name: scope.requireCurrent().playerName, description: scope.requireCurrent().playerDescription },
           fixedContext: renderCardText(scope.requireCurrent().stableCardContext, scope.requireCurrent().playerName, "fixed_context"),
           primaryCharacters: "",

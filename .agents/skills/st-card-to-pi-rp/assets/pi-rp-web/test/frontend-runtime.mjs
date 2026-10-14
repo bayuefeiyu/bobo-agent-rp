@@ -61,19 +61,31 @@ export class FakeNode {
   set innerHTML(value) { this._text = String(value ?? ""); this.children = []; }
 
   get firstChild() { return this.children[0] ?? null; }
+  get lastChild() { return this.children.at(-1) ?? null; }
+  get nextElementSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] || null; }
   get childNodes() { return this.children; }
   get childrenCount() { return this.children.length; }
 
-  append(...nodes) { for (const node of nodes) if (node) this.children.push(node); }
-  appendChild(node) { if (node) this.children.push(node); return node; }
+  append(...nodes) { for (const node of nodes) if (node) { node.remove(); node.parentNode = this; this.children.push(node); } }
+  appendChild(node) { this.append(node); return node; }
   prepend(...nodes) { this.children.unshift(...nodes.filter(Boolean)); }
-  insertBefore(node) { this.children.unshift(node); return node; }
-  replaceChildren(...nodes) { this.children = nodes.filter(Boolean); }
-  remove() { this.removed = true; }
+  insertBefore(node, reference = null) { node.remove(); node.parentNode = this; const index = reference ? this.children.indexOf(reference) : this.children.length; this.children.splice(index, 0, node); return node; }
+  replaceChildren(...nodes) { for (const node of this.children) node.parentNode = null; this.children = []; this.append(...nodes); }
+  remove() { this.removed = true; if (this.parentNode) { this.parentNode.children = this.parentNode.children.filter(node => node !== this); this.parentNode = null; } }
   removeAttribute(name) { delete this.attributes[name]; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
-  closest() { return null; }
+  matches(selector) {
+    return selector.split(",").some(part => {
+      part = part.trim();
+      const attribute = part.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);
+      if (attribute) { const value = attribute[1].startsWith("data-") ? this.dataset[attribute[1].slice(5).replace(/-([a-z])/g, (_,c)=>c.toUpperCase())] : attribute[1] === "hidden" ? (this.hidden ? "" : null) : this.getAttribute(attribute[1]); return attribute[2] === undefined ? value != null : value === attribute[2]; }
+      if (part.startsWith(".")) return this.classList.contains(part.slice(1));
+      if (part.startsWith("#")) return this.id === part.slice(1);
+      return /^[a-z]+$/i.test(part) && this.tagName === part.toUpperCase();
+    });
+  }
+  closest(selector) { return this.matches(selector) ? this : this.parentNode?.closest(selector) || null; }
   contains() { return false; }
   focus() {}
   blur() {}
@@ -88,8 +100,8 @@ export class FakeNode {
   submit() { this.dispatch("submit"); }
   checkValidity() { return true; }
   reportValidity() { return true; }
-  querySelector() { return null; }
-  querySelectorAll() { return []; }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  querySelectorAll(selector) { return this.children.flatMap(node => [...(node.matches(selector) ? [node] : []), ...node.querySelectorAll(selector)]); }
   getBoundingClientRect() { return { width: 0, height: 0, top: 0, left: 0 }; }
 
   addEventListener(type, handler) {
@@ -144,7 +156,7 @@ function makeDocument(elements) {
     createElement: (tag) => new FakeNode(tag),
     createTextNode: (text) => { const node = new FakeNode("#text"); node.textContent = text; return node; },
     createDocumentFragment: () => new FakeNode("#fragment"),
-    getElementById: (id) => elements.get(id) ?? null,
+    getElementById: (id) => elements.get(id) ?? [...elements.values()].flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; }).find(node => node.id === id) ?? null,
     querySelector: (selector) => (selector.startsWith("#") ? elements.get(selector.slice(1)) ?? null : null),
     querySelectorAll: () => [],
     addEventListener() {},
@@ -157,24 +169,26 @@ function makeDocument(elements) {
  * 建立一个可以运行 app.js 的运行环境。
  *
  * @param {object} options
- * @param {Record<string, any>} options.responses 形如 `{"GET /api/card": {...}}` 的响应表；
- *   值可为对象或 `() => object`；未登记的 `/api/*` 请求返回 `{}`（并计入 `unknownRequests`）。
+ * @param {Record<string, any>} options.responses 形如 `{"GET /api/v1/card": {...}}` 的响应表；
+ *   值可为对象或 `() => object`；未登记的 `/api/v1/*` 请求返回 `{}`（并计入 `unknownRequests`）。
  */
-export function createFrontendRuntime({ responses = {}, search = "" } = {}) {
+export function createFrontendRuntime({ responses = {}, search = "", mode = "play" } = {}) {
   const { elements, ids, tabButtons, html } = buildElementsFromHtml();
   const document = makeDocument(elements);
 
   const timers = new Map();
   let timerSeq = 0;
+  const windowListeners = new Map();
   const window = {
     document,
     location: { search, hash: "", href: `http://127.0.0.1/?${search.replace(/^\?/, "")}` },
-    setInterval(handler, delay) { const id = ++timerSeq; timers.set(id, { handler, delay }); return id; },
+    setInterval(handler, delay) { const id = ++timerSeq; timers.set(id, { handler, delay, kind: "interval" }); return id; },
     clearInterval(id) { timers.delete(id); },
-    setTimeout(handler) { const id = ++timerSeq; timers.set(id, { handler, delay: 0, once: true }); return id; },
+    setTimeout(handler, delay = 0) { const id = ++timerSeq; timers.set(id, { handler, delay, kind: "timeout", once: true }); return id; },
     clearTimeout(id) { timers.delete(id); },
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, handler) { const list = windowListeners.get(type) || []; list.push(handler); windowListeners.set(type, list); },
+    removeEventListener(type, handler) { windowListeners.set(type, (windowListeners.get(type) || []).filter(item => item !== handler)); },
+    dispatchEvent(event) { const payload = typeof event === "string" ? { type: event } : event; for (const handler of [...(windowListeners.get(payload.type) || [])]) handler({ target: window, ...payload }); },
     confirm: () => true,
     alert() {},
     prompt: () => null,
@@ -184,23 +198,78 @@ export function createFrontendRuntime({ responses = {}, search = "" } = {}) {
 
   const requests = [];
   const unknownRequests = [];
+  let requestSequence = 0;
+  const readContext = Object.freeze({
+    serverInstanceId: "fixture-server",
+    cardId: mode === "development" ? null : "demo-card",
+    chatId: mode === "play" ? "session-1" : null,
+    executionId: null,
+  });
+  const connectionData = {
+    apiVersion: { major: 1, minor: 0 },
+    hostVersion: { major: 1, minor: 0 },
+    mode,
+    readContext,
+    capabilities: ["chat", "modules", "workflows", "configuration", "image-generation"],
+  };
   const fetchImpl = async (path, options = {}) => {
     const method = (options.method || "GET").toUpperCase();
-    const key = `${method} ${String(path).split("?")[0]}`;
+    const url = new URL(String(path), "http://127.0.0.1");
+    const lookupQuery = new URLSearchParams(url.search);
+    lookupQuery.delete("readContext");
+    const lookupPath = `${url.pathname}${lookupQuery.toString() ? `?${lookupQuery}` : ""}`;
+    const key = `${method} ${lookupPath}`;
     requests.push({ method, path, key });
-    let body = responses[key];
-    if (body === undefined) body = responses[`GET ${String(path).split("?")[0]}`];
-    if (body === undefined) {
-      if (String(path).startsWith("/api/")) unknownRequests.push(key);
+    if (method !== "GET" && url.pathname.startsWith("/api/v1/") && !url.searchParams.has("readContext")) {
+      const envelope = {
+        error: { code: "invalid_request", message: "Commands require an explicit readContext.", retryable: false, details: null },
+        requestId: `fixture-request-${++requestSequence}`,
+      };
+      return { ok: false, status: 400, headers: { get: () => "application/json" }, json: async () => envelope, text: async () => JSON.stringify(envelope) };
+    }
+    let body;
+    let matchedFixture = false;
+    for (const candidate of [key, `${method} ${url.pathname}`, `GET ${url.pathname}`]) {
+      if (Object.hasOwn(responses, candidate)) {
+        body = responses[candidate];
+        matchedFixture = true;
+        break;
+      }
+    }
+    if (body === undefined && url.pathname === "/api/v1/connection") body = connectionData;
+    if (body === undefined && !matchedFixture) {
+      if (url.pathname.startsWith("/api/v1/")) unknownRequests.push(key);
       body = {};
     }
-    const value = typeof body === "function" ? body({ method, path, options }) : body;
+    let value;
+    try {
+      value = typeof body === "function" ? await body({ method, path: String(path), options }) : body;
+    } catch (error) {
+      const requestId = `fixture-request-${++requestSequence}`;
+      const envelope = {
+        error: {
+          code: error?.code || "internal_error",
+          message: error?.message || String(error),
+          retryable: Boolean(error?.retryable),
+          details: error?.details ?? null,
+        },
+        requestId,
+      };
+      return {
+        ok: false,
+        status: error?.status || 500,
+        headers: { get: () => "application/json" },
+        json: async () => envelope,
+        text: async () => JSON.stringify(envelope),
+      };
+    }
+    const envelope = { data: value, requestId: `fixture-request-${++requestSequence}`, readContext };
     return {
       ok: true,
       status: 200,
       headers: { get: () => "application/json" },
-      json: async () => value,
-      text: async () => JSON.stringify(value),
+      json: async () => envelope,
+      text: async () => JSON.stringify(envelope),
     };
   };
 
@@ -208,6 +277,8 @@ export function createFrontendRuntime({ responses = {}, search = "" } = {}) {
     document,
     window,
     fetch: fetchImpl,
+    setTimeout: window.setTimeout,
+    clearTimeout: window.clearTimeout,
     // app.js 里 `requestAnimationFrame(...)` 是**不带前缀**调用的（浏览器把它暴露为全局），
     // 因此必须装在 globalThis 上；只放进 window 不够。
     requestAnimationFrame: (handler) => { handler(0); return 0; },
@@ -226,7 +297,15 @@ export function createFrontendRuntime({ responses = {}, search = "" } = {}) {
       }
     },
   };
-  return { elements, ids, tabButtons, html, document, window, timers, requests, unknownRequests, globals, fetchImpl };
+  const runNextTimer = async (predicate = () => true) => {
+    const next = [...timers.entries()].find(([, timer]) => predicate(timer));
+    if (!next) return false;
+    const [id, timer] = next;
+    timers.delete(id);
+    await timer.handler();
+    return true;
+  };
+  return { elements, ids, tabButtons, html, document, window, timers, requests, unknownRequests, globals, fetchImpl, runNextTimer, readContext };
 }
 
 /**
@@ -269,10 +348,10 @@ export async function settle(turns = 40) {
 }
 
 /**
- * 构造三种页面状态之一所需的 `/api/*` 响应。
+ * 构造三种页面状态之一所需的 `/api/v1/*` 响应。
  *
  * 方案 §11 验收项要求"开发预览、未开始聊天、活跃聊天三种状态都可初始化"。
- * 三者的差别集中在 `/api/state` 快照上：
+ * 三者的差别集中在 `/api/v1/state` 快照上：
  *   - `development-preview`：根目录预览，没有角色卡与聊天；
  *   - `not-started`：已选卡、已有开场白候选，但尚未选定；
  *   - `active-chat`：已有 openingId 与消息。
@@ -301,21 +380,40 @@ export function createStateFixtures(kind, overrides = {}) {
   if (!snapshots[kind]) throw new Error(`unknown state fixture: ${kind}`);
   const { snapshot: snapshotOverride, ...rest } = overrides;
   const responses = {
-    "GET /api/card": { id: "demo-card", name: "沈月", openings: [{ id: "opening-1", title: "初见", content: "沈月看向{{user}}。" }] },
-    "GET /api/state": { ...snapshots[kind], ...(snapshotOverride || {}) },
-    "GET /api/settings": {
+    "GET /api/v1/card": { id: "demo-card", name: "沈月", openings: [{ id: "opening-1", title: "初见", content: "沈月看向{{user}}。" }] },
+    "GET /api/v1/state": { ...snapshots[kind], ...(snapshotOverride || {}) },
+    "GET /api/v1/frontend": {
+      manifest: {
+        schemaVersion: 1,
+        id: "official",
+        version: "1.0.0",
+        kind: "builtin",
+        root: "public/gameplay/official",
+        entry: "index.mjs",
+        apiVersion: { major: 1, minor: 0 },
+        hostVersion: { major: 1, minor: 0 },
+        requiredCapabilities: ["get.state"],
+        optionalCapabilities: [],
+        assets: ["index.mjs"],
+        immersive: false,
+      },
+      assetRoot: "/gameplay/official/",
+      entryUrl: "/gameplay/official/index.mjs",
+    },
+    "GET /api/v1/settings": {
       common: { system: { fontSize: 16 }, user: { playerName: "玩家", description: "", savedProfiles: [{ name: "玩家", description: "" }] } },
       card: { settings: { featureModules: { order: [], hidden: [] } } },
     },
-    "GET /api/modules": { modules: [] },
-    "GET /api/image-generation": { available: true, profiles: [], connections: [], preferences: null, requests: [], renders: [] },
-    "GET /api/models": { current: { id: "pi:current", name: "当前 Pi 模型", virtual: true }, profiles: [] },
-    "GET /api/workflow-policy": { schemaVersion: 1, maxConcurrency: 10, modelFailure: { silentFallback: false, defaultFallbackModelId: null } },
-    "GET /api/agents": { agents: [] },
-    "GET /api/workflows": { workflows: [], activeWorkflowId: null },
-    "GET /api/workflow-runs": { runs: [] },
-    "GET /api/cards": [{ id: "demo-card", name: "沈月", hasCover: false }],
-    "GET /api/sessions": [],
+    "GET /api/v1/modules": { modules: [] },
+    "GET /api/v1/image-generation": { available: true, profiles: [], connections: [], preferences: null, requests: [], renders: [] },
+    "GET /api/v1/image-generation/connections": { connections: [] },
+    "GET /api/v1/models": { current: { id: "pi:current", name: "当前 Pi 模型", virtual: true }, profiles: [] },
+    "GET /api/v1/workflow-policy": { schemaVersion: 1, maxConcurrency: 10, modelFailure: { silentFallback: false, defaultFallbackModelId: null } },
+    "GET /api/v1/agents": { agents: [] },
+    "GET /api/v1/workflows": { workflows: [], activeWorkflowId: null },
+    "GET /api/v1/workflow-runs": { runs: [] },
+    "GET /api/v1/cards": [{ id: "demo-card", name: "沈月", hasCover: false }],
+    "GET /api/v1/sessions": [],
     ...rest,
   };
   return responses;

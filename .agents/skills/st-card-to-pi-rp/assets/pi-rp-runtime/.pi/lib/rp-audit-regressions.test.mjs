@@ -137,6 +137,7 @@ test("unblocking one node keeps the run blocked while a sibling still awaits a m
   const parent = {
     schemaVersion: 4, ownerModuleId: "test",
     id: "test/audit-parent",
+    defaults: { agentId: "test/default" },
     kind: "turn-background",
     nodes: [
       { id: "first", type: "agent" },
@@ -148,6 +149,7 @@ test("unblocking one node keeps the run blocked while a sibling still awaits a m
   let failing = new Set(["first", "second"]);
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async () => child,
+    resolveAgent: async id => ({ id, defaultModelId: "test-model" }),
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
     executor: async task => {
       if (task.node.type === "call") return { output: await task.invokeWorkflow({ workflow: task.node.target, arguments: {}, outputPaths: {} }) };
@@ -211,6 +213,7 @@ test("a cancelled run still executes its declared terminal finalizer", { timeout
   const owner = {
     schemaVersion: 4,
     id: "audit/audit-owner",
+    defaults: { agentId: "test/default" },
     ownerModuleId: "audit",
     kind: "module-external",
     instancePolicy: { mode: "multiple", maxConcurrentInstances: 2, dedupeKey: "$.operationId" },
@@ -231,6 +234,7 @@ test("a cancelled run still executes its declared terminal finalizer", { timeout
   const workGate = new Promise(resolve => { releaseWork = resolve; });
   const engine = new RpWorkflowEngine({
     resolveWorkflow: async reference => (reference === "audit/audit-owner" ? owner : reference === "audit/audit-release" ? finalizer : null),
+    resolveAgent: async id => ({ id, defaultModelId: "test-model" }),
     resolveModel: async id => ({ id, maxConcurrency: 2 }),
     onRunStart: async ({ run }) => { if (run.workflowId === owner.id) ownerRunId = run.id; return null; },
     executor: async task => {
@@ -446,10 +450,9 @@ test("a settings field path cannot reach the prototype chain", () => {
       "audit.settings.write": { collections: ["settings"], actions: ["update"], views: ["maintenance"] },
     },
   });
-  const region = unsafePath => ({
+  const binding = unsafePath => ({
     id: "settings-form",
-    type: "settings-form",
-    title: "Settings",
+    kind: "settings",
     collectionId: "settings",
     recordType: "audit.settings",
     recordId: "audit-settings-current",
@@ -458,22 +461,27 @@ test("a settings field path cannot reach the prototype chain", () => {
     updateCapability: "audit.settings.write",
     fields: [{ path: unsafePath, label: "Theme", type: "text" }],
   });
+  const view = unsafePath => ({
+    schemaVersion: 3,
+    bindings: [binding(unsafePath)],
+    regions: [{ id: "settings-form", type: "settings-form", title: "Settings", bindingId: "settings-form" }],
+  });
 
   // Gate 1: the declaration itself is refused, whichever unsafe segment it uses.
   for (const unsafePath of ["/__proto__/pollutedByCard", "/constructor/prototype/x", "/data/__proto__/x"]) {
     assert.throws(
-      () => normalizeModuleFrontendView({ schemaVersion: 2, regions: [region(unsafePath)] }, contract),
+      () => normalizeModuleFrontendView(view(unsafePath), contract),
       /must not traverse/,
       `${unsafePath} must be rejected when the region is normalized`,
     );
   }
 
   // A plain path is still accepted, so the gate is not simply refusing every settings form.
-  assert.doesNotThrow(() => normalizeModuleFrontendView({ schemaVersion: 2, regions: [region("/theme")] }, contract));
+  assert.doesNotThrow(() => normalizeModuleFrontendView(view("/theme"), contract));
 
   // Gate 2: the writer refuses as well, for a region that never went through normalization.
   assert.throws(
-    () => applyFrontendSettingsValues(region("/__proto__/pollutedByCard"), {}, { "/__proto__/pollutedByCard": "from a card" }),
+    () => applyFrontendSettingsValues(binding("/__proto__/pollutedByCard"), {}, { "/__proto__/pollutedByCard": "from a card" }),
     /must not traverse/,
   );
   assert.equal({}.pollutedByCard, undefined, "the process prototype must stay clean");
@@ -487,6 +495,7 @@ test("a blocking run that stopped because a host hook failed reports the reason"
   const workflow = {
     schemaVersion: 4, ownerModuleId: "test",
     id: "test/audit-stuck",
+    defaults: { agentId: "test/default" },
     title: "Stuck archive",
     kind: "turn-background",
     trigger: { type: "manual", blockNextTurnUntilReady: true },
@@ -495,6 +504,8 @@ test("a blocking run that stopped because a host hook failed reports the reason"
 
   let hookCalls = 0;
   const engine = new RpWorkflowEngine({
+    resolveAgent: async id => ({ id, defaultModelId: "test-model" }),
+    resolveModel: async id => ({ id, maxConcurrency: 2 }),
     // A model failure after dispatch is retryable, so the node stops for a model choice and the run
     // stays alive (and blocking) instead of reaching a terminal status where nothing is stuck.
     executor: async task => {
@@ -532,7 +543,7 @@ test("a blocking run that stopped because a host hook failed reports the reason"
   assert.equal(engine.hasBlockingTurnRun(), true, "the run still blocks the next turn");
 
   // A completed run reports no failures, so the panel only warns when there is something to warn about.
-  const healthy = new RpWorkflowEngine({ executor: async () => ({ output: "archived" }) });
+  const healthy = new RpWorkflowEngine({ resolveAgent: async id => ({ id, defaultModelId: "test-model" }), resolveModel: async id => ({ id, maxConcurrency: 2 }), executor: async () => ({ output: "archived" }) });
   const healthyRun = await healthy.start(workflow, { id: "audit-healthy-run", turn: 8 });
   await healthy.wait(healthyRun.id);
   assert.deepEqual(healthy.blockingTurnRuns(), []);

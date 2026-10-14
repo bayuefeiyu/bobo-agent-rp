@@ -5,6 +5,7 @@
   "title": "发布已审核近场故事",
   "description": "确定性校验并幂等发布统审后的近场故事。",
   "kind": "module-internal",
+  "executionPolicy": { "enabled": false, "allowHistoricalWrites": false },
   "agentCallable": false,
   "interface": {
     "inputs": {
@@ -23,7 +24,6 @@
   "revision": "1",
   "defaults": {
     "agentId": null,
-    "modelId": null,
     "context": {
       "mode": "fixed"
     }

@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1, "id": "retriever", "name": "创作资料检索", "description": "有限查询、阅读并选择可能有启发的参考资料。",
+  "ownerModuleId": "creative-reference-library", "promptFile": "prompts/agents/retriever.md",
+  "tools": ["read", "write", "edit", "rp_reference"], "contextPermissions": ["workflow:scoped-output"], "outputMode": "json", "defaultModelId": "pi:current"
+}

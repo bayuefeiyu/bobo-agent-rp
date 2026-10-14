@@ -3,7 +3,7 @@
   "id": "pre-director-update",
   "ownerModuleId": "world-narrative-coordinator",
   "title": "前置导演调整",
-  "description": "根据本轮玩家输入和正文节点已取得的资料，轻量调整私有状态与当前指导；不写归档交接。",
+  "description": "继承后置规划与交接，分析本轮玩家输入，完成必要临场调整并定稿正文指导；长期失效事项留给后置复盘。",
   "kind": "module-internal",
   "agentCallable": true,
   "interface": {
@@ -24,7 +24,6 @@
   "revision": "1",
   "defaults": {
     "agentId": "world-narrative-coordinator/world-narrative-daily-director",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -167,7 +166,12 @@
         "documentWorkspace": true,
         "callInputs": [
           "context"
-        ]
+        ],
+        "softBudget": {
+          "modelRequests": 12,
+          "outputTokens": 8000,
+          "elapsedSeconds": 90
+        }
       }
     },
     {
@@ -223,5 +227,9 @@
         "onNodeEnd": []
       }
     }
-  ]
+  ],
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

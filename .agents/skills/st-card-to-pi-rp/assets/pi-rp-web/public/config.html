@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Generated from official management sections; no gameplay entry. -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>配置方案 · Pi RP</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/config.css"></head><body><main class="app-layout"><section class="shell"><header><h1 id="card-title">配置方案</h1><p id="connection-status" role="status"></p><a href="/">返回游玩</a></header><section id="panel-profiles" class="panel settings-page profile-config" role="tabpanel" aria-labelledby="tab-profiles">
+          <div class="settings-heading profile-config-heading">
+            <div>
+              <p class="step">CONFIG PROFILES</p>
+              <h2>配置方案</h2>
+              <p id="mode-description">正在读取配置作用域……</p>
+            </div>
+            <span id="scope-badge" class="scope-badge">加载中</span>
+          </div>
+
+          <section class="profile-toolbar" aria-labelledby="profile-heading">
+            <div><p class="step">ACTIVE PROFILE</p><h3 id="profile-heading">配置方案</h3></div>
+            <label class="compact-field"><span class="field-caption">当前方案
+              <span class="help" tabindex="0" data-tooltip="切换后，模型与 Agent 从下一次调用生效；工作流从下一次实例生效。">?</span></span>
+              <select id="profile-select"></select>
+            </label>
+            <div class="toolbar-actions">
+              <button id="profile-new" type="button">新建</button><button id="profile-rename" type="button">改名</button><button id="profile-copy" type="button">复制</button>
+              <button id="profile-delete" type="button" class="danger">删除</button><button id="profile-import" type="button">导入 JSON</button><button id="profile-export" type="button">导出 JSON</button>
+              <input id="profile-file" type="file" accept="application/json,.json" hidden />
+            </div>
+          </section>
+
+          <nav class="config-tabs" aria-label="配置类别">
+            <button class="config-tab active" type="button" data-config-panel="models">模型</button>
+            <button class="config-tab" type="button" data-config-panel="agents">Agents</button>
+<button class="config-tab" type="button" data-config-panel="assignments">模型指定</button>
+            <button class="config-tab" type="button" data-config-panel="workflows">工作流</button>
+            <button class="config-tab" type="button" data-config-panel="modules">模块参数</button>
+            <button class="config-tab" type="button" data-config-panel="references">资料库</button>
+            <button class="config-tab" type="button" data-config-panel="history">历史回顾</button>
+          </nav>
+
+          <p id="status" class="config-status" role="status" aria-live="polite"></p>
+          <section id="config-panel-models" class="config-category-panel"></section>
+          <section id="config-panel-agents" class="config-category-panel" hidden></section>
+<section id="config-panel-assignments" class="config-category-panel" hidden></section>
+          <section id="config-panel-workflows" class="config-category-panel" hidden></section>
+          <section id="config-panel-modules" class="config-category-panel" hidden></section>
+          <section id="config-panel-references" class="config-category-panel" hidden></section>
+          <section id="config-panel-history" class="config-category-panel" hidden></section>
+
+        </section><p id="error-banner" role="alert" hidden></p></section></main><div id="handoff-overlay" hidden tabindex="-1"><h2 id="handoff-title"></h2><p id="handoff-description"></p><a href="/">重新打开</a></div><script type="module" src="/config.js"></script></body></html>

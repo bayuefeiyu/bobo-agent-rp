@@ -34,7 +34,7 @@ JSON/JSONL session files are authoritative. Derived indexes are never edited by 
 
 ## Retrieval and presentation
 
-Each record type exposed to roleplay declares its own `rp` view. The runtime never guesses a primary content field and never falls back from a missing RP view to full data. Other named views may be authored for narration, review, maintenance, or a dedicated `frontend` surface. Web schemaVersion 2 declarations can page records/history, edit exact settings fields, or start static background workflows, but each region must name its own capability and view; this access remains independent of Agent views and never loads an unbounded collection implicitly.
+Each record type exposed to roleplay declares its own `rp` view. The runtime never guesses a primary content field and never falls back from a missing RP view to full data. Other named views may be authored for narration, review, maintenance, or a dedicated `frontend` surface. Web schemaVersion 3 bindings can page records/history, edit exact settings fields, or start static background workflows, but each binding must name its own capability and view; this access remains independent of Agent views and never loads an unbounded collection implicitly.
 
 Nodes receive exact module capabilities through workflow `moduleAccess`. Module functions are consumed through complete workflows, never exposed internal tools or loose nodes. Parent `call` nodes provide fixed preparation; `agent`/`code` nodes list exact `workflowCalls` for dynamic use. A Skill explains field meaning, activation, update rules, and correct tool use; it does not grant permission. Use `rp_data_query`/`rp_data_get` inside module workflows for targeted reads and a declared unified-change-batch output for writes.
 

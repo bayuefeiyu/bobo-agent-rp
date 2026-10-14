@@ -17,7 +17,7 @@ test("frontend keeps qualified component references stable", async () => {
   assert.match(app, /function runWorkflowReference\(run\) \{ return componentReference\(run\.ownerModuleId, run\.workflowId\); \}/);
   assert.match(app, /allowed = new Set\(\(region\.workflows \|\| \[\]\)\.map\(item => componentReference\(module\.id, item\.id\)\)\)/);
   assert.match(app, /filter\(run => allowed\.has\(runWorkflowReference\(run\)\)/);
-  assert.match(app, /\/api\/workflows\/\$\{encodeURIComponent\(reference\)\}\/activate/);
+  assert.match(app, /\/api\/v1\/workflows\/\$\{encodeURIComponent\(reference\)\}\/activate/);
 
   assert.match(config, /function ownedAgents\(\) \{ return state\.catalog\.agents\.filter\(item=>item\.moduleId\); \}/);
   assert.match(config, /function ownedWorkflows\(\) \{ return state\.catalog\.workflows\.filter\(item=>item\.moduleId\); \}/);

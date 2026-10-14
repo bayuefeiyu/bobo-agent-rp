@@ -1,0 +1,20 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile, cp, readFile, readdir, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { packageCardRuntime } from "../../../.agents/skills/st-card-to-pi-rp/scripts/package_card_runtime.mjs";
+import { validateRuntimePackage } from "../../../.agents/skills/st-card-to-pi-rp/assets/pi-rp-launcher/validate-runtime-package.mjs";
+test("external library module packages its single-source core without private data", async t => {
+  const root = await mkdtemp(join(tmpdir(), "reference-package-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "source"), target = join(root, "synthetic-card"); await mkdir(join(source, "features"), { recursive: true });
+  await cp(resolve("global-modules/creative-reference-library"), join(source, "features", "creative-reference-library"), { recursive: true, filter: path => !path.endsWith(".test.mjs") });
+  await writeFile(join(source, "manifest.json"), JSON.stringify({ schema_version: 2, id: "synthetic-card", name: "原创合成卡", feature_modules: ["features/creative-reference-library/module.json"] }));
+  await packageCardRuntime({ sourceCard: source, targetCard: target, sourceRevision: "synthetic-test" });
+  const result = await validateRuntimePackage(target); assert.deepEqual(result.errors, []);
+  const packaged = join(target, "runtime", "engine", "lib", "creative-reference-library");
+  for (const path of ["core.mjs", "contract.mjs", "client.mjs", "worker.mjs", "semantic-contract.mjs", "passages.mjs", "semantic-index.mjs", "semantic-build.mjs", "semantic-manager.mjs", "service-adapters.mjs"]) assert.equal(await readFile(join(packaged, path), "utf8"), await readFile(resolve("packages/creative-reference-library", path), "utf8"));
+  assert.ok(!(await readdir(packaged)).includes("core.test.mjs"));
+  const lock = JSON.parse(await readFile(join(target, "runtime-lock.json"), "utf8"));
+  assert.ok(!Object.keys(lock.files).some(p => /maintenance|text\.sqlite|library\.json|versions\//.test(p)));
+});

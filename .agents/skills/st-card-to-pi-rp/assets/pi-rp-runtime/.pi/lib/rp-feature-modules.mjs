@@ -29,10 +29,14 @@ function assertRelativeFile(value, label) {
 export function normalizeFeatureModuleManifest(value, label = "feature module") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be a JSON object.`);
   const fields = Object.keys(value).sort();
-  if (fields.length !== MODULE_FIELDS.length || MODULE_FIELDS.some((field, index) => fields[index] !== field)) {
+  const expected = value.schemaVersion === 8 ? [...MODULE_FIELDS, "externalResource"].sort() : MODULE_FIELDS;
+  if (fields.length !== expected.length || expected.some((field, index) => fields[index] !== field)) {
     throw new Error(`${label} must use the exact schemaVersion 7 field set.`);
   }
-  if (value.schemaVersion !== 7 || typeof value.id !== "string" || !ID_PATTERN.test(value.id)) throw new Error(`Invalid ${label} definition.`);
+  if (![7, 8].includes(value.schemaVersion) || typeof value.id !== "string" || !ID_PATTERN.test(value.id)) throw new Error(`Invalid ${label} definition.`);
+  const externalResource = value.schemaVersion === 8 ? value.externalResource : null;
+  if (externalResource !== null && (externalResource !== "creative-reference-library/v1" || value.moduleKind !== "resource" || value.id !== "creative-reference-library")) throw new Error(`${label} has an unsupported external resource binding.`);
+  if (externalResource && [value.dataContractFile, value.resourceCatalogFile, value.frontendViewFile].some(path => path !== null)) throw new Error(`${label} external resources must use null catalog, contract, and frontend paths to match moduleKind.`);
   if (!["data", "resource", "hybrid"].includes(value.moduleKind)) throw new Error(`${label}.moduleKind must be data, resource, or hybrid.`);
   if (value.basedOn !== null && (typeof value.basedOn !== "string" || !ID_PATTERN.test(value.basedOn))) throw new Error(`${label}.basedOn must be null or a safe module ID.`);
   if (typeof value.title !== "string" || !value.title.trim()) throw new Error(`${label}.title must be non-empty.`);
@@ -40,7 +44,7 @@ export function normalizeFeatureModuleManifest(value, label = "feature module") 
   if (!["frontend", "background"].includes(value.surface)) throw new Error(`${label}.surface must be frontend or background.`);
   if (!Number.isSafeInteger(value.contextOrder) || !Number.isSafeInteger(value.displayOrder)) throw new Error(`${label} must declare integer contextOrder and displayOrder values.`);
   const hasData = value.moduleKind === "data" || value.moduleKind === "hybrid";
-  const hasResources = value.moduleKind === "resource" || value.moduleKind === "hybrid";
+  const hasResources = !externalResource && (value.moduleKind === "resource" || value.moduleKind === "hybrid");
   if (hasData !== (typeof value.dataContractFile === "string")) throw new Error(`${label}.dataContractFile must match moduleKind ${value.moduleKind}.`);
   if (hasResources !== (typeof value.resourceCatalogFile === "string")) throw new Error(`${label}.resourceCatalogFile must match moduleKind ${value.moduleKind}.`);
   if (value.surface === "frontend" && !hasData) throw new Error(`${label} resource-only modules must use background surface.`);
@@ -52,7 +56,8 @@ export function normalizeFeatureModuleManifest(value, label = "feature module") 
   if (new Set(agentFiles).size !== agentFiles.length) throw new Error(`${label}.agentFiles must not contain duplicates.`);
   if (new Set(workflowFiles).size !== workflowFiles.length) throw new Error(`${label}.workflowFiles must not contain duplicates.`);
   return {
-    schemaVersion: 7,
+    schemaVersion: value.schemaVersion,
+    ...(value.schemaVersion === 8 ? { externalResource } : {}),
     id: value.id,
     moduleKind: value.moduleKind,
     basedOn: value.basedOn,

@@ -16,6 +16,12 @@ import type { FeatureModule, RpDataStore } from "./rp-host-types.ts";
 
 export { currentDataNode, nodeDataAccess, requireCurrentAgentTool, resolveWorkflowIdentity, workflowDataReadAccess };
 
+/** A child's input store is already its parent's frozen view plus authorized successful commits.
+ * Reapplying the parent's timestamp would discard those commits and resurrect stale revisions. */
+export function workflowExecutionReadBoundary(run: any, inheritedInputs: boolean) {
+  return { visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: inheritedInputs ? null : run.readSnapshotAt };
+}
+
 /**
  * 解析当前数据工具调用所属的节点。
  *
@@ -33,7 +39,7 @@ function currentDataNode({ sessionDirectory, featureModules, getRun, workflowRun
   const entry = getRun(workflowRunId);
   const node = entry?.workflow?.nodes?.find((item: any) => item.id === narrativeNodeId);
   if (!entry || !node) throw new Error("The active RP workflow node is unavailable.");
-  return { entry, node, store: createSessionDataStore({ sessionDirectory, featureModules }) };
+  return { entry, node, store: createSessionDataStore({ sessionDirectory, featureModules, executionId: entry.run.executionId }) };
 }
 
 /**

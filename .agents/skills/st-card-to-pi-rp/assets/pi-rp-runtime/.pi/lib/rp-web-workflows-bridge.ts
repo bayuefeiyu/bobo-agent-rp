@@ -6,10 +6,11 @@ import { relative, resolve } from "node:path";
 import { createRpConfigStore } from "./rp-config-store.mjs";
 
 import { workflowProcessRecordPath } from "./rp-workspace.mjs";
+import { hasCallRecords, readCallRecords } from "./rp-call-records.mjs";
 
 import { workflowNodeWorkspace } from "./rp-data-artifacts.mjs";
 
-import { frontendRegion, validateFrontendWorkflowPayload } from "./rp-module-frontend.mjs";
+import { frontendBinding, validateFrontendWorkflowPayload } from "./rp-module-frontend.mjs";
 
 import { httpError, openLocalDocument } from "./rp-host-utils.ts";
 import type { ActiveBridge, RpRun, FeatureModule } from "./rp-host-types.ts";
@@ -25,6 +26,15 @@ type Dependencies = {
 };
 export function createWorkflowsWebBridge({ scope, configStore, cardSettingsPath, startManualBackgroundWorkflow, turn, requireFrontendModule }: Dependencies) {
 return {
+reexecuteWorkflow: async (runId: string, value: any = {}) => {
+  const active = scope.requireCurrent();
+  if (scope.executionId) throw httpError(409, "Return to the adopted narrative before re-executing module work.");
+  if (active.pending || !active.context.isIdle()) throw httpError(409, "Wait for the current foreground execution.");
+  const run = active.workflowEngine.snapshot().find((item: any) => item.id === runId);
+  if (!run) throw httpError(404, "Workflow execution was not found.");
+  if (run.kind === "foreground") throw httpError(409, "Use the narrative attempt endpoint for a foreground workflow.");
+  return active.workflowEngine.reexecute(runId, { id: value.executionId, currentTurn: active.turn });
+},
 listWorkflows: async () => {
             return { activeWorkflowId: scope.requireCurrent()?.activeWorkflowId || null, workflows: await configStore.listWorkflows() };
           },
@@ -41,6 +51,7 @@ listWorkflowRuns: async () => {
             const runs = await Promise.all([...latest.values()].map(async run => {
               const enriched = structuredClone(run);
               for (const node of Object.values(enriched.nodes || {}) as any[]) {
+                if (await hasCallRecords(scope.requireChat().sessionDirectory, run.id, node.id)) node.processRecord = { ...node.processRecord, available: true, callsAvailable: true };
                 const teamStatePath = resolve(workflowNodeWorkspace(scope.requireCurrent()!.sessionDirectory!, run.workflowId, run.id, node.id), "team", "state.json");
                 const teamState = await readFile(teamStatePath, "utf8").then(JSON.parse).catch(error => {
                   if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -48,6 +59,12 @@ listWorkflowRuns: async () => {
                 });
                 if (!teamState) continue;
                 node.team = {
+                  protocol: teamState.protocol || "meeting",
+                  activeMemberId: teamState.activeMemberId || null,
+                  currentStage: teamState.stageState ? teamState.stageState.currentIndex + 1 : 1,
+                  activation: teamState.activation || 0,
+                  deliveries: (teamState.deliveryReceipts || []).map((receipt: any) => ({ ...receipt, status: "completed" })),
+                  calls: [...new Map((teamState.events || []).filter((event: any) => event.detail?.workflow && ["workflow-started", "workflow-returned", "tool-failed"].includes(event.type)).map((event: any) => [event.detail.operationId || event.detail.workflow, { id: event.detail.operationId, target: event.detail.workflow, memberId: event.memberId, status: event.type === "workflow-returned" ? "completed" : event.type === "tool-failed" ? "failed" : "running", error: event.type === "tool-failed" ? event.text : null }])).values()],
                   status: teamState.status,
                   phase: teamState.phase,
                   round: teamState.round,
@@ -84,6 +101,23 @@ openWorkflowTeamTranscript: async (runId: string, nodeId: string) => {
             catch (error) { throw httpError(500, `Could not open the team transcript: ${(error as Error).message}`); }
             return { opened: true, path: relative(scope.requireCurrent().context.cwd, transcriptPath).replaceAll("\\", "/") };
           },
+getWorkflowNodeProcessRecord: async (runId: string, nodeId: string, callId?: string, summaryOnly = false) => {
+            const active = scope.requireChat();
+            if (!active.sessionDirectory) throw httpError(409, "Select a chat first.");
+            const live = active.workflowEngine.snapshot().find((run: any) => run.id === runId);
+            const run = live || await readFile(resolve(active.sessionDirectory, "workflow/runs.jsonl"), "utf8")
+              .then(text => text.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)).reverse().find(run => run.id === runId))
+              .catch(error => { if (error.code === "ENOENT") return null; throw error; });
+            if (!run?.nodes?.[nodeId]) throw httpError(404, "Workflow node was not found.");
+            const record = await readCallRecords(active.sessionDirectory, runId, nodeId);
+            const legacy = record.calls.length || summaryOnly ? null : await readFile(workflowProcessRecordPath(resolve(active.sessionDirectory, "workflow/process-records"), runId, nodeId), "utf8")
+              .catch(error => { if (error.code === "ENOENT") return null; throw error; });
+            const selectedCall = callId ? record.calls.find(call => call.id === callId) : record.calls.at(-1);
+            if (callId && !selectedCall) throw httpError(404, "Model call was not found.");
+            const calls = record.calls.map(({ request, response, tools, ...summary }) => ({ ...summary, toolEventCount: tools.length }));
+            return { ...record, calls, selectedCall: summaryOnly ? null : selectedCall || null, runId, nodeId, workflowId: run.workflowId, workflowTitle: run.workflowTitle, status: run.nodes[nodeId].status,
+              legacy: record.calls.length ? null : legacy, result: summaryOnly ? null : run.nodes[nodeId].output ?? null };
+          },
 openWorkflowNodeProcessRecord: async (runId: string, nodeId: string) => {
             if (!scope.requireCurrent()?.sessionDirectory) throw httpError(409, "Select an opening or saved chat before opening a workflow process record.");
             const runs = scope.requireCurrent().workflowEngine.snapshot();
@@ -114,6 +148,7 @@ activateWorkflow: async (workflowId: string, value: any) => {
               await writeFile(cardSettingsPath, `${JSON.stringify(scope.requireCurrent().cardSettings, null, 2)}\n`, "utf8");
               return { activated: workflow.id, startsOnNextInput: true };
             }
+            if(!["turn-background","global-background"].includes(workflow.kind)||workflow.trigger?.type!=="manual")throw httpError(400,"此工作流由上级调用或指定事件触发，不能在此直接运行。");
             return startManualBackgroundWorkflow(workflow.id, value?.payload || {});
           },
 retryWorkflowNode: async (runId: string, nodeId: string, value: any) => {
@@ -129,22 +164,9 @@ retryWorkflowNode: async (runId: string, nodeId: string, value: any) => {
             const node = workflow.nodes.find((item: any) => item.id === nodeId);
             if (!node) throw httpError(404, "Workflow node was not found.");
             if (value.saveAsCardDefault === true) {
-              const editableWorkflow = await configStore.copyWorkflowToCard(run.workflowId, run.ownerModuleId || null);
-              const editableNode = editableWorkflow.nodes.find((item: any) => item.id === nodeId);
-              if (!editableNode) throw httpError(404, "Workflow node was not found.");
-              if (editableNode.type === "team" && typeof value.memberId === "string") {
-                const members = [editableNode.team?.leader, editableNode.team?.secretary, ...(editableNode.team?.experts || [])];
-                const member = value.memberId.startsWith("member:")
-                  ? members.find((item: any) => item?.id === value.memberId.slice("member:".length))
-                  : value.memberId.startsWith("assistant:")
-                    ? (editableNode.team?.assistants || []).find((item: any) => item?.id === value.memberId.slice("assistant:".length))
-                    : null;
-                if (!member) throw httpError(400, "The failed team member could not be resolved in the card workflow.");
-                member.modelId = value.modelId;
-              } else editableNode.modelId = value.modelId;
-              await configStore.saveCardWorkflow(editableWorkflow);
+              throw httpError(400, "请在模型指定页保存 Agent 的模型。此处重试只影响当前运行。");
             }
-            const retried = await scope.requireCurrent().workflowEngine.retry(runId, nodeId, value.modelId, { saveOverride: value.saveAsCardDefault === true, memberId: value.memberId || null });
+            const retried = await scope.requireCurrent().workflowEngine.retry(runId, nodeId, value.modelId, { memberId: value.memberId || null });
             return retried;
           },
 recoverWorkflowNode: async (runId: string, nodeId: string) => {
@@ -172,14 +194,15 @@ skipWorkflowRun: async (runId: string) => {
             return skipped;
           },
 runModuleFrontendWorkflow: async (moduleId: string, regionId: string, workflowId: string, value: any) => {
+            if (scope.executionId) throw httpError(409, "Return to the adopted narrative before starting module work.");
             const module = requireFrontendModule(moduleId);
             let region;
             let payload;
             try {
-              region = frontendRegion(module, regionId, "workflow-controls");
+              region = frontendBinding(module, regionId, "workflow-controls");
               payload = validateFrontendWorkflowPayload(region, workflowId, value?.payload || {});
             } catch (error) { throw httpError(400, (error as Error).message); }
-            return startManualBackgroundWorkflow(workflowId.includes("/") ? workflowId : `${moduleId}/${workflowId}`, { ...payload, frontendModuleId: moduleId, frontendRegionId: regionId });
+            return startManualBackgroundWorkflow(workflowId.includes("/") ? workflowId : `${moduleId}/${workflowId}`, { ...payload, frontendModuleId: moduleId, frontendBindingId: regionId });
           }
 };
 }

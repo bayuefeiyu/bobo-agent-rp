@@ -107,6 +107,8 @@ export function regenerationSource(requests, renders, renderId, contentPrompt, s
  */
 export const COMPONENTS = Object.freeze({
   entryWorkflow: "comfy-image-generation/agent-image-generation-entry",
+  regenerateWorkflow: "comfy-image-generation/image-render-regeneration",
+  recoverWorkflow: "comfy-image-generation/image-render-recovery",
   preferencesRecordId: "image-preferences",
 });
 

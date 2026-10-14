@@ -1,5 +1,9 @@
 # Feature-module Workflow v4 placement
 
+Model calls must bind a qualified Agent. Assign its model only through the Agent's `defaultModelId`; workflow defaults, nodes, team members and Agent assistant abilities must not declare `modelId`. The shared model-assignment page manages these bindings and the profile-wide fallback policy, which defaults off. An unassigned or invalid model reports an error unless fallback is explicitly enabled; `pi:current` is an explicit assignment rather than an implicit default. Temporary retry choices and frozen run snapshots remain runtime metadata.
+
+Follow the [workflow execution protocol](../../design-pi-rp-data/references/workflow-executions.md). Whole workflows are the smallest new-execution unit. Declare historical-write permission only where needed, keep lifecycle/publish-only steps from bypassing their orchestrator, and decide UI buttons separately. Put events and state changes that feed the next narrative at the previous turn's end when possible.
+
 ## Candidate, review, and publication pattern
 
 When several creative modules may write into the same fictional world concurrently, prefer a read-only candidate workflow, an entry-workflow cross-module review, and a deterministic module-internal publisher. Candidates do not write authoritative data. Review stays inside the author-defined conflict scope; when changes are required it returns a complete publishable replacement rather than vague patch instructions. Each publisher holds its own collection lock and commits idempotently. The entry workflow must call cross-module internal publishers because a module workflow may continue only into `module-external` workflows.
@@ -26,4 +30,4 @@ Declare every change document as a named output with format `unified-change-batc
 
 Order dependent changes. Parallel writers require an authored conflict strategy. Enable `best-effort` only when partial application is intentionally correct. Durable queryable results enter the owning module; intermediate files remain scoped workflow artifacts.
 
-When a creator exposes an internal workflow to an Agent, warn the creator in development guidance that a successful child call may commit authority or trigger an external effect before the parent node or foreground turn later fails. Do not inject generic risk text, use-timing advice, or inferred calling policy into the RP Agent prompt; the node author's prompt alone decides when the Agent should call.
+Successful internal calls commit to their parent execution's branch; a failed or inactive parent does not publish those records as the selected narrative state. External effects may already have happened and cannot be rolled back. Explain this distinction in creator guidance. The node author's prompt decides when the RP Agent calls an exposed workflow.

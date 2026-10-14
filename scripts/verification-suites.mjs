@@ -71,7 +71,7 @@ export function discoverTests(root) {
       if (NEVER_DESCEND.has(entry.name)) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name.endsWith(".test.mjs")) {
+      else if (entry.isFile() && (entry.name.endsWith(".test.mjs") || /^test_.*\.mjs$/.test(entry.name))) {
         found.push(relative(root, full).replaceAll("\\", "/"));
       }
     }
@@ -86,6 +86,7 @@ export const SUITE_ORDER = ["engine", "web", "modules", "tools"];
 export function classify(file) {
   if (file.startsWith(".agents/skills/st-card-to-pi-rp/assets/pi-rp-runtime/.pi/lib/")) return "engine";
   if (file.startsWith(".agents/skills/st-card-to-pi-rp/assets/pi-rp-web/")) return "web";
+  if (file.startsWith("packages/rp-web-") || file.startsWith("examples/minimal-rp-frontend/")) return "web";
   if (file.startsWith("global-modules/")) return "modules";
   return "tools"; // 其余 Skill scripts 与 pi-rp-launcher
 }
@@ -98,6 +99,9 @@ export function groupSuites(files) {
 
 // 声明式检查（生成一致性与发布完整性）：只以 --check / 只读模式运行。
 export const GENERATED_CHECKS = [
+  { id: "generated:web-contract", label: "Web 契约类型与文档", command: ["scripts/generate-web-contract.mjs", "--check"], reason: "从唯一 schema 和操作定义生成类型与公开 API 目录。" },
+  { id: "generated:web-assets", label: "浏览器与启动器 SDK 副本", command: ["scripts/sync-web-assets.mjs", "--check"], reason: "所有交付副本与 packages 中维护源一致。" },
+  { id: "generated:management-pages", label: "官方管理独立页面", command: ["scripts/generate-management-pages.mjs", "--check"], reason: "独立配置/监控复用官方管理模板，不加载游玩入口。" },
   {
     id: "generated:template-assets",
     label: "生成副本一致性（模板资产）",

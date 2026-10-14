@@ -33,5 +33,9 @@
       }
     }
   ],
-  "ownerModuleId": "narrative-memory"
+  "ownerModuleId": "narrative-memory",
+  "executionPolicy": {
+    "enabled": true,
+    "allowHistoricalWrites": true
+  }
 }

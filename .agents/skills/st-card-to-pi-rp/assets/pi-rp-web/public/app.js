@@ -1,5 +1,8 @@
-import { showHandoff, isInactiveBridgeMessage } from "./app-context.js";
-export { showHandoff, isInactiveBridgeMessage };
+import { mountPlayShell } from "./play-shell.js";
+let playShell = null;
+let stopStateWatch = null;
+import { showHandoff, resourceUrl, previewAttempt, getClient } from "./app-context.js";
+export { showHandoff };
 import { state, elements, request, showError, componentReference, runWorkflowReference, modelPresets, appendModuleEmpty, initializePageContext } from "./app-context.js";
 export { state, elements, request, showError, componentReference, runWorkflowReference, modelPresets };
 // image 模块（方案 §11 第 6 条）。
@@ -13,6 +16,7 @@ import {
   openImagePrompt,
   loadComfyConnectionForm,
   renderComfySettings,
+  refreshComfyConnections,
   renderImageGenerationRegion,
 } from "./app-image.js?v=1";
 // modules 模块（方案 §11 第 6 条）。
@@ -152,8 +156,10 @@ function showPanel(panelName) {
     button.tabIndex = active ? 0 : -1;
   }
   for (const panel of elements.panels) panel.hidden = panel.id !== `panel-${panelName}`;
-  if (panelName === "story" && state.snapshot?.openingId && !state.snapshot.busy) elements.input.focus();
+  playShell?.panel(panelName);
+  if (!playShell?.host.active && panelName === "story" && state.snapshot?.openingId && !state.snapshot.busy) elements.input.focus();
   if (panelName === "user") elements.playerName.focus();
+  if (panelName === "workflows") refreshWorkflowData(undefined,true).catch(showError);
   if (state.snapshot?.previewMode && panelName === "workflows") {
     document.querySelectorAll("#panel-workflows button, #panel-workflows input, #panel-workflows textarea")
       .forEach(control => { control.disabled = true; });
@@ -174,7 +180,7 @@ export function profileForName(playerName) {
 }
 
 function userAvatarUrl(playerName) {
-  return `/api/user-avatar?playerName=${encodeURIComponent(playerName)}&v=${state.avatarVersion}`;
+  return resourceUrl(`/api/v1/user-avatar?playerName=${encodeURIComponent(playerName)}&v=${state.avatarVersion}`);
 }
 
 function createAvatarElement(role, playerName) {
@@ -189,7 +195,7 @@ function createAvatarElement(role, playerName) {
     const image = document.createElement("img");
     image.alt = "";
     image.src = role === "assistant"
-      ? `/api/cards/${encodeURIComponent(state.card.id)}/cover`
+      ? resourceUrl(`/api/v1/cards/${encodeURIComponent(state.card?.id || "")}/cover`)
       : userAvatarUrl(playerName);
     image.addEventListener("load", () => avatar.classList.add("has-image"));
     image.addEventListener("error", () => image.remove());
@@ -226,6 +232,68 @@ function createMessageElement(message) {
   deleteButton.disabled = Boolean(state.snapshot?.busy);
   deleteButton.addEventListener("click", () => deleteSavedMessage(message, deleteButton));
   actions.append(editButton, deleteButton);
+  const attempts = (state.snapshot?.narrativeAttempts?.attempts || []).filter(attempt => attempt.turn === message.turn);
+  if (message.role === "assistant" && message.kind !== "opening" && attempts.length) {
+    const current = attempts.find(attempt => attempt.id === message.attemptId) || attempts.find(attempt => attempt.selected);
+    const versions = document.createElement("select");
+    versions.className = "message-action";
+    versions.setAttribute("aria-label", "查看本轮正文版本");
+    attempts.forEach((attempt, index) => {
+      const option = document.createElement("option");
+      option.value = attempt.id;
+      option.textContent = `尝试 ${index + 1}${attempt.selected ? " · 已采用" : ""}${attempt.revisionSource === "user" ? " · 已手改" : ""}${attempt.status !== "completed" ? ` · ${attempt.status}` : ""}`;
+      option.disabled = !attempt.hasNarrative;
+      option.selected = attempt.id === current?.id;
+      versions.append(option);
+    });
+    versions.disabled = Boolean(state.snapshot?.busy);
+    versions.addEventListener("change", async () => {
+      try {
+        applySnapshot(await previewAttempt(attempts.find(item => item.id === versions.value)?.selected ? null : versions.value));
+        await refreshState();
+      } catch (error) { showError(error); }
+    });
+    actions.append(versions);
+    if (message.turn === state.snapshot.currentTurn) {
+      const regenerate = document.createElement("button");
+      regenerate.className = "message-action";
+      regenerate.type = "button";
+      regenerate.textContent = "再次生成";
+      regenerate.disabled = Boolean(state.snapshot.busy || current?.canRegenerate === false);
+      regenerate.addEventListener("click", async () => {
+        regenerate.disabled = true;
+        try {
+          applySnapshot(await request("/api/v1/narrative-attempts/regenerate", { method: "POST", body: JSON.stringify({ executionId: `workflow-${crypto.randomUUID()}` }) }));
+        } catch (error) { regenerate.disabled = false; showError(error); }
+      });
+      actions.append(regenerate);
+      if (current && !current.selected && current.canAdopt) {
+        const adopt = document.createElement("button");
+        adopt.className = "message-action";
+        adopt.type = "button";
+        adopt.textContent = "采用此版本";
+        adopt.addEventListener("click", async () => {
+          try {
+            applySnapshot(await request(`/api/v1/narrative-attempts/${current.id}/adopt`, { method: "POST", body: JSON.stringify({ expectedRevision: state.snapshot.narrativeAttempts.revision }) }));
+            await refreshState();
+          } catch (error) { showError(error); }
+        });
+        actions.append(adopt);
+      }
+    }
+    if (state.snapshot.displayExecutionId) {
+      deleteButton.disabled = true;
+      const back = document.createElement("button");
+      back.className = "message-action";
+      back.type = "button";
+      back.textContent = "返回已采用版本";
+      back.addEventListener("click", async () => {
+        try { applySnapshot(await previewAttempt(null)); await refreshState(); }
+        catch (error) { showError(error); }
+      });
+      actions.append(back);
+    }
+  }
   header.append(label, actions);
   const content = document.createElement("div");
   content.className = "message-content";
@@ -272,14 +340,18 @@ function beginMessageEdit(message, body) {
     event.preventDefault();
     const nextContent = textarea.value.trim();
     if (!nextContent) return;
+    if (form.dataset.operationContent !== nextContent) {
+      form.dataset.operationContent = nextContent;
+      form.dataset.operationId = crypto.randomUUID();
+    }
     textarea.disabled = true;
     cancelButton.disabled = true;
     saveButton.disabled = true;
     saveButton.textContent = "保存中……";
     try {
-      applySnapshot(await request(`/api/messages/${message.sequence}`, {
+      applySnapshot(await request(message.attemptId ? `/api/v1/narrative-attempts/${message.attemptId}` : `/api/v1/messages/${message.sequence}`, {
         method: "PUT",
-        body: JSON.stringify({ content: nextContent }),
+        body: JSON.stringify({ content: nextContent, expectedRevision: message.revision, operationId: form.dataset.operationId }),
       }));
     } catch (error) {
       textarea.disabled = false;
@@ -307,9 +379,9 @@ async function deleteSavedMessage(message, button) {
   if (!window.confirm(prompt)) return;
   button.disabled = true;
   try {
-    const snapshot = await request(`/api/messages/${message.sequence}`, { method: "DELETE" });
+    const snapshot = await request(`/api/v1/messages/${message.sequence}`, { method: "DELETE" });
     applySnapshot(snapshot);
-    if (!snapshot.openingId) renderHistoryChoices(await request("/api/sessions"));
+    if (!snapshot.openingId) renderHistoryChoices(await request("/api/v1/sessions"));
   } catch (error) {
     button.disabled = false;
     showError(error);
@@ -325,6 +397,24 @@ function renderMessages(messages, scrollToEnd = false) {
     empty.textContent = "根目录开发预览没有聊天内容；这里展示的是玩卡时使用的同一个聊天区域。";
     fragment.append(empty);
   }
+  if (messages.length && state.snapshot?.busy && !state.snapshot?.previewMode) {
+    const typing = document.createElement("article");
+    typing.className = "message assistant message-typing";
+    typing.setAttribute("aria-label", "Pi 正在回复");
+    const body = document.createElement("div");
+    body.className = "message-body";
+    const content = document.createElement("div");
+    content.className = "message-content";
+    for (const width of ["92%", "78%", "55%"]) {
+      const line = document.createElement("div");
+      line.className = "skeleton-line";
+      line.style.width = width;
+      content.append(line);
+    }
+    body.append(content);
+    typing.append(createAvatarElement("assistant", state.card?.name), body);
+    fragment.append(typing);
+  }
   elements.messages.replaceChildren(fragment);
   if (scrollToEnd) {
     requestAnimationFrame(() => elements.messages.scrollTo({ top: elements.messages.scrollHeight, behavior: "smooth" }));
@@ -335,6 +425,8 @@ function applySnapshot(snapshot) {
   const previousCount = state.snapshot?.messages?.length ?? -1;
   const previousMessages = state.snapshot?.messages || [];
   const previousPlayerName = state.snapshot?.playerName;
+  const busyChanged = state.snapshot?.busy !== snapshot.busy;
+  const attemptsChanged = JSON.stringify(state.snapshot?.narrativeAttempts?.attempts) !== JSON.stringify(snapshot.narrativeAttempts?.attempts) || state.snapshot?.displayExecutionId !== snapshot.displayExecutionId;
   state.snapshot = snapshot;
   const previewMode = snapshot.previewMode === true;
   const started = previewMode || Boolean(snapshot.openingId);
@@ -360,9 +452,9 @@ function applySnapshot(snapshot) {
     : snapshot.busy ? "Pi 正在回复" : "已连接当前 Pi 会话";
   elements.connectionStatus.classList.toggle("turn-failure", Boolean(turnFailure || stuckBlocking));
   elements.connectionStatus.title = turnFailure?.detail || stuckDetail || "";
-  elements.input.disabled = previewMode || snapshot.busy;
+  elements.input.disabled = previewMode || snapshot.busy || Boolean(snapshot.displayExecutionId);
   elements.input.placeholder = previewMode ? "根目录预览模式不发送消息" : "输入你的行动或对话……";
-  elements.sendButton.disabled = previewMode || snapshot.busy || state.sending;
+  elements.sendButton.disabled = previewMode || snapshot.busy || state.sending || Boolean(snapshot.displayExecutionId);
   elements.sendButton.textContent = previewMode ? "仅预览" : blockingWorkflows.length ? "等待后台任务" : snapshot.busy ? "等待 Pi" : "发送";
   if (!state.playerNameDirty) elements.playerName.value = snapshot.playerName || "玩家";
 
@@ -372,18 +464,20 @@ function applySnapshot(snapshot) {
   });
   const playerNameChanged = snapshot.playerName !== previousPlayerName;
   if (!started && state.card?.openings && playerNameChanged) renderOpeningChoices();
-  if (started && (messagesChanged || playerNameChanged || previewMode)) renderMessages(snapshot.messages, messagesChanged);
-  for (const action of document.querySelectorAll(".message-action")) action.disabled = snapshot.busy;
+  if (started && (messagesChanged || playerNameChanged || attemptsChanged || busyChanged || previewMode)) renderMessages(snapshot.messages, messagesChanged);
+  if (snapshot.busy) for (const action of document.querySelectorAll(".message-action")) action.disabled = true;
 }
 
 async function selectOpening(openingId, button) {
+  ensureStatePolling();
   button.disabled = true;
   try {
     const playerName = elements.playerName.value.trim() || state.snapshot?.playerName || "玩家";
-    applySnapshot(await request("/api/opening", {
+    applySnapshot(await request("/api/v1/opening", {
       method: "POST",
       body: JSON.stringify({ openingId, playerName }),
     }));
+    await refreshState();
     elements.input.focus();
   } catch (error) {
     button.disabled = false;
@@ -402,7 +496,11 @@ function renderOpeningChoices() {
     title.textContent = opening.title.replaceAll("{{user}}", () => playerName);
     const preview = document.createElement("p");
     preview.textContent = opening.content.replaceAll("{{user}}", () => playerName);
-    button.append(title, preview);
+    const banner = document.createElement("span");
+    banner.className = "opening-banner";
+    banner.textContent = (title.textContent.trim()[0] || "启");
+    banner.setAttribute("aria-hidden", "true");
+    button.append(banner, title, preview);
     button.addEventListener("click", () => selectOpening(opening.id, button));
     fragment.append(button);
   }
@@ -413,7 +511,7 @@ function renderOpeningChoices() {
 async function resumeSession(sessionId, button) {
   button.disabled = true;
   try {
-    applySnapshot(await request("/api/resume", {
+    applySnapshot(await request("/api/v1/resume", {
       method: "POST",
       body: JSON.stringify({ sessionId }),
     }));
@@ -464,8 +562,8 @@ async function deleteSession(session, button) {
   if (!window.confirm(`确定删除 ${formatSessionTime(session.updatedAt)} 的聊天记录吗？此操作无法恢复。`)) return;
   button.disabled = true;
   try {
-    await request(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-    renderHistoryChoices(await request("/api/sessions"));
+    await request(`/api/v1/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+    renderHistoryChoices(await request("/api/v1/sessions"));
   } catch (error) {
     button.disabled = false;
     showError(error);
@@ -495,7 +593,7 @@ async function deleteSavedProfile() {
   elements.deleteSavedProfile.disabled = true;
   elements.userSettingsStatus.textContent = "删除中……";
   try {
-    const result = await request(`/api/user-profile?playerName=${encodeURIComponent(playerName)}`, { method: "DELETE" });
+    const result = await request(`/api/v1/user-profile?playerName=${encodeURIComponent(playerName)}`, { method: "DELETE" });
     applySnapshot(result);
     state.settings.common = result.settings;
     elements.playerName.value = result.settings.user.playerName;
@@ -531,13 +629,11 @@ async function uploadPlayerAvatar(playerName, file) {
     throw new Error("头像必须是 PNG、JPEG 或 WebP 图片。");
   }
   if (file.size > 5 * 1024 * 1024) throw new Error("头像不能超过 5 MB。");
-  const response = await fetch(`/api/user-avatar?playerName=${encodeURIComponent(playerName)}`, {
+  const payload = await request(`/api/v1/user-avatar?playerName=${encodeURIComponent(playerName)}`, {
     method: "POST",
     headers: { "content-type": file.type },
     body: file,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "头像上传失败。");
   return payload;
 }
 
@@ -552,7 +648,7 @@ function renderCards() {
     if (card.hasCover) {
       const image = document.createElement("img");
       image.className = "character-cover";
-      image.src = `/api/cards/${encodeURIComponent(card.id)}/cover`;
+      image.src = resourceUrl(`/api/v1/cards/${encodeURIComponent(card.id)}/cover`);
       image.alt = `${card.name} 封面`;
       button.append(image);
     } else {
@@ -593,7 +689,7 @@ async function selectCard(card, button) {
   button.disabled = true;
   elements.connectionStatus.textContent = `正在切换到 ${card.name}`;
   try {
-    await request("/api/card-switch", { method: "POST", body: JSON.stringify({ cardId: card.id }) });
+    await request("/api/v1/card-switch", { method: "POST", body: JSON.stringify({ cardId: card.id }) });
     showHandoff(`正在打开 ${card.name}`, "角色卡已经交给新的 Pi 会话。此页面不再接收操作，请使用最新打开的 Web RP 页面。");
   } catch (error) {
     if (!elements.handoffOverlay.hidden) return;
@@ -614,7 +710,7 @@ async function chooseChat() {
   elements.chooseChatButton.disabled = true;
   elements.connectionStatus.textContent = "正在返回聊天记录选择";
   try {
-    await request("/api/card-switch", {
+    await request("/api/v1/card-switch", {
       method: "POST",
       body: JSON.stringify({ cardId: state.card.id, forceNew: true }),
     });
@@ -633,9 +729,11 @@ async function sendMessage() {
   state.sending = true;
   elements.sendButton.disabled = true;
   try {
-    await request("/api/input", { method: "POST", body: JSON.stringify({ content }) });
+    if (!state.inputOperation || state.inputOperation.content !== content) state.inputOperation = { content, id: crypto.randomUUID() };
+    await request("/api/v1/input", { method: "POST", body: JSON.stringify({ content, operationId: state.inputOperation.id }) });
+    state.inputOperation = null;
     elements.input.value = "";
-    applySnapshot(await request("/api/state"));
+    applySnapshot(await request("/api/v1/state"));
   } catch (error) {
     showError(error);
   } finally {
@@ -656,7 +754,7 @@ async function saveUserSettings(event) {
   let profileSaved = false;
   try {
     state.playerNameDirty = false;
-    const result = await request("/api/user-settings", {
+    const result = await request("/api/v1/user-settings", {
       method: "POST",
       body: JSON.stringify({ playerName, description }),
     });
@@ -702,7 +800,7 @@ async function saveSystemSettings() {
   const fontSize = Number(elements.fontSize.value);
   elements.systemSettingsStatus.textContent = "保存中……";
   try {
-    await request("/api/system-settings", {
+    await request("/api/v1/system-settings", {
       method: "POST",
       body: JSON.stringify({ fontSize }),
     });
@@ -730,6 +828,12 @@ function wirePanelEventHandlers() {
     event.preventDefault();
     sendMessage();
   });
+
+  const autoGrowInput = () => {
+    elements.input.style.height = "auto";
+    elements.input.style.height = `${Math.min(elements.input.scrollHeight, 220)}px`;
+  };
+  elements.input.addEventListener("input", autoGrowInput);
 
   elements.input.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -771,20 +875,43 @@ function wirePanelEventHandlers() {
   });
   elements.fontSize.addEventListener("input", () => applyFontSize(elements.fontSize.value));
   elements.fontSize.addEventListener("change", saveSystemSettings);
+  for (const [id, value] of [["font-size-minus", "14"], ["font-size-plus", "24"]]) {
+    document.getElementById(id)?.addEventListener("click", () => {
+      elements.fontSize.value = value;
+      applyFontSize(value);
+      saveSystemSettings();
+    });
+  }
   elements.moduleSettingsForm.addEventListener("submit", saveModuleDisplaySettings);
+  document.querySelector("#retry-module-settings").addEventListener("click", saveModuleDisplaySettings);
   elements.resetModuleSettings.addEventListener("click", resetModuleDisplaySettings);
   elements.chooseChatButton.addEventListener("click", chooseChat);
   elements.workflowSelect.addEventListener("change", renderWorkflow);
   elements.activateWorkflow.addEventListener("click", activateSelectedWorkflow);
   elements.refreshWorkflows.addEventListener("click", () => refreshWorkflowData(undefined, true).catch(showError));
-  elements.showActiveWorkflow.addEventListener("click", () => {
-    const run = currentForegroundRun();
-    if (!run) { elements.workflowStatus.textContent = "当前没有正在运行的前台工作流。"; return; }
-    const reference = runWorkflowReference(run);
-    if (!state.workflows.some(item => workflowReference(item) === reference)) { elements.workflowStatus.textContent = "当前前台工作流仍在运行，但其定义已不在本卡工作流列表中。"; return; }
-    elements.workflowSelect.value = reference;
-    renderWorkflow();
-    elements.workflowStatus.textContent = `已定位到正在运行的前台工作流：${selectedWorkflow()?.title || run.workflowId}`;
+  elements.refreshWorkflows.addEventListener("click", () => refreshState());
+  elements.showRunningWorkflow.addEventListener("click", async () => {
+    try {
+      await refreshWorkflowData(undefined, true);
+      const runs = state.workflowRuns.filter(run => run.live !== false && run.status === "running");
+      const ordered = [...runs.filter(run => !run.callContext).reverse(), ...runs.filter(run => run.callContext).reverse()];
+      const references = [...new Set(ordered.map(runWorkflowReference))].filter(ref => state.workflows.some(item => workflowReference(item) === ref));
+      if (!references.length) { elements.workflowStatus.textContent = "当前没有正在运行的工作流。"; return; }
+      const index = references.indexOf(elements.workflowSelect.value);
+      const reference = references[(index + 1) % references.length];
+      elements.workflowSelect.value = reference; renderWorkflow();
+      elements.workflowStatus.textContent = `已定位到正在运行的工作流：${selectedWorkflow()?.title || reference}${references.length > 1 ? "；再次点击可切换其他运行实例。" : ""}`;
+    } catch (error) { showError(error); }
+  });
+  elements.showActiveWorkflow.addEventListener("click", async () => {
+    try{
+      await refreshWorkflowData(undefined,true);
+      const run=currentForegroundRun(),reference=run?runWorkflowReference(run):state.activeWorkflowId;
+      if(!reference){elements.workflowStatus.textContent="当前未配置前台工作流。";return;}
+      if (!state.workflows.some(item => workflowReference(item) === reference)) { elements.workflowStatus.textContent = "当前前台工作流的定义不在本卡工作流列表中。"; return; }
+      elements.workflowSelect.value = reference;renderWorkflow();
+      elements.workflowStatus.textContent=`已定位到${run?"正在运行的":"已配置的"}前台工作流：${selectedWorkflow()?.title||reference}`;
+    }catch(error){showError(error);}
   });
   elements.refreshTokens.addEventListener("click", () => refreshTokenUsage(true).catch(showError));
   elements.imageRunConfirm.addEventListener("click", event => {
@@ -798,46 +925,93 @@ function wirePanelEventHandlers() {
   elements.imageRegenerateConfirm.addEventListener("click", async event => {
     event.preventDefault();
     try {
-      await request(`/api/image-generation/renders/${encodeURIComponent(state.imagePromptRenderId)}/regenerate`, { method: "POST", body: JSON.stringify({ operationId: crypto.randomUUID(), contentPrompt: elements.imageContentPrompt.value.trim(), scope: elements.imageRegenerateScope.value }) });
+      await request(`/api/v1/image-generation/renders/${encodeURIComponent(state.imagePromptRenderId)}/regenerate`, { method: "POST", body: JSON.stringify({ operationId: crypto.randomUUID(), contentPrompt: elements.imageContentPrompt.value.trim(), scope: elements.imageRegenerateScope.value }) });
       elements.imagePromptDialog.close();
     } catch (error) { showError(error); }
   });
   elements.comfyConnectionSelect.addEventListener("change", loadComfyConnectionForm);
-  elements.comfyConnectionForm.addEventListener("submit", async event => {
-    event.preventDefault();
+  document.querySelector("#comfy-reload-connections").addEventListener("click", refreshComfyConnections);
+  elements.comfyConnectionForm.addEventListener("input", () => { state.comfyConnectionDirty = true; state.comfyEditVersion = (state.comfyEditVersion || 0) + 1; });
+  elements.comfyRemoveConnection.addEventListener("click", async () => {
+    const id = elements.comfyConnectionSelect.value;
+    if (!id) return;
     try {
-      await request("/api/image-generation/connections", { method: "POST", body: JSON.stringify({ id: elements.comfyConnectionId.value.trim(), title: elements.comfyConnectionTitle.value.trim(), baseUrl: elements.comfyConnectionUrl.value.trim(), token: elements.comfyConnectionToken.value, outputDirectoryPath: elements.comfyOutputPath.value.trim(), allowInsecureRemote: elements.comfyInsecureRemote.checked }) });
-      state.imageGeneration = await request("/api/image-generation"); renderComfySettings(); elements.comfyConnectionStatus.textContent = "连接配置已保存。";
+      await request(`/api/v1/image-generation/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
+      state.comfyConnectionDirty = false; elements.comfyConnectionSelect.value = "";
+      if (await refreshComfyConnections()) elements.comfyConnectionStatus.textContent = "连接配置已移除。";
     } catch (error) { showError(error); }
   });
+  elements.comfyConnectionForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (state.comfyConnectionSaving) return;
+    state.comfyConnectionSaving = true;
+    const submittedVersion = state.comfyEditVersion;
+    try {
+      const saved = await request("/api/v1/image-generation/connections", { method: "POST", body: JSON.stringify({ id: elements.comfyConnectionId.value.trim(), title: elements.comfyConnectionTitle.value.trim(), baseUrl: elements.comfyConnectionUrl.value.trim(), token: elements.comfyConnectionToken.value, outputDirectoryPath: elements.comfyOutputPath.value.trim(), allowInsecureRemote: elements.comfyInsecureRemote.checked }) });
+      state.comfyConnectionDirty = state.comfyEditVersion !== submittedVersion;
+      state.comfyConnections = [...(state.comfyConnections || []).filter(item => item.id !== saved.id).map(item => ({ ...item, selected: false })), { ...saved, selected: true }];
+      renderComfySettings();
+      elements.comfyConnectionSelect.value = saved.id;
+      if (!state.comfyConnectionDirty) loadComfyConnectionForm();
+      if (await refreshComfyConnections(saved)) elements.comfyConnectionStatus.textContent = state.comfyConnectionDirty ? "提交时的配置已保存；当前修改尚未保存。" : "连接配置已保存并重新读取确认。";
+      else elements.comfyConnectionStatus.textContent = "连接配置已保存，但重新读取失败；请点击重新读取连接。";
+    } catch (error) { elements.comfyConnectionStatus.textContent = `连接配置保存失败：${error.message}`; }
+    finally { state.comfyConnectionSaving = false; }
+  });
   elements.comfyTestConnection.addEventListener("click", async () => {
-    try { const result = await request(`/api/image-generation/connections/${encodeURIComponent(elements.comfyConnectionSelect.value)}/test`, { method: "POST" }); elements.comfyConnectionStatus.textContent = `连接正常 · ${result.elapsedMs} ms`; }
-    catch (error) { elements.comfyConnectionStatus.textContent = "连接失败"; showError(error); }
+    const invalid=[elements.comfyConnectionId,elements.comfyConnectionUrl].find(input=>!input.checkValidity());
+    if(invalid){invalid.reportValidity();invalid.focus();elements.comfyConnectionStatus.textContent="请填写有效的连接 ID 和 ComfyUI 地址。";return;}
+    const id=elements.comfyConnectionSelect.value||elements.comfyConnectionId.value.trim();
+    elements.comfyTestConnection.disabled=true;elements.comfyConnectionStatus.textContent="测试中…";
+    try {
+      const result=await request(`/api/v1/image-generation/connections/${encodeURIComponent(id)}/test`,{method:"POST",body:JSON.stringify({id:elements.comfyConnectionId.value.trim(),title:elements.comfyConnectionTitle.value.trim(),baseUrl:elements.comfyConnectionUrl.value.trim(),token:elements.comfyConnectionToken.value,allowInsecureRemote:elements.comfyInsecureRemote.checked})});
+      elements.comfyConnectionStatus.textContent=`连接正常 · ${result.elapsedMs} ms`;
+    }catch(error){elements.comfyConnectionStatus.textContent=`连接失败：${error.message}`;}
+    finally{elements.comfyTestConnection.disabled=state.snapshot?.previewMode===true;}
   });
 }
 
 async function refreshState() {
-  if (state.switching) return;
+  if (state.switching || state.stateRefreshPending) return;
+  state.stateRefreshPending = true;
   try {
-    const [snapshot, modules] = await Promise.all([request("/api/state"), request("/api/modules")]);
+    const snapshot = await request("/api/v1/state", { signal: AbortSignal.timeout(15000) });
     applySnapshot(snapshot);
-    renderFeatureModules(modules);
+  } catch (error) {
+    if (!elements.handoffOverlay.hidden) return;
+    elements.connectionStatus.textContent = "与 Pi 会话连接中断";
+  } finally { state.stateRefreshPending = false; }
+  await refreshSecondaryPanels();
+}
+
+async function refreshSecondaryPanels() {
+  if (state.switching) return;
+  if (!state.moduleRefreshPending) {
+    state.moduleRefreshPending = true;
+    const sessionId = state.snapshot?.sessionId;
+    request("/api/v1/modules", { signal: AbortSignal.timeout(15000) }).then(modules => {
+      if (!state.switching && state.snapshot?.sessionId === sessionId) renderFeatureModules(modules);
+    }).catch(() => {}).finally(() => { state.moduleRefreshPending = false; });
+  }
+  try {
     if (state.activePanel === "workflows" && !workflowPanelHasFocus()) await refreshWorkflowData();
     if (state.activePanel === "tokens") await refreshTokenUsage();
   } catch (error) {
     if (!elements.handoffOverlay.hidden) return;
-    elements.connectionStatus.textContent = "与 Pi 会话连接中断";
+    // A secondary panel failure must not replace the successfully refreshed turn state.
   }
 }
 
 async function initialize() {
   // 阶段 2：加载页面所需数据（卡片、快照、设置、模块、模型、工作流）。
-  state.card = await request("/api/card");
+  state.card = await request("/api/v1/card");
   elements.cardTitle.textContent = state.card.name;
   document.title = `${state.card.name} · Pi RP`;
   renderOpeningChoices();
-  const snapshot = await request("/api/state");
+  const snapshot = await request("/api/v1/state");
   applySnapshot(snapshot);
+  ensureStatePolling();
+  void refreshComfyConnections();
   if (snapshot.selectorUrl) {
     elements.returnToSelector.href = snapshot.selectorUrl;
     elements.returnToSelector.hidden = false;
@@ -845,40 +1019,46 @@ async function initialize() {
   if (snapshot.isolatedRuntime) {
     document.querySelector("#tab-cards").hidden = true;
   }
-  const settings = await request("/api/settings");
+  const settings = await request("/api/v1/settings");
   state.settings = settings;
   applyFontSize(settings.common?.system?.fontSize ?? 16);
   if (!state.playerNameDirty) elements.playerName.value = settings.common?.user?.playerName || snapshot.playerName || "玩家";
   elements.playerDescription.value = settings.common?.user?.description || "";
   renderSavedProfiles();
   renderPlayerAvatarPreview();
-  renderFeatureModules(await request("/api/modules"));
-  try { state.imageGeneration = await request("/api/image-generation"); renderComfySettings(); } catch {}
-  const modelPayload = await request("/api/models");
+  renderFeatureModules(await request("/api/v1/modules"));
+  try { state.imageGeneration = await request("/api/v1/image-generation"); renderComfySettings(); } catch {}
+  const modelPayload = await request("/api/v1/models");
   state.models = [modelPayload.current, ...(modelPayload.profiles || [])];
-  state.workflowPolicy = await request("/api/workflow-policy");
-  state.agents = (await request("/api/agents")).agents || [];
+  state.workflowPolicy = await request("/api/v1/workflow-policy");
+  state.agents = (await request("/api/v1/agents")).agents || [];
   await refreshWorkflowData(undefined, true);
-  if (snapshot.openingId) renderMessages(snapshot.messages);
-  state.cards = await request("/api/cards");
+  if (state.snapshot?.openingId) renderMessages(state.snapshot.messages);
+  state.cards = await request("/api/v1/cards");
   renderCards();
   try {
-    renderHistoryChoices(await request("/api/sessions"));
+    renderHistoryChoices(await request("/api/v1/sessions"));
   } catch (error) {
     elements.historyGroup.hidden = false;
     elements.historyList.textContent = "聊天记录读取失败。";
     showError(error);
   }
+  if (getClient().connection.mode === "play") {
+    try { playShell = await mountPlayShell({ client: getClient(), navigate: showPanel, pauseDefault: () => { stopStateWatch?.(); stopStateWatch = null; }, resumeDefault: () => { ensureStatePolling(); void refreshState(); }, onError: showError }); }
+    catch (error) { showError(error); }
+  }
   const requestedPanel = new URLSearchParams(window.location.search).get("panel");
   showPanel(elements.tabButtons.some(button => button.dataset.panel === requestedPanel) ? requestedPanel : "story");
-  // 轮询只能有一份。`initialize()` 若被重复执行（同一页面被二次装配、页面从 bfcache 恢复等），
-  // 无条件 `setInterval` 会让轮询叠加成两条、三条……请求量成倍增长。
-  // 方案 §11 第 8 条要求"消除对已删除表单元素的依赖；轮询更新不能覆盖正在编辑的草稿或重复绑定监听器"，
-  // 因此这里显式只注册一次；已注册时把句柄记下来，便于诊断。
-  if (state.refreshTimer === undefined) {
-    state.refreshTimer = window.setInterval(refreshState, 600);
-  }
 }
+
+function ensureStatePolling() {
+  if (!stopStateWatch) stopStateWatch = getClient().watch("state", async snapshot => {
+    applySnapshot(snapshot);
+    await refreshSecondaryPanels();
+  }, { intervalMs: 600, visible: () => !document.hidden, onError: error => { if (error.code === "session_changed") showHandoff("这个页面已经失效", "请打开当前聊天页面。"); else elements.connectionStatus.textContent = "与 Pi 会话连接中断"; } });
+}
+
+window.addEventListener("pagehide", () => { stopStateWatch?.(); getClient().dispose(); }, { once: true });
 
 // 阶段 1 必须在启动前完成：绑定先于任何用户交互与数据加载。
 if (initializePageContext()) {

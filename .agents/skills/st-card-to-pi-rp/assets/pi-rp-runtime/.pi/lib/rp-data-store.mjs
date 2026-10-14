@@ -8,6 +8,7 @@ import { renderCardText, renderCardTextValues } from "./rp-card-text.mjs";
 import { parseDataRecordLines, toDataRecordLines, validateDataRecord } from "./rp-data-records.mjs";
 import { validateJsonSchema } from "./rp-data-schema.mjs";
 import { commitDataFiles, recoverDataTransactions } from "./rp-data-transactions.mjs";
+import { normalizeTranscriptProvider, projectTranscript, transcriptFingerprint, transcriptProjectionFiles } from "./rp-transcript-projection.mjs";
 
 function safeResolve(root, ...parts) {
   const base = resolve(root);
@@ -102,6 +103,8 @@ export class RpDataStore {
     this.playerName = playerName;
     this.processorCache = new Map();
     this.schemaCache = new Map();
+    this.transcriptProvider = null;
+    this.transcriptSessionMetadata = null;
   }
 
   async validateRecordData(record) {
@@ -170,6 +173,10 @@ export class RpDataStore {
   }
 
   async initialize() {
+    return withDataCommitLock(this.sessionDirectory, () => this.#initializeLocked());
+  }
+
+  async #initializeLocked() {
     await recoverDataTransactions(this.sessionDirectory);
     for (const module of this.modules.values()) {
       for (const [collectionId, collection] of Object.entries(module.contract.collections)) {
@@ -189,8 +196,7 @@ export class RpDataStore {
         if (collection.storage.initialSnapshotFile) {
           const value = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
           initialSnapshot = (Array.isArray(value) ? value : [value]).map((record, index) => validateDataRecord(this.renderSeedRecord(record, `${module.contract.moduleId}/${collectionId}/initialSnapshot[${index}]`), module.contract));
-          const override = collectionId === "settings" ? this.initialOverrides[module.contract.moduleId] : null;
-          if (override && initialSnapshot.length) initialSnapshot[0] = { ...initialSnapshot[0], data: mergeDefined(initialSnapshot[0].data, this.playerName ? renderCardTextValues(override, this.playerName, `${module.contract.moduleId}/settings/override`) : override) };
+          initialSnapshot = this.applyInitialOverrides(module.contract.moduleId, collectionId, initialSnapshot);
           for (const record of initialSnapshot) await this.validateRecordData(record);
         }
         const files = this.stateFiles(module.contract.moduleId, collectionId, { history: initialRecords, records: initialSnapshot.length ? initialSnapshot : latestRecords(initialRecords) });
@@ -223,8 +229,7 @@ export class RpDataStore {
     if (collection.storage.kind === "hybrid" && collection.storage.initialSnapshotFile) {
       const initial = await json(safeResolve(module.moduleDirectory, collection.storage.initialSnapshotFile), []);
       const seeded = (Array.isArray(initial) ? initial : [initial]).map((record, index) => validateDataRecord(this.renderSeedRecord(record, `${moduleId}/${collectionId}/initialSnapshot[${index}]`), module.contract));
-      const override = collectionId === "settings" ? this.initialOverrides[moduleId] : null;
-      if (override && seeded.length) seeded[0] = { ...seeded[0], data: mergeDefined(seeded[0].data, this.playerName ? renderCardTextValues(override, this.playerName, `${moduleId}/settings/override`) : override) };
+      seeded.splice(0, seeded.length, ...this.applyInitialOverrides(moduleId, collectionId, seeded));
       const identities = new Set(history.map(record => `${record.id}:${record.revision}`));
       history = [...seeded.filter(record => !identities.has(`${record.id}:${record.revision}`)), ...history];
     }
@@ -232,6 +237,16 @@ export class RpDataStore {
     const records = snapshot === null ? latestRecords(history) : (Array.isArray(snapshot) ? snapshot : [snapshot]).map(record => validateDataRecord(record, module.contract));
     for (const record of records) await this.validateRecordData(record);
     return { history, records };
+  }
+
+  applyInitialOverrides(moduleId, collectionId, records) {
+    const override = this.initialOverrides[moduleId];
+    if (!override) return records;
+    const { $records: scoped = {}, ...legacy } = override;
+    return records.map((record, index) => {
+      const patch = scoped?.[collectionId]?.[record.id] ?? (collectionId === "settings" && index === 0 ? legacy : null);
+      return patch ? { ...record, data: mergeDefined(record.data, this.playerName ? renderCardTextValues(patch, this.playerName, `${moduleId}/${collectionId}/${record.id}/override`) : patch) } : record;
+    });
   }
 
   async authorityFileForRecord(moduleId, collectionId, recordId) {
@@ -303,8 +318,22 @@ export class RpDataStore {
     return index;
   }
 
-  async commit(batchId, changedStates, receipt) {
-    const files = [];
+  async commit(batchId, changedStates, receipt, extraFiles = []) {
+    const files = [...extraFiles];
+    const marker = await json(safeResolve(this.sessionDirectory, "transcript.json"), null);
+    const provider = this.transcriptProvider || (marker ? normalizeTranscriptProvider(marker.provider) : null);
+    if (provider && marker && JSON.stringify(normalizeTranscriptProvider(marker.provider)) !== JSON.stringify(provider)) throw new Error("Transcript provider cannot change within a saved chat.");
+    if (provider) {
+      if (marker) {
+        const previous = await this.readCollection(provider.moduleId, provider.collectionId);
+        const messages = projectTranscript(previous.records, this.module(provider.moduleId).contract, provider);
+        if (marker.recordCount !== messages.length || marker.fingerprint !== transcriptFingerprint(messages)) throw new Error("Transcript authority does not match its committed manifest; recover or repair before writing.");
+      }
+      const conversation = changedStates.get(`${provider.moduleId}/${provider.collectionId}`) || await this.readCollection(provider.moduleId, provider.collectionId);
+      const messageIds = new Set(conversation.records.filter(record => record.recordType === provider.recordType && record.status === "active").map(record => record.id));
+      const referenced = [receipt.binding?.messageId, ...(receipt.sourceReferences || []).filter(source => source.kind === "message").map(source => source.id)].filter(Boolean);
+      if (referenced.some(id => !messageIds.has(id))) throw Object.assign(new Error("A data commit references a deleted transcript message."), { code: "source_message_deleted" });
+    }
     for (const state of changedStates.values()) {
       const stateFiles = this.stateFiles(state.moduleId, state.collectionId, state);
       files.push(...stateFiles);
@@ -338,6 +367,13 @@ export class RpDataStore {
       identities.push(...buildIdentityEntries(records, module.contract));
     }
     files.push({ path: safeResolve(this.sessionDirectory, "indexes", "identities.json"), content: `${JSON.stringify(identityDocument(identities), null, 2)}\n` });
+    if (provider) {
+      const state = changedStates.get(`${provider.moduleId}/${provider.collectionId}`);
+      if (state) {
+        files.push(...transcriptProjectionFiles(this.sessionDirectory, state, this.module(provider.moduleId).contract, provider));
+        if (this.transcriptSessionMetadata) files.push({ path: safeResolve(this.sessionDirectory, "session.json"), content: `${JSON.stringify(this.transcriptSessionMetadata, null, 2)}\n` });
+      }
+    }
     return commitDataFiles(this.sessionDirectory, batchId, files, receipt);
   }
 

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 4,
+  "id": "prepare-history-recall",
+  "ownerModuleId": "narrative-controls",
+  "title": "准备历史原文回顾",
+  "description": "使用固定正文与玩家输入查询，向量召回与rerank后交付历史原文。",
+  "kind": "module-external",
+  "agentCallable": false,
+  "revision": "1",
+  "interface": {
+    "inputs": {},
+    "exports": {
+      "excerpts": {
+        "format": "document-set",
+        "description": "历史原文摘录。"
+      }
+    }
+  },
+  "instancePolicy": {
+    "mode": "multiple",
+    "maxConcurrentInstances": 4
+  },
+  "nodes": [
+    {
+      "id": "recall",
+      "title": "recall",
+      "type": "code",
+      "moduleAccess": [
+        {
+          "moduleId": "narrative-controls",
+          "collectionId": "settings",
+          "capabilities": [
+            "narrative.history.read"
+          ],
+          "views": [
+            "processor"
+          ],
+          "queryBudget": {
+            "maxRecords": 1,
+            "maxCharacters": 8000
+          }
+        }
+      ],
+      "workflowCalls": [],
+      "runtimeServices": [
+        "narrativeHistory"
+      ],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "outputs": {
+        "excerpts": {
+          "path": "history-recall",
+          "kind": "directory",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "metadata": {
+        "entryFile": "runtime/prepare-history-recall.mjs"
+      }
+    },
+    {
+      "id": "return",
+      "type": "workflow-return",
+      "dependsOn": [
+        "recall"
+      ],
+      "exports": {
+        "excerpts": {
+          "fromNode": "recall",
+          "output": "excerpts"
+        }
+      },
+      "outputs": {},
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      }
+    }
+  ]
+}

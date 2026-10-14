@@ -4,13 +4,12 @@
   "title": "标准角色扮演回合",
   "description": "以普通 Agent 节点在精简初始上下文和节点文档工作区上完成规划、按需查询与正文创作。",
   "kind": "foreground",
-  "revision": "4",
+  "revision": "5",
   "turnContext": {
     "recentCompleteTurns": 5
   },
   "defaults": {
     "agentId": "narrative-controls/narrative-writer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -245,7 +244,7 @@
       "description": "读取节点工作区文档清单，先形成初步规划，按需调用获准的模块工作流，再修正规划并完成正文。",
       "type": "agent",
       "dependsOn": [
-        "prepare-recent-narrative-stories"
+        "prepare-history-recall"
       ],
       "retry": {
         "maxAttempts": 3
@@ -255,7 +254,8 @@
         "fromNodes": [
           "prepare-document-workspace",
           "prepare-creative-context",
-          "prepare-recent-narrative-stories"
+          "prepare-recent-narrative-stories",
+          "prepare-history-recall"
         ]
       },
       "outputs": {
@@ -278,6 +278,11 @@
       },
       "moduleAccess": [],
       "workflowCalls": [
+        {
+          "target": "creative-reference-library/search-units",
+          "fixedArguments": { "includeSemanticCandidates": false },
+          "maxCalls": 1
+        },
         {
           "target": "world-narrative-coordinator/pre-director-update",
           "documentSnapshotInput": "context",
@@ -308,7 +313,8 @@
         },
         "documentWorkspaceSnapshot": {
           "output": "post-turn-context"
-        }
+        },
+        "collaborationPreset": "workflow-presets/standard-rp-collaboration.json"
       }
     },
     {
@@ -327,6 +333,51 @@
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []
+      }
+    },
+    {
+      "id": "prepare-history-recall",
+      "title": "准备历史原文回顾",
+      "type": "call",
+      "target": "narrative-controls/prepare-history-recall",
+      "dependsOn": [
+        "prepare-recent-narrative-stories"
+      ],
+      "arguments": {},
+      "documents": {},
+      "outputPaths": {
+        "excerpts": "history-recall"
+      },
+      "outputs": {
+        "excerpts": {
+          "path": "history-recall",
+          "kind": "directory",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "excerpts"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentIndex": {
+          "excerpts": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "planning-writing-checking",
+            "priority": 80,
+            "description": "向量召回及重排筛选的历史原文，不保证与当前场景相关，仅供参考；以标注轮次判断先后，摘录之间不一定连续。"
+          }
+        }
       }
     }
   ],

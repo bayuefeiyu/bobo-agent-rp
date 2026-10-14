@@ -7,10 +7,9 @@
   "turnContext": {
     "recentCompleteTurns": 5
   },
-  "revision": "4",
+  "revision": "5",
   "defaults": {
     "agentId": "narrative-controls/narrative-writer",
-    "modelId": "pi:current",
     "context": {
       "mode": "fixed"
     }
@@ -289,7 +288,7 @@
       "type": "agent",
       "agentId": "narrative-controls/narrative-writer",
       "dependsOn": [
-        "prepare-recent-narrative-stories"
+        "prepare-history-recall"
       ],
       "context": {
         "mode": "previous-output",
@@ -297,7 +296,8 @@
           "prepare-document-workspace",
           "prepare-event-timeline",
           "prepare-creative-context",
-          "prepare-recent-narrative-stories"
+          "prepare-recent-narrative-stories",
+          "prepare-history-recall"
         ]
       },
       "outputs": {
@@ -320,6 +320,11 @@
       },
       "moduleAccess": [],
       "workflowCalls": [
+        {
+          "target": "creative-reference-library/search-units",
+          "fixedArguments": { "includeSemanticCandidates": false },
+          "maxCalls": 1
+        },
         {
           "target": "narrative-memory/narrative-memory-retrieve",
           "maxCalls": 1
@@ -361,7 +366,8 @@
           "includeNarrative": "narrative",
           "includeDeclaredDocuments": true,
           "includeDynamicCallOutputs": true
-        }
+        },
+        "collaborationPreset": "workflow-presets/advanced-memory-rp-collaboration.json"
       }
     },
     {
@@ -379,6 +385,51 @@
       "moduleAccess": [],
       "dataCommit": {
         "onNodeEnd": []
+      }
+    },
+    {
+      "id": "prepare-history-recall",
+      "title": "准备历史原文回顾",
+      "type": "call",
+      "target": "narrative-controls/prepare-history-recall",
+      "dependsOn": [
+        "prepare-recent-narrative-stories"
+      ],
+      "arguments": {},
+      "documents": {},
+      "outputPaths": {
+        "excerpts": "history-recall"
+      },
+      "outputs": {
+        "excerpts": {
+          "path": "history-recall",
+          "kind": "directory",
+          "format": "document-set",
+          "scope": "workflow",
+          "retain": "run"
+        }
+      },
+      "workspaceHandoff": {
+        "include": [
+          {
+            "output": "excerpts"
+          }
+        ]
+      },
+      "moduleAccess": [],
+      "dataCommit": {
+        "onNodeEnd": []
+      },
+      "metadata": {
+        "documentIndex": {
+          "excerpts": {
+            "readPolicy": "required",
+            "authority": "canonical",
+            "appliesAt": "planning-writing-checking",
+            "priority": 80,
+            "description": "向量召回及重排筛选的历史原文，不保证与当前场景相关，仅供参考；以标注轮次判断先后，摘录之间不一定连续。"
+          }
+        }
       }
     }
   ],

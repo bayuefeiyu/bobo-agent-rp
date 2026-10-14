@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["role", "kind", "content", "narrativeSource"],
+  "properties": {
+    "role": { "type": "string", "enum": ["user", "assistant"] },
+    "kind": { "type": "string", "enum": ["opening", "message"] },
+    "content": { "type": "string", "minLength": 1 },
+    "narrativeSource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["producerKind", "producerId", "layer", "characterId"],
+      "properties": {
+        "producerKind": { "type": "string", "enum": ["unknown", "user", "card", "agent", "code", "runtime"] },
+        "producerId": { "type": ["string", "null"] },
+        "layer": { "type": "string", "enum": ["unspecified", "in-world", "story", "authorial"] },
+        "characterId": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

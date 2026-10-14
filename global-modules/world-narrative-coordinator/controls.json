@@ -39,6 +39,29 @@
       ]
     },
     {
+      "id": "input-review",
+      "title": "输入审查",
+      "description": "由前置导演审查本轮输入的合理性，并向本轮正文提供指导。严格档区分玩家行动、其他角色行动和期望结果。",
+      "allowNone": false,
+      "options": [
+        {
+          "id": "off",
+          "label": "无",
+          "documentId": "input-review-off"
+        },
+        {
+          "id": "reasonable",
+          "label": "合理性",
+          "documentId": "input-review-reasonable"
+        },
+        {
+          "id": "strict",
+          "label": "严格合理性",
+          "documentId": "input-review-strict"
+        }
+      ]
+    },
+    {
       "id": "other-requirements",
       "title": "其他要求",
       "description": "补充个人偏好、感兴趣的题材或额外需要。默认内容由创作者或转卡者填写；自定义由玩家填写。",

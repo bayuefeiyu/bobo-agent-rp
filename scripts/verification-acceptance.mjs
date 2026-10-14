@@ -85,11 +85,24 @@ export function checkArchitecture(root) {
   gate("configuration", "配置目录唯一装配，旧写入口已移除", () => {
     assert.match(read(`${ENGINE}/lib/rp-host-utils.ts`), /return buildConfigCatalog\(\{/);
     assert.match(read(`${ENGINE}/lib/rp-config-catalog.mjs`), /resolveSettingsRegionDefaults/);
-    const html = read(`${WEB}/index.html`), server = read(`${CONVERT}/assets/pi-rp-web/server.mjs`);
+    const html = read(`${WEB}/index.html`), server = read("packages/rp-web-server/index.mjs");
     assert.doesNotMatch(html, /id="(?:tab-api|tab-agents|workflow-policy-form)"/);
-    assert.ok(!existsSync(join(root, WEB, "config.html")));
+    const independent = read(`${WEB}/config.html`);
+    assert.match(independent, /src="\/config\.js"/);
+    assert.doesNotMatch(independent, /src="\/app\.js/);
     assert.doesNotMatch(server, /bridge\.(?:saveModel|deleteModel|saveAgent|restoreAgent|saveWorkflowPolicy|updateWorkflowNodeBinding|updateWorkflowTrigger)\(/);
     return "命名配置方案为配置写入入口；运行期模型/Agent/工作流查询保留";
+  });
+  gate("web-boundary", "公开 Web 契约与 SDK 独立于官方 DOM/宿主", () => {
+    for (const packageName of ["rp-web-contract", "rp-web-client"]) {
+      const graph = importGraph(join(root, "packages", packageName)); assertAcyclic(graph);
+      for (const file of graph.keys()) assert.doesNotMatch(readFileSync(file, "utf8"), /from ["'](?:node:|.*app-context|.*app\.js|.*rp-host-)/);
+    }
+    assert.ok(!existsSync(join(root, CONVERT, "assets/pi-rp-web/server.mjs")), "Old card Web entry must be removed");
+    assert.match(read(`${ENGINE}/lib/rp-host-session.ts`), /"runtime", "packages", "rp-web-server"/);
+    const manifest = JSON.parse(read("global-modules/narrative-controls/frontend-view.json"));
+    assert.equal(manifest.schemaVersion, 3); assert.ok(manifest.bindings.length);
+    return "新包直接加载共享服务；契约/SDK 无官方 UI 或 Pi 依赖；v3 bindings 为声明基线";
   });
   gate("image", "图像语义归模块，宿主显式接线", () => {
     const api = read("global-modules/comfy-image-generation/runtime/web-api.mjs");

@@ -27,7 +27,7 @@ function contractWith(collections) {
 function settingsRegion(overrides = {}) {
   return {
     id: "demo-settings",
-    type: "settings-form",
+    kind: "settings",
     collectionId: "support",
     recordType: "demo.settings",
     recordId: "demo-settings-current",
@@ -37,13 +37,14 @@ function settingsRegion(overrides = {}) {
 }
 
 function moduleWith({ regions, collections, documents, id = "demo" }) {
+  const rendererRegions = regions.map((binding) => ({ id: binding.id, type: "settings-form", title: "Settings", bindingId: binding.id }));
   return {
     id,
     title: "演示模块",
     description: "仅用于测试。",
     moduleDirectory: "/virtual",
     contract: contractWith(collections),
-    view: { schemaVersion: 2, regions },
+    view: { schemaVersion: 3, bindings: regions, regions: rendererRegions },
     documents,
   };
 }
@@ -247,7 +248,8 @@ test("真实模块：narrative-memory 的设置来自 support 集合而不是 se
   const manifest = await loadModuleComponents(moduleDirectory);
   const contract = normalizeDataContract(JSON.parse(await readFile(resolve(moduleDirectory, manifest.dataContractFile), "utf8")), manifest.id);
   const view = normalizeModuleFrontendView(JSON.parse(await readFile(resolve(moduleDirectory, manifest.frontendViewFile), "utf8")), contract);
-  const region = (view.regions || []).find((item) => item.type === "settings-form");
+  const rendererRegion = (view.regions || []).find((item) => item.type === "settings-form");
+  const region = (view.bindings || []).find((item) => item.id === rendererRegion?.bindingId);
 
   // 前提：该模块的设置**不在**名为 settings 的集合里。若将来改了布局，这条断言会提醒更新用例。
   assert.notEqual(region.collectionId, "settings", "该用例的前提是设置不在 settings 集合");

@@ -102,13 +102,16 @@ export function buildRuntimePackageFixture(directory, { engineName, engineVersio
     "runtime/engine/extensions/pi-rp-web.ts": "export default function () {}\n",
     "runtime/engine/skills/play-pi-rp/SKILL.md": "# play\n",
     "runtime/engine/skills/play-pi-rp-web/SKILL.md": "# play web\n",
-    "web/server.mjs": "export {};\n",
+    "web/public/index.html": "<!doctype html><title>fixture</title>\n",
+    "web/public/gameplay/official/index.mjs": "export function mount(){return {unmount(){}}}\n",
+    "web/frontend.json": JSON.stringify({ schemaVersion: 1, id: "fixture-ui", version: "1.0.0", kind: "builtin", root: "public/gameplay/official", entry: "index.mjs", apiVersion: { major: 1, minor: 0 }, hostVersion: { major: 1, minor: 0 }, requiredCapabilities: [], optionalCapabilities: [], assets: ["index.mjs"], immersive: false }),
     "prompts/system/base.md": "# base\n",
     "prompts/system/tools.json": "{}\n",
     "defaults/common.json": "{}\n",
     "defaults/workflow-runtime.json": "{}\n",
     "defaults/model-profiles.json": JSON.stringify({ schemaVersion: 1, profiles: [] }) + "\n",
   };
+  for (const file of ["rp-web-server/index.mjs", "rp-web-server/static-host.mjs", "rp-web-server/card-store.mjs", "rp-web-contract/index.mjs", "rp-web-contract/frontend.mjs", "rp-web-contract/operations.mjs", "rp-web-contract/operations.json", "rp-web-contract/schemas.json", "rp-web-client/index.mjs", "rp-web-client/presentation-host.mjs"]) files[`runtime/packages/${file}`] = "{}\n";
   for (const [rel, content] of Object.entries(files)) {
     const target = join(directory, rel);
     mkdirSync(dirname(target), { recursive: true });
@@ -117,19 +120,21 @@ export function buildRuntimePackageFixture(directory, { engineName, engineVersio
 
   const cardId = "verify-fixture";
   const launch = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     cardId,
+    webApiVersion: 1,
     entry: "runtime/engine/extensions/pi-rp-web.ts",
     skills: ["runtime/engine/skills/play-pi-rp/SKILL.md", "runtime/engine/skills/play-pi-rp-web/SKILL.md"],
     engine: { name: engineName, testedVersion: engineVersion, testedNodeMajor: Number(process.versions.node.split(".")[0]) },
   };
-  const manifest = { schemaVersion: 1, id: cardId, feature_modules: [] };
+  const manifest = { schema_version: 2, id: cardId, feature_modules: [] };
   const lock = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     cardId,
-    packageFormat: 2,
-    runtimeVersion: "1.0.0",
-    launchProtocolVersion: 1,
+    packageFormat: 3,
+    runtimeVersion: "2.0.0",
+    launchProtocolVersion: 2,
+    webApiVersion: 1,
     testedNodeVersion: process.versions.node,
     externalDependencies: [{ name: engineName, testedVersion: engineVersion }],
     files: Object.fromEntries(Object.entries(files).map(([rel, content]) => [rel, sha256(content)])),
@@ -137,6 +142,8 @@ export function buildRuntimePackageFixture(directory, { engineName, engineVersio
 
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   writeFileSync(join(directory, "runtime", "launch.json"), JSON.stringify(launch, null, 2), "utf8");
+  lock.files["manifest.json"] = sha256(readFileSync(join(directory, "manifest.json"), "utf8"));
+  lock.files["runtime/launch.json"] = sha256(readFileSync(join(directory, "runtime/launch.json"), "utf8"));
   writeFileSync(join(directory, "runtime-lock.json"), JSON.stringify(lock, null, 2), "utf8");
   return { cardId, fileCount: Object.keys(files).length };
 }
@@ -170,10 +177,10 @@ export async function checkRuntimePackageFixture({ fixtureDir, engineName, engin
   }
 
   // 反例：篡改一个已登记文件，必须被报告为 changed（只验证通过路径不够）。
-  const tampered = join(fixtureDir, "web", "server.mjs");
+  const tampered = join(fixtureDir, "runtime", "packages", "rp-web-server", "index.mjs");
   writeFileSync(tampered, "export {}; // tampered\n", "utf8");
   const afterTamper = await validateRuntimePackage(fixtureDir);
-  if (afterTamper.changed.length !== 1 || !afterTamper.changed.includes("web/server.mjs")) {
+  if (afterTamper.ok || afterTamper.changed.length !== 1 || !afterTamper.changed.includes("runtime/packages/rp-web-server/index.mjs")) {
     return finish(false, `篡改文件未被检出：changed=${JSON.stringify(afterTamper.changed)}`);
   }
 

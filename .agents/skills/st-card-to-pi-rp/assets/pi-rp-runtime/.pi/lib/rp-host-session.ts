@@ -3,17 +3,21 @@ import { loadCardComponents, validateModuleRegistry } from "./rp-module-registry
 import * as promptControlsService from "./rp-prompt-controls.mjs";
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { createRecordEnvelope, formatCatalog, parseRecordLines, selectRecords, toRecordLines } from "./rp-records.mjs";
+import { formatCatalog, selectRecords } from "./rp-records.mjs";
+import { createConversationService, resolveTranscriptProvider } from "./rp-conversation.mjs";
+import { createExecutionService, executionDataStore } from "./rp-executions.mjs";
+import { normalizeTranscriptProvider } from "./rp-transcript-projection.mjs";
 import { runContextProcessor } from "./rp-context-processors.mjs";
 
 import { defaultCommonSettings, mergeCommonSettings, normalizeCommonSettings } from "./rp-common-settings.mjs";
 import { createRpConfigStore } from "./rp-config-store.mjs";
 import { createConfigProfileStore } from "./rp-config-profiles.mjs";
+import { isDashScope, streamDashScope } from "./rp-dashscope.mjs";
 import { RpWorkflowEngine } from "./rp-workflow-engine.mjs";
 import { withTerminalForegroundRelease } from "./rp-workflow-host.mjs";
 
@@ -25,7 +29,7 @@ import { describeTurnFailureReason } from "./rp-model-failures.mjs";
 
 import { readCardContextFile, readContextProcessors, readFeatureModules, readMessageRetrievalPolicy, readMessageRetrievalSkill } from "./rp-card-content.ts";
 
-import { currentDataNode as resolveCurrentDataNode, workflowDataReadAccess } from "./rp-node-data-access.ts";
+import { currentDataNode as resolveCurrentDataNode, workflowDataReadAccess, workflowExecutionReadBoundary } from "./rp-node-data-access.ts";
 import { readSourceRecords, refreshSourceCatalog, sourcePolicy } from "./rp-transcript-source.ts";
 
 import { latestCompletedTurn, webSnapshot as buildWebSnapshot } from "./rp-turn-state.ts";
@@ -52,6 +56,7 @@ import type { WebMessage, RecordEnvelope, ActiveBridge, RpRun, FeatureModule, Co
 
 import { createConfigWebBridge } from "./rp-web-config-bridge.ts";
 import { createWorkflowsWebBridge } from "./rp-web-workflows-bridge.ts";
+import { createAttemptsWebBridge } from "./rp-web-attempts-bridge.ts";
 import { createModulesWebBridge } from "./rp-web-modules-bridge.ts";
 import { createChatWebBridge } from "./rp-web-chat-bridge.ts";
 import { createHostSessionScope } from "./rp-host-session-scope.ts";
@@ -127,30 +132,58 @@ async function ensureActiveRecord() {
     await ensureFeatureModuleRecords(scope.current);
   }
 
-async function appendMessage(message: WebMessage) {
+async function appendMessage(message: WebMessage, run?: any, nodeId?: string) {
     if (!scope.current) return;
     await ensureActiveRecord();
-    const id = `message-${randomUUID()}`;
-    const record = createRecordEnvelope({
-      id,
-      source: "messages",
-      sequence: message.sequence,
-      createdAt: message.createdAt,
-      binding: { messageId: id, turn: message.turn },
-      metadata: { recordType: message.kind, entityIds: [], tags: [message.role], narrativeSource: message.narrativeSource },
-      data: { role: message.role, kind: message.kind, content: message.content },
-    }) as RecordEnvelope;
-    scope.current.messages.push(record);
-    await appendFile(resolve(scope.current.sessionDirectory!, "messages.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+    const service = conversationFor(scope.current, scope.current.sessionDirectory!, run?.executionId);
+    const record = await service.append(message, { operationId: message.operationId || randomUUID() }) as RecordEnvelope;
+    if (run?.executionId && nodeId) {
+      const store = createSessionDataStore({ sessionDirectory: scope.current.sessionDirectory!, featureModules: scope.current.featureModules, executionId: run.executionId });
+      const written = (await store.readCollection(scope.current.transcriptProvider.moduleId, scope.current.transcriptProvider.collectionId)).records.find((item: any) => item.id === record.id);
+      if (written?.provenance?.batchId) rememberDataReceipt(run, nodeId, { batchId: written.provenance.batchId, status: "committed" });
+    }
+    if (!run?.executionId) scope.current.messages = await service.load() as RecordEnvelope[];
     return record;
   }
 
-async function rewriteMessages() {
-    if (!scope.current?.sessionDirectory) return;
-    const messagesPath = resolve(scope.current.sessionDirectory, "messages.jsonl");
-    const temporaryPath = resolve(scope.current.sessionDirectory, `.messages-${Date.now()}-${process.pid}.tmp`);
-    await writeFile(temporaryPath, toRecordLines(scope.current.messages), "utf8");
-    await rename(temporaryPath, messagesPath);
+function conversationFor(target: ActiveBridge, directory: string, executionId?: string) {
+    const store = createSessionDataStore({ sessionDirectory: directory, featureModules: target.featureModules, playerName: target.playerName, executionId });
+    if (directory === target.sessionDirectory) store.transcriptSessionMetadata = sessionMetadata(target);
+    return createConversationService({ store, provider: target.transcriptProvider });
+  }
+
+async function loadConversation(target: ActiveBridge, directory: string) {
+    return await conversationFor(target, directory).load() as RecordEnvelope[];
+  }
+
+async function reviseMessage(target: ActiveBridge, id: string, content: string, expectedRevision: number, operationId: string) {
+    try {
+      const store = createSessionDataStore({ sessionDirectory: target.sessionDirectory!, featureModules: target.featureModules, playerName: target.playerName });
+      const executions = createExecutionService(store);
+      const saved = await executions.list();
+      const message = target.messages.find(message => message.id === id);
+      const attempt = Object.values(saved.executions).find((entry: any) => entry.id === entry.attemptId && entry.selected && entry.turn === message?.binding.turn && message?.data.role === "assistant") as any;
+      if (attempt) {
+        await createConversationService({ store: executionDataStore(store, attempt.id, { allowRevision: true }), provider: target.transcriptProvider }).revise(id, content, { expectedRevision, operationId });
+        await executions.adopt(attempt.id, { allowPast: true });
+      } else await conversationFor(target, target.sessionDirectory!).revise(id, content, { expectedRevision, operationId });
+    } catch (error) {
+      if (["revision_conflict", "expected_revision_required", "idempotency_conflict"].includes((error as any).code)) throw httpError(409, (error as Error).message);
+      throw error;
+    }
+    target.messages = await loadConversation(target, target.sessionDirectory!);
+  }
+
+async function readMessageHistory(target: ActiveBridge, id: string, options: any) {
+    return conversationFor(target, target.sessionDirectory!).history(id, options);
+  }
+
+async function queryConversation(target: ActiveBridge, options: any) {
+    return conversationFor(target, target.sessionDirectory || target.candidateSessionDirectory).query(options);
+  }
+
+async function findInputOperation(target: ActiveBridge, operationId: string) {
+    return await conversationFor(target, target.sessionDirectory || target.candidateSessionDirectory).findOperation(operationId) as RecordEnvelope | undefined;
   }
 
 async function pruneModuleRecords(target: ActiveBridge, deletedMessageIds: Set<string>) {
@@ -194,7 +227,8 @@ async function buildDynamicProcessorContext(target: ActiveBridge, run: RpRun) {
     const workflowEntry = (target.workflowEngine as any).runs.get(run.workflowRunId);
     const narrativeNode = workflowEntry?.workflow?.nodes?.find((item: any) => item.id === run.workflowNarrativeNodeId);
     if (!narrativeNode) throw new Error("Context processors cannot resolve the active narrative node.");
-    const store = createSessionDataStore({ sessionDirectory: target.sessionDirectory, featureModules: target.featureModules });
+    const store = createSessionDataStore({ sessionDirectory: target.sessionDirectory, featureModules: target.featureModules, executionId: workflowEntry.run.executionId });
+    const workflowMessages: RecordEnvelope[] = workflowEntry.run.executionId ? await conversationFor(target, target.sessionDirectory, workflowEntry.run.executionId).load() : target.messages;
     const dataQueries: Record<string, unknown> = {};
     const dataQuerySignatures: Record<string, string> = {};
     for (const processor of target.contextProcessors) {
@@ -206,7 +240,7 @@ async function buildDynamicProcessorContext(target: ActiveBridge, run: RpRun) {
         const access = narrativeNode.moduleAccess?.find((item: any) => item.moduleId === query.moduleId && item.collectionId === query.collectionId);
         if (!access) throw new Error(`Context processor ${processor.id} has no narrative-node access to ${query.moduleId}/${query.collectionId}.`);
         const budget = resolveNodeQueryBudget(access, workflowEntry.run.payload);
-        dataQueries[query.id] = await queryData(store, query, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters });
+        dataQueries[query.id] = await queryData(store, query, { capabilities: access.capabilities, views: access.views, runtimeLimit: budget.maxRecords, runtimeCharacters: budget.maxCharacters, nodeLimit: budget.maxRecords, nodeCharacters: budget.maxCharacters, ...workflowDataReadAccess(workflowEntry.run, store, workflowEntry.run.nodes[narrativeNode.id]?.dataReadBatchIds) });
       }
     }
     const available = {
@@ -215,7 +249,7 @@ async function buildDynamicProcessorContext(target: ActiveBridge, run: RpRun) {
       currentInput: run.submittedText,
       openingId: target.openingId,
       player: { name: target.playerName, description: target.playerDescription },
-      messages: target.messages.filter(record => record.sequence < run.submittedSequence),
+      messages: workflowMessages.filter(record => record.sequence < run.submittedSequence),
       dataQueries,
       settings: { common: target.commonSettings, card: target.cardSettings },
     };
@@ -280,19 +314,22 @@ async function buildAutomaticContext(target: ActiveBridge, run: RpRun) {
 
 async function updateMetadata() {
     if (!scope.current?.recordId || !scope.current.sessionDirectory) return;
-    const createdAt = scope.current.messages[0]?.createdAt || new Date().toISOString();
-    const metadata = {
-      id: scope.current.recordId,
-      piSessionFile: scope.current.context.sessionManager.getSessionFile() || null,
-      cardId: scope.current.cardId,
-      cardName: scope.current.cardName,
-      openingId: scope.current.openingId,
-      playerName: scope.current.playerName,
-      playerDescription: scope.current.playerDescription,
-      createdAt,
+    await writeFile(resolve(scope.current.sessionDirectory, "session.json"), `${JSON.stringify(sessionMetadata(scope.current), null, 2)}\n`, "utf8");
+  }
+
+function sessionMetadata(target: ActiveBridge) {
+    return {
+      id: target.recordId,
+      piSessionFile: target.context.sessionManager.getSessionFile() || null,
+      cardId: target.cardId,
+      cardName: target.cardName,
+      openingId: target.openingId,
+      playerName: target.playerName,
+      playerDescription: target.playerDescription,
+      transcriptProvider: target.transcriptProvider,
+      createdAt: target.messages[0]?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await writeFile(resolve(scope.current.sessionDirectory, "session.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   }
 
 async function stopBridge() {
@@ -304,7 +341,8 @@ async function stopBridge() {
   }
 
 async function resolveConfiguredModel(target: ActiveBridge, modelId: string, frozenOverride?: any) {
-    if (!modelId || modelId === "pi:current") {
+    if (!modelId) throw new Error("Agent 未指定模型。请在模型指定页设置模型。");
+    if (modelId === "pi:current") {
       if (!frozenOverride) return { profile: null, model: target.context.model };
       const frozenModel = frozenOverride.provider && frozenOverride.model
         ? target.context.modelRegistry.find(frozenOverride.provider, frozenOverride.model)
@@ -324,6 +362,7 @@ async function resolveConfiguredModel(target: ActiveBridge, modelId: string, fro
         baseUrl: profile.baseUrl,
         apiKey: profile.apiKey || undefined,
         api: profile.api || "openai-completions",
+        ...(isDashScope(profile.api)?{streamSimple:streamDashScope}:{}),
         models: [{
           id: profile.model,
           name: profile.name,
@@ -363,10 +402,10 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.id)) {
       throw new Error("Card manifest id must be filesystem-safe before Web session storage can start.");
     }
-    const webModulePath = resolve(cardDirectory, "web", "server.mjs");
+    const webModulePath = resolve(cardDirectory, "runtime", "packages", "rp-web-server", "index.mjs");
     const webModule = await import(`${pathToFileURL(webModulePath).href}?session=${Date.now()}`);
     if (typeof webModule.startWebBridge !== "function") {
-      throw new Error("Card web/server.mjs does not export startWebBridge().");
+      throw new Error("Card runtime/packages/rp-web-server/index.mjs does not export startWebBridge().");
     }
 
     const cardSessionsDirectory = resolve(context.cwd, "sessions", manifest.id);
@@ -429,7 +468,6 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
     const candidateRecordId = context.sessionManager.getSessionId();
     const candidateSessionDirectory = resolveSessionDirectory(cardSessionsDirectory, candidateRecordId);
     const metadataPath = resolve(candidateSessionDirectory, "session.json");
-    const messagesPath = resolve(candidateSessionDirectory, "messages.jsonl");
     const previousMetadata = await readFile(metadataPath, "utf8").then(JSON.parse).catch(error => {
       if (error.code !== "ENOENT") throw error;
       return null;
@@ -437,10 +475,9 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
     if (previousMetadata?.cardId && previousMetadata.cardId !== manifest.id) {
       throw new Error("This Pi session already has a Web RP transcript for another card.");
     }
-    const messages: RecordEnvelope[] = await readFile(messagesPath, "utf8").then(text => parseRecordLines(text) as RecordEnvelope[]).catch(error => {
-        if (error.code !== "ENOENT") throw error;
-        return [];
-      });
+    const transcriptProvider = resolveTranscriptProvider(manifest, featureModules);
+    if (previousMetadata?.transcriptProvider && JSON.stringify(normalizeTranscriptProvider(previousMetadata.transcriptProvider)) !== JSON.stringify(transcriptProvider)) throw new Error("The saved chat has a different transcript provider.");
+    const messages = await createConversationService({ store: createSessionDataStore({ sessionDirectory: candidateSessionDirectory, featureModules, playerName: previousMetadata?.playerName || commonSettings.user?.playerName || "玩家" }), provider: transcriptProvider }).load() as RecordEnvelope[];
     const hasExistingRecord = messages.length > 0;
 
     scope.current = {
@@ -460,6 +497,7 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
       playerDescription: hasExistingRecord ? previousMetadata?.playerDescription ?? commonSettings.user?.description ?? "" : commonSettings.user?.description ?? "",
       stableCardContext,
       featureModules,
+      transcriptProvider,
       messagePolicy,
       messageSkillPath: messageSkill.path,
       messageSkillDescription: messageSkill.description,
@@ -509,6 +547,12 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
     await hydrateNodeCompletionTurns(scope.requireCurrent().sessionDirectory);
     const dispatchWorkflowEvent = async (event: any, parentRun: any) => {
       if (!scope.current?.recordId || !scope.requireCurrent().sessionDirectory) return;
+      if (parentRun.narrativeAttemptId) {
+        const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+        const executions = (await createExecutionService(store).list()).executions;
+        const root = executions[parentRun.narrativeAttemptId];
+        if (!root || root.deactivated || executions[parentRun.executionId]?.deactivated) return;
+      }
       const available = await configStore.listWorkflows();
       for (const candidate of available) {
         if (candidate.invalid || candidate.source !== "module" || candidate.kind === "foreground") continue;
@@ -553,12 +597,16 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
             };
           }
         }
-        const visibleMessages = scope.requireCurrent().messages.filter(message => message.binding.turn <= parentRun.turn);
+        const parentMessages = parentRun.executionId ? await conversationFor(scope.requireCurrent(), scope.requireChat().sessionDirectory, parentRun.executionId).load() : scope.requireCurrent().messages;
+        const visibleMessages = parentMessages.filter((message: any) => message.binding.turn <= parentRun.turn);
         const runId = `workflow-${randomUUID()}`;
         try {
           const frozenTriggerDocuments = await freezeTriggeredDocuments({ sessionDirectory: scope.requireChat().sessionDirectory, workflow: candidate, runId, triggerDocuments });
           await scope.requireCurrent().workflowEngine.start(candidate, {
             id: runId,
+            executionParentId: parentRun.executionId || null,
+            narrativeAttemptId: parentRun.narrativeAttemptId || null,
+            newExecutionRootId: parentRun.newExecutionRootId || null,
             cardId: scope.requireCurrent().cardId,
             chatId: scope.requireCurrent().recordId,
             turn: parentRun.turn,
@@ -598,27 +646,53 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
         }
         return null;
       },
-      onRunStart: async ({ run }: any) => {
+      onRunStart: async ({ run, workflow }: any) => {
         readViewRegistry.register(run);
         if (!scope.current?.sessionDirectory || scope.requireCurrent().recordId !== run.chatId) throw new Error("The workflow data read view has no active RP chat.");
-        const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
-        const view = run.dataReadViewId ? { viewId: run.dataReadViewId } : await createDataReadView({
+        const baseStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+        const executions = createExecutionService(baseStore);
+        await executions.beginTurn(scope.requireCurrent().turn);
+        if (!run.executionParentId && !run.callContext && workflow.kind !== "foreground") {
+          const saved = await executions.list();
+          const attempt = Object.values(saved.executions).find((item: any) => item.id === item.attemptId && item.selected && item.turn === run.turn) as any;
+          if (attempt) { run.executionParentId = attempt.id; run.narrativeAttemptId = attempt.id; }
+        }
+        const inputStore = run.callContext && run.dataReadViewId && !run.previousExecutionId ? Object.assign(Object.create(baseStore), { readCollection: async (moduleId: string, collectionId: string) => {
+          const visible = await workflowDataReadAccess(run, baseStore, run.inheritedDataReadBatchIds).readCollection!(moduleId, collectionId);
+          const parentStore = executionDataStore(baseStore, run.executionParentId || run.callContext.parentRunId);
+          const parentState = await parentStore.readCollection(moduleId, collectionId);
+          const revisions = new Map(visible.records.map((record: any) => [record.id, record.revision]));
+          return { records: visible.records, history: parentState.history.filter((record: any) => record.revision <= Number(revisions.get(record.id) || 0)) };
+        } }) : null;
+        const execution = await executions.start({
+          id: run.id, workflowId: workflow.id, turn: run.turn ?? scope.requireCurrent().turn,
+          previousId: run.previousExecutionId, parentId: run.executionParentId || run.callContext?.parentRunId || null,
+          attemptId: run.narrativeAttemptId || (workflow.kind === "foreground" ? run.id : null),
+          policy: workflow.executionPolicy,
+          invocation: { logicalCallId: run.logicalCallId || run.id, payload: run.payload, arguments: run.arguments, textInput: run.textInput },
+          sourceReferences: run.sourceReferences, candidate: run.executionCandidate,
+          lifecycle: run.executionLifecycle === true,
+          inputStore,
+        });
+        run.executionId = execution.id;
+        run.narrativeAttemptId = execution.attemptId;
+        const store = executionDataStore(baseStore, execution.id);
+        const view = await createDataReadView({
           sessionDirectory: scope.requireChat().sessionDirectory,
           store,
-          sourceId: run.callContext?.rootRunId || run.id,
-          visibleThroughTurn: run.visibleThroughTurn,
-          visibleThroughTime: run.readSnapshotAt,
+          sourceId: `execution:${run.id}`,
+          ...workflowExecutionReadBoundary(run, Boolean(inputStore)),
         });
         readViewRegistry.register({ ...run, dataReadViewId: view.viewId });
         const agentPromptControls = await snapshotAgentPromptControls(scope.requireCurrent().featureModules, (module: FeatureModule, region: any) => getDataRecord(store, {
           moduleId: module.id, collectionId: region.collectionId, id: region.recordId, view: region.view,
         }, { capabilities: [region.readCapability], views: [region.view], ...workflowDataReadAccess({ ...run, dataReadViewId: view.viewId }, store) }));
-        return { dataReadViewId: view.viewId, dataReadBatchIds: run.dataReadBatchIds || [], agentPromptControls };
+        return { executionId: execution.id, narrativeAttemptId: execution.attemptId, dataReadViewId: view.viewId, dataReadBatchIds: [], inheritedDataReadBatchIds: [], agentPromptControls };
       },
       executor: executeWorkflowNode,
       beforeNodeComplete: async ({ workflow, run, node, result }: any) => {
         if (!scope.current?.sessionDirectory || scope.requireCurrent().recordId !== run.chatId) throw new Error("The workflow data commit has no active RP chat.");
-        const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+        const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules, executionId: run.executionId });
         const finalized = await finalizeNodeData({ sessionDirectory: scope.requireChat().sessionDirectory, store, workflow, run, node, result });
         for (const receipt of finalized.dataReceipts || []) rememberDataReceipt(run, node.id, receipt);
         return finalized;
@@ -628,6 +702,15 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
         // delete the snapshot only when no run still reads it — a deep-director child that outlives
         // the wrapper keeps the view it was handed.
         if (!scope.current?.sessionDirectory || scope.requireCurrent().recordId !== run.chatId) return;
+        if (run.executionId) {
+          const baseStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+          const executions = createExecutionService(baseStore);
+          await executions.finish(run.executionId, run.status, { sourceReferences: run.sourceReferences });
+          if (run.status === "completed" && !run.executionCandidate) {
+            await executions.adopt(run.executionId, { allowPast: true });
+            scope.requireCurrent().messages = await loadConversation(scope.requireCurrent(), scope.requireChat().sessionDirectory);
+          }
+        }
         const releasable = readViewRegistry.release(run.id, run.dataReadViewId);
         if (!releasable) return;
         await deleteDataReadView({ sessionDirectory: scope.requireChat().sessionDirectory, viewId: releasable });
@@ -654,12 +737,23 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
       onChange: async (run: any, workflow: any) => {
         if (!scope.current?.sessionDirectory || scope.requireCurrent().recordId !== run.chatId) return;
         const terminal = ["completed", "skipped", "failed", "cancelled"].includes(run.status);
+        if (run.executionId && run.status === "running") {
+          const baseStore = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+          const executions = createExecutionService(baseStore);
+          const entry = (await executions.list()).executions[run.executionId];
+          if (entry?.status === "failed") {
+            await executions.resume(run.executionId);
+            const view = await createDataReadView({ sessionDirectory: scope.requireChat().sessionDirectory, store: executionDataStore(baseStore, run.executionId), sourceId: `execution:${run.id}`, visibleThroughTurn: run.visibleThroughTurn, visibleThroughTime: null });
+            run.dataReadViewId = view.viewId;
+            readViewRegistry.register(run);
+          }
+        }
         return withTerminalForegroundRelease(run, workflow, async () => {
           const paths = await ensureWorkflowWorkspace(workflowWorkspacePaths(scope.requireChat().sessionDirectory, workflow.id, run.id, workflow.kind));
           await serializeWorkflowWrite(() => appendWorkflowRunRecord(paths.workflowRuns, run));
           if (terminal) {
             await cleanupArtifacts(scope.requireChat().sessionDirectory, { type: "run", workflowRunId: run.id });
-            await cleanupFrozenTriggerInputs(scope.requireChat().sessionDirectory, workflow.id, run.id);
+            if (!run.executionId) await cleanupFrozenTriggerInputs(scope.requireChat().sessionDirectory, workflow.id, run.id);
           }
           for (const state of Object.values(run.nodes) as any[]) {
             const eventKey = `${run.id}:node:${state.id}:completed`;
@@ -712,14 +806,16 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
       const latest = new Map<string, any>();
       for (const run of persisted) latest.set(run.id, run);
       for (const run of latest.values()) {
-        if (["completed", "skipped", "failed", "cancelled"].includes(run.status)) continue;
+        const terminal = ["completed", "skipped", "failed", "cancelled"].includes(run.status);
+        if (terminal && (!run.executionId || run.turn !== scope.requireCurrent().turn)) continue;
         try {
           const workflow = await configStore.getModuleWorkflow(run.ownerModuleId || null, run.workflowId);
           if (!workflow) throw new Error(`Workflow definition was not found for ${run.workflowId}.`);
           for (const state of Object.values(run.nodes || {}) as any[]) {
             if (state.status === "completed") deliveredWorkflowEvents.add(`${run.id}:node:${state.id}:completed`);
           }
-          if (workflow.kind === "foreground" && !turn.current && typeof run.payload?.currentInput === "string") {
+          if (run.status === "completed") deliveredWorkflowEvents.add(`${run.id}:workflow:completed`);
+          if (!terminal && workflow.kind === "foreground" && !turn.current && typeof run.payload?.currentInput === "string") {
             const finalizer = workflow.nodes.find((node: any) => node.type === "turn-finalize");
             const existingAssistant = scope.requireCurrent().messages.find(message => message.binding.turn === run.turn && message.data.role === "assistant");
             scope.requireCurrent().pending = true;
@@ -738,7 +834,7 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
             };
           }
           await scope.requireCurrent().workflowEngine.restore(workflow, run);
-          readViewRegistry.register({ ...run, terminalFinalized: undefined });
+          if (!terminal) readViewRegistry.register({ ...run, terminalFinalized: undefined });
         } catch (error) {
           // A run that cannot be restored stayed non-terminal in `runs.jsonl`, so every later load
           // retried the same failing restore and `blockingTurnRuns()` kept counting it — the session was
@@ -773,7 +869,8 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
     }
     function activeDataStore() {
       if (!scope.current?.sessionDirectory) throw httpError(409, "Start or resume a chat before using module data.");
-      return createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+      const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+      return scope.executionId ? executionDataStore(store, scope.executionId, { presentation: true, readOnly: true }) : store;
     }
     async function startManualBackgroundWorkflow(workflowId: string, payload: any) {
       if (!scope.current?.recordId || !scope.requireCurrent().sessionDirectory) throw httpError(409, "Start or resume a chat before running a background workflow.");
@@ -797,11 +894,24 @@ async function startBridge(cardArgument: string, context: ExtensionContext) {
       bridge = await webModule.startWebBridge({
         cardDirectory,
         bridge: bindWebBridge(scope, {
-...createConfigWebBridge({ manifest, scope, configToken, configProfiles, configStore, cardDirectory, ensureFeatureModuleRecords, context, resolveConfiguredModel }),
+connectionIdentity: () => ({ cardId: scope.requireCurrent().cardId, chatId: scope.requireCurrent().recordId }),
+withRequest: (readContext: any, action: () => Promise<any>) => scope.run(async () => {
+  if (scope.executionId) {
+    const store = createSessionDataStore({ sessionDirectory: scope.requireChat().sessionDirectory, featureModules: scope.requireCurrent().featureModules });
+    const entry = (await createExecutionService(store).list()).executions[scope.executionId];
+    if (!entry || entry.id !== entry.attemptId || !entry.narrativeDocument) throw Object.assign(httpError(404, "Narrative projection was not found."), { code: "not_found" });
+  }
+  return action();
+}, readContext),
+...createConfigWebBridge({ manifest, scope, configToken, configProfiles, configStore, cardDirectory, ensureFeatureModuleRecords, context, pi, resolveConfiguredModel }),
 ...createWorkflowsWebBridge({ scope, configStore, cardSettingsPath, startManualBackgroundWorkflow, turn, requireFrontendModule }),
-...createModulesWebBridge({ scope, ensureFeatureModuleRecords, activeDataStore, requireFrontendModule, cardSettingsPath }),
-...createChatWebBridge({ webSnapshot, scope, manifest, commonSettingsDirectory, cardSettingsPath, isolatedRuntime, cardDirectory, context, boundCardId, pi, cardSessionsDirectory, rewriteMessages, updateMetadata, pruneModuleRecords, hydrateNodeCompletionTurns, restoreWorkflowRuns, ensureFeatureModuleRecords, appendMessage, dispatchWorkflowEvent, ensureActiveRecord, turn }),
-...createImageWebBridge({ getSession: () => scope.requireCurrent(), ensureFeatureModuleRecords, configStore, httpError, openLocalDocument, imageExecutionGuard })
+...createModulesWebBridge({ scope, ensureFeatureModuleRecords, activeDataStore, requireFrontendModule, cardSettingsPath, startManualBackgroundWorkflow }),
+...createChatWebBridge({ webSnapshot, scope, manifest, commonSettingsDirectory, cardSettingsPath, isolatedRuntime, cardDirectory, context, boundCardId, pi, cardSessionsDirectory, loadConversation, reviseMessage, readMessageHistory, queryConversation, findInputOperation, updateMetadata, pruneModuleRecords, hydrateNodeCompletionTurns, restoreWorkflowRuns, ensureFeatureModuleRecords, appendMessage, dispatchWorkflowEvent, ensureActiveRecord, turn }),
+...createAttemptsWebBridge({ scope, turn, snapshot: webSnapshot, reload: async () => {
+  scope.requireCurrent().messages = await loadConversation(scope.requireCurrent(), scope.requireChat().sessionDirectory);
+  await updateMetadata();
+} }),
+...createImageWebBridge({ getSession: () => scope.requireCurrent(), getExecutionId: () => scope.executionId, ensureFeatureModuleRecords, configStore, httpError, openLocalDocument, imageExecutionGuard })
 }),
       });
     } catch (error) {

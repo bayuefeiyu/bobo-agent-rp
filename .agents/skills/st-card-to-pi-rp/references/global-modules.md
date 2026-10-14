@@ -22,11 +22,28 @@ After enough source inspection to judge relevance, but before building the forma
 
 Then explicitly ask which modules the user wants imported. Do not silently import even a strongly recommended module. If the user delegates the choice, state the chosen set and rationale before continuing. If no valid global modules exist, state that discovery found none and do not ask an empty selection question.
 
+The approved creative-reference companion below is a default-included exception: disclose it with the selected creative/deep-director modules and allow an explicit opt-out rather than requiring another individual opt-in. All other global-module selection rules remain in effect.
+
 Global-module selection remains unresolved until the user chooses, declines all, or explicitly delegates. A general “start conversion” does not select among still-listed modules. Do not issue the formal conversion proposal until this scope is resolved. This preselection never authorizes output writes and never replaces confirmation of the eventual complete proposal.
 
 The formal proposal discusses only the selected set in implementation detail. For a selected `narrative-memory` module, include an explicit carrier-change matrix covering: moved-to-memory material, fixed material, state still owned by other modules, fixed discovery anchors, per-opening initial records, other-module archive-source adapters, delayed source preservation, workflow permissions, and source-revision tracking. Identify any proposed data-shape change to another module, its risks, and its separate approval requirement. Preserve primary-character personality/behavior wording and all moved authored passages under the converter's normal fidelity and provenance rules.
 
 ## Import semantics
+
+### Default creative-reference-library integration
+
+When the selected card uses `narrative-controls` creation or `world-narrative-coordinator` deep planning, include `creative-reference-library` by default, disclose it in the proposal, and record any explicit user opt-out. Copy its complete source package and register its module; copy only code, never user content, credentials, indexes or private bindings. An unbound or unready library is a normal runtime state and must not prevent creative work.
+
+Preserve the shipped exact binding to `creative-reference-library/search-units`: `maxCalls: 1` and `fixedArguments.includeSemanticCandidates: false`. Callers may provide the interface's ordinary keywords, context and budget parameters; they cannot override the fixed semantic flag. Do not grant a or c to these callers by default. Module internal interfaces remain intact for future explicit customisation.
+
+- `narrative-controls/standard-rp` and `advanced-memory-rp`, node `write-narrative`: one call after available director guidance, before detailed plot design and writing. Preserve the instruction at the beginning of the final writing stage. Collaboration mode keeps the same binding and one shared allowance; the co-creator calls and shares results before the writer drafts.
+- `world-narrative-coordinator/deep-director-planning`, node `plan`: one call after reading context and memory retrieval, before long-term branch and topic design.
+- `deep-director-team-planning`, node `meeting`: expose the shipped `creative-reference` workflow assistant using the natural-language adapter and `references` document-set export. One call for the entire meeting during the first discussion round after base memory, with shared results available before detailed design. Preserve the node-wide one-call binding, not a per-member allowance. The host suppresses the assistant when the private library is unready.
+- No default grants in daily pre/post directors, local/world narrative candidate modules, memory maintenance or other modules. Returned documents are advisory creative references, never card canon or obligatory writing rules.
+
+If the user declines the companion, remove just its grants, the meeting assistant and the corresponding retrieval instructions from both ordinary and collaboration prompts; do not remove the creative nodes or their other calls. If the card deliberately replaces the shipped creative implementation, specify the equivalent retrieval point and one-call permission in the proposal rather than improvising during conversion.
+
+Verify these mappings before publication. Include b in the foreground card's existing `design_invariants.requiresNarrativeAgentCallable` when this default is selected, alongside any memory requirement. Check deep-director ordinary/team grants and exports separately. Resolve default-integration warnings or document the user's explicit alternative; do not leave a copied module without the intended caller wiring.
 
 After formal confirmation, copy each selected package intact from `global-modules/<module-id>/` into `features/<module-id>/`. Preserve its owned Agents, workflows, prompts, scripts, documents, data, and frontend resources together. Never make a card depend on the mutable project-global directory at runtime. Keep the global source unchanged.
 

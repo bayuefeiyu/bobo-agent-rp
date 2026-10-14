@@ -1,4 +1,4 @@
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, cp, mkdir, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,4 +11,5 @@ for (const file of ["server.mjs", "index.html", "validate-runtime-package.mjs"])
 }
 await mkdir(target, { recursive: true });
 for (const file of ["server.mjs", "index.html", "validate-runtime-package.mjs"]) await copyFile(join(source, file), join(target, file));
+await cp(join(source, "packages"), join(target, "packages"), { recursive: true });
 console.log(`Launcher installed at ${target}. Recent-card state was left intact.`);

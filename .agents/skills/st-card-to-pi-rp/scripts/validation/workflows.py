@@ -21,6 +21,8 @@ from .resources import (
     module_contract_map,
     module_resource_catalog_map,
     module_workflow_map,
+    validate_collaboration_team,
+    validate_collaboration_preset_resource,
     validate_code_node_entry,
     validate_design_invariants,
     validate_module_call_surface,
@@ -39,6 +41,42 @@ from .shared import (
 )
 
 REQUIRED_FIELD_CACHE: dict[str, list[str]] = {}
+
+
+def creative_reference_default_problems(workflow_id: str, by_id: dict[str, Any]) -> list[str]:
+    """Check the shipped default without imposing it on renamed/custom workflows."""
+    callers = {
+        "narrative-controls/standard-rp": "write-narrative",
+        "narrative-controls/advanced-memory-rp": "write-narrative",
+        "world-narrative-coordinator/deep-director-planning": "plan",
+        "world-narrative-coordinator/deep-director-team-planning": "meeting",
+    }
+    if workflow_id not in callers:
+        return []
+    node = by_id.get(callers[workflow_id], {})
+    target = "creative-reference-library/search-units"
+    calls = node.get("workflowCalls", [])
+    calls = calls if isinstance(calls, list) else []
+    references = []
+    for call in calls:
+        reference = call if isinstance(call, str) else call.get("target") if isinstance(call, dict) else None
+        if isinstance(reference, str) and reference.startswith("creative-reference-library/"):
+            references.append(call)
+    binding = references[0] if len(references) == 1 and isinstance(references[0], dict) else {}
+    problems = []
+    fixed = binding.get("fixedArguments", {})
+    if binding.get("target") != target or binding.get("maxCalls") != 1 or not isinstance(fixed, dict) or fixed.get("includeSemanticCandidates") is not False:
+        problems.append(f"{workflow_id} default creative-reference integration must expose b once with semantic candidates fixed false")
+    if workflow_id.endswith("deep-director-team-planning"):
+        team = node.get("team", {})
+        assistants = team.get("assistants", []) if isinstance(team, dict) else []
+        assistants = assistants if isinstance(assistants, list) else []
+        matches = [a for a in assistants if isinstance(a, dict) and a.get("target") == target]
+        ability = matches[0] if len(matches) == 1 else {}
+        fixed = ability.get("fixedArguments", {})
+        if ability.get("id") != "creative-reference" or ability.get("inputAdapter") != "natural-language-v1" or ability.get("exports") != ["references"] or not isinstance(fixed, dict) or fixed.get("includeSemanticCandidates") is not False:
+            problems.append(f"{workflow_id} default creative-reference integration must declare the shared b assistant and references export")
+    return problems
 
 
 def foreground_design_problems(label: str, by_id: dict[str, Any], ancestors_for, checks: dict[str, Any]) -> list[str]:
@@ -171,6 +209,11 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
         else:
             ids.add(workflow_id)
         kind = workflow.get("kind")
+        execution_policy = workflow.get("executionPolicy", {})
+        if (not isinstance(execution_policy, dict)
+                or set(execution_policy) - {"enabled", "allowHistoricalWrites"}
+                or any(not isinstance(value, bool) for value in execution_policy.values())):
+            errors.append(f"{label}.executionPolicy must contain only boolean enabled and allowHistoricalWrites")
         check_agent(workflow.get("defaults", {}).get("agentId") if isinstance(workflow.get("defaults"), dict) else None, owner_id, f"{label}.defaults.agentId")
         if kind not in allowed_kinds:
             errors.append(f"{label}.kind is invalid")
@@ -232,11 +275,20 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                 if isinstance(ability, dict) and ability.get("kind") == "agent":
                     check_agent(ability.get("agentId"), owner_id, f"{node_label}.team.abilities.agentId")
             team_workflow_abilities: list[str] = []
-            validate_runtime_services(node, node_label, errors)
+            collaboration_team: dict[str, Any] | None = None
+            validate_runtime_services(node, node_label, errors, owner_id)
             validate_code_node_entry(root, node, node_label, node_type, errors, module_source=(module_root, owner_id))
             if node_type == "team":
                 team = node.get("team")
-                if not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
+                collaboration_marker = isinstance(team, dict) and (
+                    team.get("schemaVersion") == 2 or team.get("protocol") == "collaboration"
+                )
+                is_collaboration = isinstance(team, dict) and team.get("schemaVersion") == 2 and team.get("protocol") == "collaboration"
+                if is_collaboration:
+                    collaboration_team = team
+                elif collaboration_marker:
+                    validate_collaboration_team(team, f"{node_label}.team", errors, registered_agents=registered_agents, owner_id=owner_id)
+                elif not isinstance(team, dict) or team.get("schemaVersion", 1) != 1:
                     errors.append(f"{node_label}.team must be a schemaVersion 1 object")
                 else:
                     members: list[dict[str, Any]] = []
@@ -304,6 +356,15 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                             errors.append(f"{ability_label}.adapter is unsupported")
                     if len(ability_ids) != len(set(ability_ids)):
                         errors.append(f"{node_label}.team ability IDs must be unique")
+            validate_collaboration_preset_resource(
+                module_root,
+                owner_id,
+                node_label,
+                node_id,
+                node,
+                registered_agents,
+                errors,
+            )
             validate_module_call_surface(
                 node,
                 node_label,
@@ -345,10 +406,24 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                         errors.append(f"{node_label}.outputs.{output_id}.requiredFiles must name relative files in a directory output")
                     if "jsonSchema" in output and (not isinstance(output["jsonSchema"], dict) or output.get("format") != "json" or output.get("kind", "file") != "file"):
                         errors.append(f"{node_label}.outputs.{output_id}.jsonSchema requires a JSON file and an object schema")
+            if collaboration_team is not None:
+                metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+                snapshot = metadata.get("documentWorkspaceSnapshot") if isinstance(metadata, dict) else None
+                generated_output = snapshot.get("output") if isinstance(snapshot, dict) else None
+                validate_collaboration_team(
+                    collaboration_team,
+                    f"{node_label}.team",
+                    errors,
+                    registered_agents=registered_agents,
+                    owner_id=owner_id,
+                    outputs=outputs,
+                    generated_output=generated_output,
+                    required_calls=node.get("requiredCalls"),
+                )
             delivery = node.get("delivery")
             if delivery is not None:
-                if node_type != "agent" or not isinstance(delivery, dict) or set(delivery) - {"primaryOutput", "maxReminders"}:
-                    errors.append(f"{node_label}.delivery must be an Agent delivery declaration")
+                if (node_type != "agent" and collaboration_team is None) or not isinstance(delivery, dict) or set(delivery) - {"primaryOutput", "maxReminders"}:
+                    errors.append(f"{node_label}.delivery must be an Agent or collaboration team declaration")
                 else:
                     primary = delivery.get("primaryOutput")
                     definition = outputs.get(primary) if isinstance(primary, str) else None
@@ -540,6 +615,8 @@ def validate_workflows(root: Path, errors: list[str], warnings: list[str] | None
                 pending.extend(by_id[dependency].get("dependsOn", []))
             return result
 
+        if "creative-reference-library/search-units" in module_workflows:
+            warnings.extend(f"{DESIGN_WARNING_PREFIX}{problem}" for problem in creative_reference_default_problems(workflow_id, by_id))
         declared_foreground = (invariants or {}).get("foregroundWorkflow")
         if declared_foreground == workflow_id:
             errors.extend(foreground_design_problems(label, by_id, ancestors_for, {

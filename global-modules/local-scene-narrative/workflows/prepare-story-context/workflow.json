@@ -26,7 +26,6 @@
   "revision": "1",
   "defaults": {
     "agentId": null,
-    "modelId": null,
     "context": {
       "mode": "fixed"
     }
